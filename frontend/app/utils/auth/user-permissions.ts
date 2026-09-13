@@ -1,8 +1,7 @@
 import type { AuthUser } from '~/types/auth-user'
-import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
 import {
   ROLE_DOCUMENT_TYPES,
-  permissionRowsToFlatKeys,
+  allFrontendPermissionCodes,
   type RolePermissionAction,
 } from '~/utils/role/permissions'
 
@@ -15,14 +14,7 @@ export type UserPermissionGroup = {
 
 /** All permission keys defined by the system matrix. */
 export function getAllSystemPermissionKeys(): string[] {
-  const rows: AppRolePermissionRow[] = ROLE_DOCUMENT_TYPES.map(definition => ({
-    id: `perm_${definition.value}`,
-    documentType: definition.value,
-    onlyIfCreator: false,
-    level: 0,
-    actions: [...definition.actions],
-  }))
-  return permissionRowsToFlatKeys(rows)
+  return allFrontendPermissionCodes().sort()
 }
 
 /** Resolve flat permission keys for the signed-in user. */

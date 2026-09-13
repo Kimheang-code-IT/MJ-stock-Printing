@@ -16,6 +16,10 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   compact?: boolean
   viewOnlyActions?: boolean
+  /** Hide the Add-row button (e.g. return-mode fixed line sets). */
+  hideAdd?: boolean
+  /** Hide the trailing row-actions menu (return-mode fixed line sets). */
+  hideRowActions?: boolean
   /** When set, renders a USD/KHR toggle beside the table title; it controls
    *  the currency every money amount on the document is entered in. */
   currency?: 'USD' | 'KHR'
@@ -419,7 +423,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       },
     })),
   ]
-  if (!props.disabled) {
+  if (!props.disabled && !props.hideRowActions) {
     cols.push({
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),
@@ -503,7 +507,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           />
         </UFieldGroup>
         <UButton
-v-if="!disabled"
+v-if="!disabled && !hideAdd"
 :size="compact ? 'xs' : 'sm'"
 color="neutral"
 variant="soft"

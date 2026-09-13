@@ -550,6 +550,280 @@ class POSService:
             )
         return sale_to_out(sale, customer_name=customer.name, change_amount=change_amount, items=item_rows)
 
+    async def update_sale(self, sale_id, payload, *, actor: User) -> SaleOut:
+        """Edit a completed sale: reverse the original stock (append-only
+        compensating movements) then re-apply the new lines, quantities,
+        prices and discounts. The customer and immutable payments are kept;
+        the outstanding customer debt is recalculated from the new total."""
+        discount_allowed = user_has_permission(actor, "pos.discount")
+        if (
+            any(item.discount_amount > 0 or item.discount_percent > 0 for item in payload.items)
+            or (payload.discount or Decimal("0")) > 0
+        ) and not discount_allowed:
+            raise ConflictError("You do not have permission to apply discounts")
+
+        result = await self.session.execute(
+            select(Sale).where(Sale.id == sale_id).with_for_update()
+        )
+        sale = result.scalar_one_or_none()
+        if sale is None:
+            raise NotFoundError("Sale not found")
+        if sale.sale_status != "COMPLETED":
+            raise ConflictError("Only completed sales can be edited")
+        existing_items = list(sale.items)
+        if any(Decimal(item.returned_quantity or 0) > 0 for item in existing_items):
+            raise ConflictError("Sales with returns cannot be edited")
+
+        customer = await self.session.get(Customer, sale.customer_id)
+        if customer is None:
+            raise NotFoundError("Customer not found")
+
+        products: dict[uuid.UUID, Product] = {}
+        for item in payload.items:
+            if item.product_id in products:
+                raise ValidationError("Duplicate product in cart", field_errors={"items": "Duplicate product"})
+            product = await self.products.get(item.product_id)
+            if product is None:
+                raise NotFoundError("Product not found")
+            if product.status != "ACTIVE":
+                raise ValidationError("Inactive products cannot be sold", field_errors={"items": "Product inactive"})
+            products[item.product_id] = product
+
+        max_discount = await self._maximum_discount_percent()
+        negative_ok = await allow_negative_stock(self.session)
+
+        from app.modules.stock import batch_service
+
+        # 1) Reverse the original lines: restore their batches and append
+        #    compensating SALE_RETURN movements (the old SALE rows are never
+        #    mutated), then drop the old items so the new set can be applied.
+        for row in existing_items:
+            base_quantity = _q4(row.quantity * row.factor_to_base)
+            if base_quantity <= 0:
+                continue
+            await batch_service.restore_sale_batches(
+                self.session, sale_item=row, quantity_base=base_quantity
+            )
+            await apply_stock_movement(
+                self.session,
+                product_id=row.product_id,
+                movement_type="SALE_RETURN",
+                quantity_delta=base_quantity,
+                unit_cost=row.unit_cost,
+                reference_type="sale",
+                reference_id=sale.id,
+                created_by=actor.id,
+                document_no=sale.invoice_no,
+                allow_negative=True,
+            )
+            await self.session.delete(row)
+        await self.session.flush()
+
+        # 2) Apply the new lines with the same rules as complete_sale.
+        subtotal = Decimal("0.00")
+        discount_total = Decimal("0.00")
+        item_rows: list[SaleItem] = []
+        version_prices: dict[uuid.UUID, dict[str, Decimal]] = {}
+        for item in payload.items:
+            product = products[item.product_id]
+            quantity = item.quantity
+
+            if item.product_id not in version_prices:
+                from app.modules.stock import sale_prices as sale_price_service
+
+                version_prices[item.product_id] = await sale_price_service.active_version_uom_prices(
+                    self.session, item.product_id
+                )
+            active_uom_prices = version_prices[item.product_id]
+
+            factor = item.factor_to_base
+            uom_id = item.uom_id
+            uom_symbol = item.uom_symbol
+            uom_code = None
+            default_price = active_uom_prices.get(str(product.uom_id), product.selling_price)
+            default_price = default_price if default_price is not None else product.selling_price
+            if uom_id is not None and str(uom_id) != str(product.uom_id):
+                conversion = next(
+                    (row for row in (product.uom_conversions or []) if str(row.get("uom_id")) == str(uom_id)),
+                    None,
+                )
+                if conversion is None:
+                    raise ValidationError(
+                        "The selected UOM is not a conversion UOM of this product",
+                        field_errors={"items": "Invalid UOM"},
+                    )
+                factor = Decimal(str(conversion.get("factor_to_base", factor)))
+                if str(uom_id) in active_uom_prices:
+                    default_price = active_uom_prices[str(uom_id)]
+                elif conversion.get("sale_price") is not None:
+                    default_price = Decimal(str(conversion["sale_price"]))
+                uom_symbol = uom_symbol or conversion.get("uom_symbol") or None
+            elif uom_id is not None and str(uom_id) == str(product.uom_id):
+                factor = Decimal("1")
+                base_row = next(
+                    (row for row in (product.uom_conversions or []) if str(row.get("uom_id")) == str(uom_id)),
+                    None,
+                )
+                if str(uom_id) in active_uom_prices:
+                    default_price = active_uom_prices[str(uom_id)]
+                elif base_row is not None and base_row.get("sale_price") is not None:
+                    default_price = Decimal(str(base_row["sale_price"]))
+            if uom_id is None:
+                uom_id = product.uom_id
+                factor = Decimal("1")
+                uom_symbol = uom_symbol or (product.uom_ref.symbol if product.uom_ref else None)
+                uom_code = product.uom_ref.code if product.uom_ref else None
+            else:
+                from app.modules.uoms.models import UOM
+
+                uom_row = await self.session.get(UOM, uom_id)
+                uom_code = uom_row.code if uom_row else None
+                uom_symbol = uom_symbol or (uom_row.symbol if uom_row else None)
+            base_quantity = _q4(quantity * factor)
+            if base_quantity <= 0:
+                raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
+
+            unit_price = item.unit_price if item.unit_price is not None else default_price
+            gross = (quantity * unit_price).quantize(TWO, rounding=ROUND_HALF_UP)
+            if item.discount_percent > 0:
+                discount = _q2(gross * item.discount_percent / Decimal("100"))
+            else:
+                discount = _q2(item.discount_amount)
+            if discount > 0:
+                if max_discount > 0:
+                    implied_percent = (discount / gross * Decimal("100")) if gross > 0 else Decimal("100")
+                    if item.discount_percent > max_discount or implied_percent > max_discount:
+                        raise ValidationError(
+                            f"Line discount exceeds the maximum allowed ({max_discount}%)",
+                            field_errors={"items": "Discount exceeds maximum"},
+                        )
+                if discount >= gross:
+                    raise ValidationError("Discount cannot exceed the line amount", field_errors={"items": "Invalid discount"})
+            line_total = gross - discount
+
+            provisional = SaleItem(
+                sale_id=sale.id,
+                product_id=product.id,
+                product_name=product.name,
+                sku=product.sku,
+                barcode=product.barcode,
+                uom_id=uom_id,
+                uom_code=uom_code,
+                uom_symbol=uom_symbol,
+                factor_to_base=factor,
+                discount_percent=item.discount_percent,
+                quantity=quantity,
+                unit_price=unit_price,
+                unit_cost=Decimal("0.00"),
+                discount_amount=discount,
+                line_total=line_total,
+            )
+            self.session.add(provisional)
+            await self.session.flush()
+            balance = await _lock_balance(self.session, product.id)
+            line_cost = await resolve_outbound_unit_cost(
+                self.session, product, base_quantity, fallback=balance.average_cost
+            )
+            _, consumed_batches = await batch_service.commit_sale_allocations(
+                self.session,
+                sale_item=provisional,
+                product=product,
+                quantity_base=base_quantity,
+                allow_negative=negative_ok,
+            )
+            provisional.unit_cost = line_cost
+            await self.session.flush()
+            movement_batch = consumed_batches[0] if len(consumed_batches) == 1 else None
+            await apply_stock_movement(
+                self.session,
+                product_id=product.id,
+                movement_type="SALE",
+                quantity_delta=-base_quantity,
+                unit_cost=line_cost,
+                reference_type="sale",
+                reference_id=sale.id,
+                created_by=actor.id,
+                document_no=sale.invoice_no,
+                batch_no=movement_batch.batch_no if movement_batch else None,
+                batch_id=movement_batch.id if movement_batch else None,
+                expiry_date=movement_batch.expiry_date if movement_batch else None,
+                allow_negative=negative_ok,
+            )
+            item_rows.append(provisional)
+            subtotal += gross
+            discount_total += discount
+
+        header_discount = _q2(payload.discount)
+        if header_discount > 0:
+            if max_discount > 0 and subtotal > 0 and (header_discount / subtotal * Decimal("100")) > max_discount:
+                raise ValidationError(
+                    f"Discount exceeds the maximum allowed ({max_discount}%)",
+                    field_errors={"discount": "Discount exceeds maximum"},
+                )
+            if header_discount >= subtotal - discount_total:
+                raise ValidationError("Discount cannot exceed the sale amount", field_errors={"discount": "Invalid discount"})
+        discount_total += header_discount
+        delivery_price = _q2(payload.delivery_price)
+        grand_total = subtotal - discount_total + delivery_price
+
+        sale.sale_date = payload.sale_date or sale.sale_date
+        sale.note = payload.note
+        sale.currency = payload.currency
+        sale.exchange_rate = payload.exchange_rate
+        sale.subtotal = _q2(subtotal)
+        sale.discount_amount = _q2(discount_total)
+        sale.delivery_price = delivery_price
+        sale.grand_total = _q2(grand_total)
+
+        # 3) Recalculate the outstanding customer debt from the new total.
+        #    Recorded payments are immutable, so the already-paid amount stands.
+        debt_result = await self.session.execute(
+            select(CustomerDebt).where(CustomerDebt.sale_id == sale.id).with_for_update()
+        )
+        debt = debt_result.scalars().first()
+        existing_paid = _q2(debt.paid_amount) if debt is not None else _q2(sale.paid_amount)
+        paid_for_sale = max(Decimal("0.00"), min(existing_paid, sale.grand_total))
+        debt_amount = sale.grand_total - paid_for_sale
+        if debt_amount > 0 and customer.is_walk_in:
+            raise ValidationError(
+                "The walk-in customer cannot make a debt purchase",
+                field_errors={"customer_id": "Select a registered customer"},
+            )
+        if debt is not None:
+            debt.original_amount = sale.grand_total
+            debt.paid_amount = paid_for_sale
+            debt.remaining_amount = debt_amount
+            debt.status = "PAID" if debt_amount == 0 else ("PARTIAL" if paid_for_sale > 0 else "UNPAID")
+        elif debt_amount > 0:
+            self.session.add(
+                CustomerDebt(
+                    customer_id=customer.id,
+                    sale_id=sale.id,
+                    invoice_no=sale.invoice_no,
+                    original_amount=sale.grand_total,
+                    paid_amount=paid_for_sale,
+                    remaining_amount=debt_amount,
+                    due_date=getattr(payload, "due_date", None),
+                    status="UNPAID" if paid_for_sale == 0 else "PARTIAL",
+                    currency=sale.currency,
+                )
+            )
+        sale.paid_amount = paid_for_sale
+        sale.debt_amount = debt_amount
+        sale.payment_status = "PAID" if debt_amount == 0 else ("PARTIAL" if paid_for_sale > 0 else "UNPAID")
+
+        await record_audit(
+            self.session,
+            action="sale_update",
+            module="pos",
+            user_id=actor.id,
+            entity_type="sale",
+            entity_id=sale.id,
+            new_values={"invoice_no": sale.invoice_no, "grand_total": str(sale.grand_total)},
+        )
+        await self.session.commit()
+        return sale_to_out(sale, customer_name=customer.name, items=item_rows)
+
     async def _resolve_customer(self, payload) -> Customer:
         if payload.customer_id is None:
             walk_in = await get_walk_in_customer(self.session)

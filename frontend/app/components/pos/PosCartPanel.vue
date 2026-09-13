@@ -8,9 +8,13 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   /** ONE sale currency for the whole cart (USD | KHR) — header selector. */
   saleCurrency?: 'USD' | 'KHR'
+  /** Return mode: the original price/UOM/discount are preserved (read-only);
+   *  only the return quantity is editable. */
+  returnMode?: boolean
 }>(), {
   disabled: false,
   saleCurrency: 'USD',
+  returnMode: false,
 })
 
 const emit = defineEmits<{
@@ -64,7 +68,7 @@ class="ml-1 text-muted">({{ cart.length }})</span>
             :label="option.symbol"
             :color="saleCurrency === option.value ? 'primary' : 'neutral'"
             :variant="saleCurrency === option.value ? 'soft' : 'outline'"
-            :disabled="disabled"
+            :disabled="disabled || returnMode"
             :title="t(option.labelKey)"
             :aria-label="t(option.labelKey)"
             :aria-pressed="saleCurrency === option.value"
@@ -152,7 +156,7 @@ class="size-5 opacity-40" />
                 :items="line.uomOptions"
                 size="xs"
                 class="w-24"
-                :disabled="disabled"
+                :disabled="disabled || returnMode"
                 :aria-label="t('app.pos.uom')"
                 @update:model-value="emit('changeUom', line.productId, String($event))"
               />
@@ -177,7 +181,7 @@ class="size-5 opacity-40" />
                     size="md"
                     class="w-full"
                     :ui="{ base: 'text-base tabular-nums' }"
-                    :disabled="disabled"
+                    :disabled="disabled || returnMode"
                     @update:model-value="onPriceInput(line, $event)"
                   />
                   <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted">{{ symbol }}</span>
@@ -198,7 +202,7 @@ class="size-5 opacity-40" />
                     size="md"
                     class="w-full"
                     :ui="{ base: 'text-base tabular-nums' }"
-                    :disabled="disabled"
+                    :disabled="disabled || returnMode"
                     @update:model-value="emit('updateDiscount', line.productId, Number($event ?? 0))"
                   />
                   <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted">%</span>

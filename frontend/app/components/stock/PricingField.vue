@@ -4,6 +4,7 @@ import type { PaginationState } from '@tanstack/vue-table'
 import { UButton, UInputNumber, USelect } from '#components'
 import { h } from 'vue'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
+import type { AppRecord } from '~/config/admin-seed'
 import type { SalePriceVersionSelection, UomConversion } from '~/utils/stock/uom-conversions'
 
 /**
@@ -38,6 +39,9 @@ const { t } = useI18n()
 const toast = useToast()
 const store = useAppDataStore()
 const recordAccess = inject(moduleDocumentRecordKey, null)
+
+/** Whole loaded product record for the version rail (id + saved Pricing rows). */
+const productRecord = computed(() => (recordAccess?.get('__record') as AppRecord | null) ?? null)
 
 const baseUomId = computed(() => String(recordAccess?.get('uomId') ?? ''))
 const baseUomSymbol = computed(() => {
@@ -114,16 +118,17 @@ const draftBaseRow = computed<PricingRow>(() => ({
 /**
  * Sale-price version selected in the Sale Price History table (shared through
  * the document record). When set, the Pricing table previews that version's
- * UOM prices: the POS-active version stays editable; older versions are a
- * read-only history preview. Browsing old versions never mutates the product's
- * saved `uomConversions`.
+ * UOM prices **read-only**: the backend stores a version's UOM rows as an
+ * immutable snapshot with no update endpoint, so editing must go through
+ * "Add Version" (never by silently rewriting the product's `uomConversions`).
  */
 const versionSelection = computed<SalePriceVersionSelection | null>(() => {
   const raw = recordAccess?.get('__salePriceSelection')
   return raw && typeof raw === 'object' ? raw as SalePriceVersionSelection : null
 })
 const isVersionPreview = computed(() => versionSelection.value !== null)
-const previewReadOnly = computed(() => isVersionPreview.value && versionSelection.value?.isActive !== true)
+// Version snapshots are always read-only; only "Add Version" changes prices.
+const previewReadOnly = computed(() => isVersionPreview.value)
 const effectiveDisabled = computed(() => props.disabled || previewReadOnly.value)
 
 const selectionRows = ref<PricingRow[]>([])
@@ -173,13 +178,6 @@ function emitRows(next: PricingRow[]) {
 
 function updateRow(key: string, patch: Partial<UomConversion>) {
   if (effectiveDisabled.value) return
-  if (isVersionPreview.value) {
-    // Active version: edit the loaded preview and mirror it onto the product's
-    // editable Pricing rows (persisted with Save). Old versions stay read-only.
-    selectionRows.value = selectionRows.value.map(row => row.__key === key ? { ...row, ...patch } : row)
-    emitRows(selectionRows.value)
-    return
-  }
   emitRows(rows.value.map(row => row.__key === key ? { ...row, ...patch } : row))
 }
 
@@ -336,56 +334,60 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
 </script>
 
 <template>
-  <div class="flex h-[420px] max-h-[60vh] min-h-0 min-w-0 flex-col gap-2">
-    <!-- Selected sale-price version: active = editable, old = read-only history. -->
-    <div
-      v-if="versionSelection"
-      class="flex items-center justify-between gap-2 rounded-sm border px-3 py-1.5 text-xs"
-      :class="previewReadOnly
-        ? 'border-default bg-elevated text-muted'
-        : 'border-primary/40 bg-primary/5 text-primary'"
-    >
-      <span class="flex min-w-0 items-center gap-1.5 font-medium">
-        <UIcon :name="previewReadOnly ? 'i-lucide-history' : 'i-lucide-pencil'" class="size-3.5 shrink-0" />
-        <span class="truncate">
-          {{ previewReadOnly
-            ? t('app.stock.priceHistoryPreviewHistory', { version: versionSelection.version })
-            : t('app.stock.priceHistoryPreviewActive', { version: versionSelection.version }) }}
+  <div class="flex min-w-0 flex-col gap-4 xl:flex-row">
+    <div class="flex h-[420px] max-h-[60vh] min-h-0 min-w-0 flex-1 flex-col gap-2">
+      <!-- Selected sale-price version: an immutable snapshot, shown read-only.
+           Use "Add Version" on the version rail to change prices. -->
+      <div
+        v-if="versionSelection"
+        class="flex items-center justify-between gap-2 rounded-sm border border-default bg-elevated px-3 py-1.5 text-xs text-muted"
+      >
+        <span class="flex min-w-0 items-center gap-1.5 font-medium">
+          <UIcon name="i-lucide-history" class="size-3.5 shrink-0" />
+          <span class="truncate">
+            {{ t('app.stock.priceHistoryPreviewHistory', { version: versionSelection.version }) }}
+          </span>
+          <span v-if="versionSelection.batchNo" class="shrink-0 text-muted">· {{ versionSelection.batchNo }}</span>
         </span>
-        <span v-if="versionSelection.batchNo" class="shrink-0 text-muted">· {{ versionSelection.batchNo }}</span>
-      </span>
-      <UButton
-        size="xs"
-        variant="ghost"
-        color="neutral"
-        icon="i-lucide-x"
-        :label="t('app.stock.priceHistoryPreviewClear')"
-        class="shrink-0"
-        @click="clearVersionSelection"
-      />
+        <UButton
+          size="xs"
+          variant="ghost"
+          color="neutral"
+          icon="i-lucide-x"
+          :label="t('app.stock.priceHistoryPreviewClear')"
+          class="shrink-0"
+          @click="clearVersionSelection"
+        />
+      </div>
+
+      <TableAppListTable
+        v-model:search="search"
+        v-model:pagination="pagination"
+        :data="rows"
+        :columns="columns"
+        :get-row-id="row => String(row.__key)"
+        :search-placeholder="t('app.stock.convSearch')"
+        :empty-title="t('app.stock.convEmpty')"
+        :empty-description="t('app.stock.convEmptyHint')"
+        :empty-actions="(disabled || isVersionPreview) ? [] : [{ icon: 'i-lucide-plus', label: t('app.stock.convAddRow'), onClick: addRow }]"
+      >
+        <template #actions>
+          <UButton
+            v-if="!disabled && !isVersionPreview"
+            size="sm"
+            icon="i-lucide-plus"
+            class="shrink-0"
+            :label="t('app.stock.convAddRow')"
+            @click="addRow"
+          />
+        </template>
+      </TableAppListTable>
     </div>
 
-    <TableAppListTable
-      v-model:search="search"
-      v-model:pagination="pagination"
-      :data="rows"
-      :columns="columns"
-      :get-row-id="row => String(row.__key)"
-      :search-placeholder="t('app.stock.convSearch')"
-      :empty-title="t('app.stock.convEmpty')"
-      :empty-description="t('app.stock.convEmptyHint')"
-      :empty-actions="(disabled || isVersionPreview) ? [] : [{ icon: 'i-lucide-plus', label: t('app.stock.convAddRow'), onClick: addRow }]"
-    >
-      <template #actions>
-        <UButton
-          v-if="!disabled && !isVersionPreview"
-          size="sm"
-          icon="i-lucide-plus"
-          class="shrink-0"
-          :label="t('app.stock.convAddRow')"
-          @click="addRow"
-        />
-      </template>
-    </TableAppListTable>
+    <!-- Sale-price version rail: version + effective date; click to preview. -->
+    <StockPriceVersionsRail
+      class="max-h-[60vh] xl:h-[420px]"
+      :product="productRecord"
+    />
   </div>
 </template>

@@ -3,16 +3,16 @@ import { safeInternalPath } from '~/utils/auth/session'
 
 const PERMITTED_LANDING_ROUTES = [
   ['/', 'dashboard.view'],
-  ['/setup/categories', 'categories.view'],
+  ['/setup/categories', 'category.view'],
   ['/setup/uoms', 'uom.view'],
   ['/setup/brands', 'brand.view'],
-  ['/stock/products', 'products.view'],
-  ['/setup/suppliers', 'suppliers.view'],
-  ['/pos', 'pos.view'],
-  ['/setup/customers', 'customers.view'],
-  ['/reports/sales', 'reports.view'],
-  ['/administration/users', 'admin.users.view'],
-  ['/administration/settings', 'settings.app_config.view'],
+  ['/stock/products', 'stock.view'],
+  ['/setup/suppliers', 'supplier.view'],
+  ['/pos', 'pos.access'],
+  ['/setup/customers', 'customer.view'],
+  ['/reports/sales', 'report.sales'],
+  ['/administration/users', 'user.manage'],
+  ['/administration/settings', 'settings.manage'],
 ] as const
 
 export default defineNuxtRouteMiddleware((to, from) => {

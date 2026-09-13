@@ -15,6 +15,7 @@ import type {
   ProductCostHistoryRow,
   ProductHistoryRow,
   ProductSalePriceRow,
+  SaleDetail,
   SaleReceipt,
   SearchRepository,
   SearchHitItem,
@@ -23,7 +24,7 @@ import type {
 } from '~/repositories/contracts/entities'
 import { ApiEndpoints, CollectionEndpoints, type ApiCollection } from '~/utils/constants/api-endpoints'
 import { documentSequencePreview } from '~/utils/document-sequences'
-import { ROLE_DOCUMENT_TYPES, normalizePermissionRows } from '~/utils/role/permissions'
+import { flatKeysToPermissionRows, permissionRowsToFlatKeys } from '~/utils/role/permissions'
 
 export function metaOf(response: unknown): ApiMeta | null {
   const meta = (response as ApiResponse<unknown>)?.meta
@@ -58,64 +59,10 @@ function stripUiOnlyFields(input: Record<string, unknown>): Record<string, unkno
   return output
 }
 
-/** Flat backend permission keys â†’ UI permission-matrix rows. */
-let ROLE_DOCUMENT_TYPES_CACHE: Array<{ value: string, permissionPrefix: string, actions: readonly string[] }> = []
-
-/** Injected once by the repository selector to avoid import cycles. */
-export function configureRoleMatrix(
-  definitions: Array<{ value: string, permissionPrefix: string, actions: readonly string[] }>,
-) {
-  ROLE_DOCUMENT_TYPES_CACHE = definitions
-}
-
+/** Flat backend permission keys are grouped into matrix rows by module. */
 function permissionRowsFromFlatKeys(keys: string[] | null | undefined): AppRolePermissionRow[] {
-  if (keys?.includes('ALL_PAGES')) {
-    return normalizePermissionRows(ROLE_DOCUMENT_TYPES_CACHE.map(definition => ({
-      id: `perm_${definition.value}`,
-      documentType: definition.value,
-      onlyIfCreator: false,
-      level: 0,
-      actions: [...definition.actions],
-    })), true)
-  }
-  const rows: AppRolePermissionRow[] = []
-  for (const key of keys || []) {
-    const separator = key.lastIndexOf('.')
-    if (separator <= 0) continue
-    const prefix = key.slice(0, separator)
-    const action = key.slice(separator + 1)
-    const definition = ROLE_DOCUMENT_TYPES_CACHE.find(item => item.permissionPrefix === prefix)
-    if (!definition) continue
-    rows.push({
-      id: `perm_${definition.value}`,
-      documentType: definition.value,
-      onlyIfCreator: false,
-      level: 0,
-      actions: [action],
-    })
-  }
-  return normalizePermissionRows(rows, true)
+  return flatKeysToPermissionRows(keys || [])
 }
-
-function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[] {
-  const definitions = new Map(ROLE_DOCUMENT_TYPES_CACHE.map(item => [item.value, item]))
-  const keys = new Set<string>()
-  for (const row of rows) {
-    const prefix = definitions.get(row.documentType)?.permissionPrefix
-    if (!prefix) continue
-    for (const action of row.actions || []) keys.add(`${prefix}.${action}`)
-  }
-  return [...keys].sort()
-}
-
-// Seed the matrix catalog used by both adapters.
-configureRoleMatrix(
-  ROLE_DOCUMENT_TYPES.map(definition => ({
-    value: definition.value,
-    permissionPrefix: definition.permissionPrefix,
-    actions: definition.actions as readonly string[],
-  })),
-)
 
 function asRecordId(value: unknown): string {
   return value == null ? '' : String(value)
@@ -518,11 +465,15 @@ function adaptCustomerDebtOut(row: Record<string, unknown>): Record<string, unkn
     customerCode: String(row.customer_code ?? ''),
     invoiceNo: String(row.invoice_no ?? ''),
     date: row.date ?? row.invoice_date ?? row.created_at ?? null,
-    invoiceTotal: row.invoice_total ?? null,
+    invoiceTotal: row.invoice_total ?? row.original_amount ?? null,
     paidAmount: row.paid_amount ?? null,
     remainingAmount: row.remaining_amount ?? null,
     dueDate: row.due_date ?? null,
     status: String(row.status ?? ''),
+    // Debt inherits the source sale currency + saved exchange rate; historical
+    // debts must never be re-converted with the current rate.
+    currency: String(row.currency ?? 'USD'),
+    exchangeRate: Number(row.exchange_rate ?? 1),
     createdAt: row.created_at ?? null,
   }
 }
@@ -537,11 +488,13 @@ function adaptSupplierDebtOut(row: Record<string, unknown>): Record<string, unkn
     supplierCode: String(row.supplier_code ?? ''),
     purchaseNo: String(row.document_no ?? ''),
     date: row.date ?? row.transaction_date ?? row.created_at ?? null,
-    totalAmount: row.total_amount ?? null,
+    totalAmount: row.total_amount ?? row.original_amount ?? null,
     paidAmount: row.paid_amount ?? null,
     remainingAmount: row.remaining_amount ?? null,
     dueDate: row.due_date ?? null,
     status: String(row.status ?? ''),
+    currency: String(row.currency ?? 'USD'),
+    exchangeRate: Number(row.exchange_rate ?? 1),
     createdAt: row.created_at ?? null,
   }
 }
@@ -686,6 +639,8 @@ function adaptPurchaseReportLine(row: Record<string, unknown>): Record<string, u
     total: q2(row.total_cost ?? row.totalCost),
     remaining: q2(row.remaining_debt ?? row.remainingDebt),
     status: String(row.status ?? ''),
+    currency: String(row.currency ?? 'USD'),
+    exchangeRate: Number(row.exchange_rate ?? row.exchangeRate ?? 1) || 1,
   }
 }
 
@@ -709,6 +664,8 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
         createdAt: line.date,
         supplier: line.supplier,
         supplierId: line.supplierId,
+        currency: line.currency,
+        exchangeRate: line.exchangeRate,
         items: [],
         lineCount: 0,
         total: 0,
@@ -858,6 +815,14 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     )) as AppRecord
   }
 
+  async function updateSale(input: PosCompleteSaleInput & { saleId: string }): Promise<AppRecord> {
+    const { saleId, ...rest } = input
+    return unwrap<Record<string, unknown>>(await api.patch<unknown>(
+      ApiEndpoints.SALE_DETAIL(saleId),
+      saleBody(rest),
+    )) as AppRecord
+  }
+
   /**
    * Complete purchase (Stock In): ONE POST /stock/in carrying every product
    * line. The server converts each line to the base UOM, stores all items on
@@ -887,6 +852,31 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
         ...(line.factorToBase != null ? { factor_to_base: line.factorToBase } : {}),
       })),
     })) as AppRecord
+  }
+
+  async function updatePurchase(input: Parameters<PosCommandRepository['updatePurchase']>[0]): Promise<AppRecord> {
+    return unwrap<Record<string, unknown>>(await api.patch<unknown>(
+      ApiEndpoints.STOCK_IN_DOC(input.stockInId),
+      {
+        discount_amount: Math.max(0, Number(input.discountAmount ?? 0)),
+        tax_amount: Math.max(0, Number(input.taxAmount ?? 0)),
+        currency: input.currency ?? 'USD',
+        exchange_rate: input.exchangeRate ?? 1,
+        note: input.note ?? null,
+        ...(input.referenceNo != null ? { reference_no: input.referenceNo } : {}),
+        ...(input.transactionDate != null ? { transaction_date: input.transactionDate } : {}),
+        items: input.lines.map(line => ({
+          product_id: line.productId,
+          quantity: Number(line.quantity || 0),
+          ...(line.unitCost != null ? { unit_cost: Number(line.unitCost) } : {}),
+          ...(line.batchNo ? { batch_no: line.batchNo } : {}),
+          ...(line.expiryDate ? { expiry_date: line.expiryDate } : {}),
+          ...(line.uomId ? { uom_id: line.uomId } : {}),
+          ...(line.uomSymbol ? { uom_symbol: line.uomSymbol } : {}),
+          ...(line.factorToBase != null ? { factor_to_base: line.factorToBase } : {}),
+        })),
+      },
+    )) as AppRecord
   }
 
   async function createStockOperation(input: Parameters<PosCommandRepository['createStockOperation']>[0]): Promise<AppRecord> {
@@ -948,7 +938,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
       amount: input.amount,
       payment_method: input.paymentMethod,
-      reference: input.reference ?? null,
+      reference_no: input.reference ?? null,
     })) as AppRecord
   }
 
@@ -960,7 +950,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
       amount: input.amount,
       payment_method: input.paymentMethod,
-      reference: input.reference ?? null,
+      reference_no: input.reference ?? null,
     })) as AppRecord
   }
 
@@ -970,6 +960,14 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       { requestKey: `pos-receipt:${saleId}`, cancelPrevious: true },
     ))
     return adaptSaleReceiptOut(data, saleId)
+  }
+
+  async function getSale(saleId: string): Promise<SaleDetail> {
+    const data = unwrap<Record<string, unknown>>(await api.get<unknown>(
+      ApiEndpoints.SALE_DETAIL(saleId),
+      { requestKey: `pos-sale:${saleId}`, cancelPrevious: true },
+    ))
+    return adaptSaleDetailOut(data, saleId)
   }
 
   async function returnSale(input: Parameters<PosCommandRepository['returnSale']>[0]): Promise<AppRecord> {
@@ -1000,7 +998,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     )) as AppRecord
   }
 
-  return { completeSale, createPurchase, createStockOperation, payCustomerDebt, paySupplierDebt, getSaleReceipt, returnSale, returnPurchase }
+  return { completeSale, updateSale, createPurchase, updatePurchase, createStockOperation, payCustomerDebt, paySupplierDebt, getSaleReceipt, getSale, returnSale, returnPurchase }
 }
 
 /** Backend product-history row → UI camelCase (kind derived from type). */
@@ -1022,6 +1020,38 @@ function adaptProductHistoryOut(row: Record<string, unknown>, kind: StockHistory
     batchNo: (row.batchNo ?? row.batch_no ?? null) as string | null,
     expiryDate: (row.expiryDate ?? row.expiry_date ?? null) as string | null,
     kind: (row.kind as StockHistoryKind) ?? kind,
+  }
+}
+
+/** Backend sale detail (GET /pos/sales/{id}) → POS return-mode source. */
+function adaptSaleDetailOut(data: Record<string, unknown>, fallbackSaleId: string): SaleDetail {
+  const items = (Array.isArray(data.items) ? data.items : []) as Array<Record<string, unknown>>
+  return {
+    id: String(data.id ?? fallbackSaleId),
+    invoiceNo: String(data.invoice_no ?? data.invoiceNo ?? data.sale_no ?? ''),
+    customerId: data.customer_id != null ? String(data.customer_id) : null,
+    customerName: String(data.customer_name ?? data.customer ?? ''),
+    currency: String(data.currency ?? 'USD') === 'KHR' ? 'KHR' : 'USD',
+    exchangeRate: Number(data.exchange_rate ?? data.exchangeRate ?? 1) || 1,
+    items: items.map((item) => {
+      const quantity = Number(item.quantity ?? 0)
+      const unitPrice = Number(item.unit_price ?? item.unitPrice ?? item.price ?? 0)
+      const factorToBase = Number(item.factor_to_base ?? item.factorToBase ?? 1)
+      return {
+        id: String(item.id ?? item.sale_item_id ?? ''),
+        productId: String(item.product_id ?? item.productId ?? ''),
+        name: String(item.product_name ?? item.name ?? ''),
+        uom: String(item.uom_symbol ?? item.uomSymbol ?? item.uom ?? ''),
+        uomId: item.uom_id != null ? String(item.uom_id) : undefined,
+        factorToBase: Number.isFinite(factorToBase) && factorToBase > 0 ? factorToBase : 1,
+        quantity,
+        returnedQuantity: Number(item.returned_quantity ?? item.returnedQuantity ?? 0),
+        unitPrice,
+        discountPercent: Number(item.discount_percent ?? item.discountPercent ?? 0),
+        discountAmount: Number(item.discount_amount ?? item.discountAmount ?? 0),
+        lineTotal: Number(item.line_total ?? item.lineTotal ?? item.total ?? (unitPrice * quantity)),
+      }
+    }),
   }
 }
 

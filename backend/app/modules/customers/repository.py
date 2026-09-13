@@ -34,12 +34,6 @@ class CustomerRepository:
         result = await self.session.execute(select(Customer).where(Customer.code == code))
         return result.scalar_one_or_none()
 
-    async def get_walk_in(self) -> Customer | None:
-        result = await self.session.execute(
-            select(Customer).where(Customer.is_walk_in.is_(True))
-        )
-        return result.scalar_one_or_none()
-
     def add(self, customer: Customer) -> None:
         self.session.add(customer)
 

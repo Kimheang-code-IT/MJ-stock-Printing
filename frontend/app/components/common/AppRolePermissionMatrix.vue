@@ -16,70 +16,88 @@ const props = withDefaults(defineProps<{ disabled?: boolean }>(), {
 
 const { t, te } = useI18n()
 const api = useApi()
-const definitions = ref<Array<(typeof ROLE_DOCUMENT_TYPES)[number]>>([])
+/** Live backend catalog (module → allowed actions); empty = fail closed. */
+const definitions = ref<Array<{ module: string, actions: string[] }>>([])
 
-const displayRows = computed(() => normalizePermissionRows(rows.value))
+const displayRows = computed<AppRolePermissionRow[]>(() => {
+  const byType = new Map((rows.value || []).map(row => [row.documentType, row]))
+  return definitions.value.map((definition) => {
+    const existing = byType.get(definition.module)
+    const actions = (existing?.actions || []).filter(action => definition.actions.includes(action))
+    return {
+      id: existing?.id || `perm_${definition.module}`,
+      documentType: definition.module,
+      onlyIfCreator: false,
+      level: 0,
+      actions,
+    }
+  })
+})
+
 const grantedCount = computed(() => displayRows.value.reduce((sum, row) => sum + row.actions.length, 0))
 const totalCount = computed(() => definitions.value.reduce((sum, definition) => sum + definition.actions.length, 0))
-const allGranted = computed(() => grantedCount.value === totalCount.value)
+const allGranted = computed(() => totalCount.value > 0 && grantedCount.value === totalCount.value)
 const someGranted = computed(() => grantedCount.value > 0 && !allGranted.value)
 
 function commit(next: AppRolePermissionRow[]) {
   rows.value = normalizePermissionRows(next)
 }
 
-function ensureAllRows() {
-  const next = normalizePermissionRows(rows.value)
-  if (JSON.stringify(next) !== JSON.stringify(rows.value)) rows.value = next
+function allowedActions(module: string) {
+  return definitions.value.find(item => item.module === module)?.actions || []
+}
+
+/** Frontend mirror of the backend catalog (same module/action codes). */
+function frontendCatalog(): Array<{ module: string, actions: string[] }> {
+  return ROLE_DOCUMENT_TYPES.map(def => ({
+    module: def.value,
+    actions: [...def.actions],
+  }))
 }
 
 onMounted(async () => {
-  ensureAllRows()
   try {
     const response = await api.get<ApiResponse<Array<{ module: string, actions: string[] }>>>(
       ApiEndpoints.PERMISSIONS,
       { suppressErrorToast: true, requestKey: 'permission-catalog' },
     )
     const catalog = Array.isArray(response) ? response : response.data
-    definitions.value = catalog.map((group) => {
-      const existing = ROLE_DOCUMENT_TYPES.find(item => item.permissionPrefix === group.module)
-      return existing
-        ? { ...existing, actions: group.actions.filter((action: string) => existing.actions.includes(action as never)) as typeof existing.actions }
-        : null
-    }).filter(Boolean) as unknown as typeof definitions.value
+    const mapped = (catalog || [])
+      .map(group => ({
+        module: String(group.module),
+        actions: (group.actions || []).map(String),
+      }))
+      .filter(group => group.actions.length > 0)
+    definitions.value = mapped.length ? mapped : frontendCatalog()
   }
   catch {
-    // The backend catalog is authoritative when available; fail closed if it
-    // cannot be loaded so roles cannot accidentally receive stale permissions.
-    definitions.value = []
+    // Catalog unavailable (mock mode / offline): fall back to the frontend
+    // mirror so the matrix still renders the page + action checkboxes.
+    definitions.value = frontendCatalog()
   }
 })
-watch(rows, ensureAllRows, { deep: false })
 
 function documentTypeLabel(value: string) {
-  const found = definitions.value.find(item => item.value === value)
+  const found = ROLE_DOCUMENT_TYPES.find(item => item.value === value)
   if (found && te(found.labelKey)) return t(found.labelKey)
-  return value.replaceAll('_', ' ')
+  return value.replaceAll('_', ' ').replaceAll('.', ' ')
 }
 
 function actionLabel(action: string) {
   const key = `core.rolePermissions.actions.${action}`
-  return te(key) ? t(key) : action
+  return te(key) ? t(key) : action.replaceAll('_', ' ').replaceAll('.', ' ')
 }
 
 function hasAction(row: AppRolePermissionRow, action: string) {
   return row.actions.includes(action)
 }
 
-function allowedActions(documentType: string) {
-  return definitions.value.find(item => item.value === documentType)?.actions || []
-}
-
 function toggleAction(documentType: string, action: string, checked: boolean | 'indeterminate') {
   if (props.disabled) return
+  const hasView = allowedActions(documentType).includes('view')
   commit(displayRows.value.map(row =>
     row.documentType === documentType
-      ? setPermissionAction(row, action, checked === true)
+      ? setPermissionAction(row, action, checked === true, hasView)
       : row,
   ))
 }
@@ -139,7 +157,7 @@ function toggleAll(checked: boolean) {
     </div>
 
     <div class="overflow-x-auto">
-      <table class="min-w-xl w-full text-sm">
+      <table class="min-w-2xl w-full text-sm">
         <thead>
           <tr class="bg-elevated/50 text-left text-highlighted">
             <th class="w-12 px-3 py-2.5">
@@ -170,11 +188,13 @@ function toggleAll(checked: boolean) {
               {{ documentTypeLabel(row.documentType) }}
             </td>
             <td class="px-3 py-3">
-              <div class="flex flex-wrap gap-x-4 gap-y-2">
+              <!-- Columnar checkbox grid: actions align in columns per page
+                   (View / Create / Edit …), with the view-dependency logic. -->
+              <div class="grid grid-cols-2 gap-x-8 gap-y-2 sm:grid-cols-3">
                 <label
                   v-for="action in allowedActions(row.documentType)"
                   :key="action"
-                  class="flex min-w-24 cursor-pointer items-center gap-1.5 text-sm text-highlighted"
+                  class="flex cursor-pointer items-center gap-1.5 text-sm text-highlighted"
                 >
                   <UCheckbox
                     :model-value="hasAction(row, action)"

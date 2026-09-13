@@ -1,7 +1,7 @@
 <script setup lang="ts">
 definePageMeta({
   titleKey: 'app.pages.stockMovements',
-  permission: 'products.view',
+  permission: 'stock.view',
 })
 </script>
 

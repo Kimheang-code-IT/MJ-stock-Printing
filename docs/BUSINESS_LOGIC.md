@@ -42,15 +42,15 @@ One atomic transaction (rollback discards everything):
 ## 4. Sale return (`POST /pos/sales/{id}/return`)
 
 - Allowed while `sale_status ∈ {COMPLETED, PARTIAL_RETURN}`; per-line remaining = `quantity − returned_quantity` (422 when exceeded).
-- `SRT-######` header; refund = `line_total × qty / lineQty` (pro-rata); `restock` lines create a `SALE_RETURN` movement (+`qty × factor_to_base`, cost = sold unit cost); no restock = no stock change.
+- `SRT-######` header; refund = `line_total × qty / lineQty` (pro-rata); `restock` lines create a `SALE_RETURN` movement (+`qty × factor_to_base`, cost = sold unit cost) and restore the **original sold batch allocations** (newest allocation first — never an arbitrary batch); no restock = no stock change.
 - The sale's open `customer_debts` row (locked) is reduced by the refund (status recomputed) — money never goes negative.
-- `sale_status` → `RETURNED` when all lines fully returned, else `PARTIAL_RETURN`. Audit `sale_return`.
+- `sale_status` → `RETURNED` when all lines fully returned, else `PARTIAL_RETURN`. Audit `sale_return`. The POS **return mode** (`/pos?returnSaleId=<id>`) still supports this but is no longer linked from the UI (report/customer-history rows now use **Edit**); it never creates a new sale.
 
 ## 5. Purchase return (`POST /stock/in/{id}/return`, perm `stock.in`)
 
 - Only confirmed `STOCK_IN` documents; the header is locked. Per line, returnable = `quantity − returned_quantity` (422 when exceeded).
-- `PRT-######` header + items (base-UOM qty, original unit cost, line refund); `PURCHASE_RETURN` stock-out per line; `stock_transaction_items.returned_quantity` accumulates.
-- **Money**: reduces the purchase's open `supplier_debts` (locked) up to `remaining_amount`; any excess becomes a `SUPPLIER_RETURN_CREDIT` payment (method CREDIT) recorded against the document. `refund_amount = debt_reduction + credit_amount`. Audit `purchase_return`.
+- `PRT-######` header + items (base-UOM qty, original unit cost, line refund); `PURCHASE_RETURN` stock-out per line deducting the **original batch lot** (batch identity = product + batch_no; unbatched lines drain FEFO); `stock_transaction_items.returned_quantity` accumulates.
+- **Money**: reduces the purchase's open `supplier_debts` (locked) up to `remaining_amount`; any excess becomes a `SUPPLIER_RETURN_CREDIT` payment (method CREDIT) recorded against the document. `refund_amount = debt_reduction + credit_amount`. Audit `purchase_return`. The Purchase **return mode** (`/reports/purchases/new?returnPurchaseId=<id>`) still supports this but is no longer linked from the UI (report/supplier-history rows now use **Edit**); it never creates a new purchase.
 
 ## 6. Stock adjustment / damage / expiry (`POST /stock/adjust|damage|expire`)
 
@@ -147,8 +147,25 @@ Income is **derived read-only from POS data** (no duplicate income tables); the 
 
 All report endpoints accept the common list params (`q`, `page`, `limit`, `startDate`, `endDate`) plus report-specific filters and return the standard envelope; each has a CSV export twin (`…/export`) streamed server-side (no stored export files).
 
-- **Sales** (`report.sales`): one row per **sale item** joined to its sale (invoice no, date, customer, cashier, product, qty + UOM snapshot, unit price, discount, line total, payment method, payment status); totals in `meta`; UI adds the sale-return dialog and invoice print.
-- **Purchase** (`report.purchase`): `stock_transactions` type `STOCK_IN` CONFIRMED with items aggregated (STI-…, supplier, reference, item summary, total, paid vs debt); UI adds the full-page Create flow and per-document purchase-return dialog.
-- **Customer/Supplier Debt** (`report.customer_debt` / `report.supplier_debt`): debt rows joined to sales/stock-in documents (original, paid, remaining, due date, status; overdue highlight); UI adds DebtPaymentDialog (per-debt + pay-all) and export.
-- **Customer/Supplier Returns** (`report.sales` / `report.purchase`): read-only history of immutable `sale_returns` (SRT-…, restocked qty, refund, reason) and `purchase_returns` (PRT-…, refund split debt-reduction + credit, reason) documents. Returns themselves are created only from the Sales/Purchase report dialogs; `returned_quantity` on source lines stays the returnable-quantity source of truth.
+- **Sales** (`report.sales`): one row per **sale item** joined to its sale (invoice no, date, customer, cashier, product, qty + UOM snapshot, unit price, discount, line total, payment method, payment status); totals in `meta`; UI adds the per-invoice **Edit** action (POS edit mode → `PATCH /pos/sales/{id}`) and invoice print.
+- **Purchase** (`report.purchase`): `stock_transactions` type `STOCK_IN` CONFIRMED with items aggregated (STI-…, supplier, reference, item summary, total, paid vs debt); UI adds the full-page Create flow and the per-document **Edit** action (Purchase edit mode → `PATCH /stock/in/{id}`).
+- **Customer/Supplier Debt** (`report.customer_debt` / `report.supplier_debt`): debt rows joined to sales/stock-in documents (original, paid, remaining, due date, status; overdue highlight); optional `currency=USD|KHR` filter; UI adds the Pay dialog (single + multi-select oldest-first) and export.
+- **Customer/Supplier Returns** (`report.sales` / `report.purchase`): server-side history of immutable `sale_returns` (SRT-…, restocked qty, refund, reason) and `purchase_returns` (PRT-…, refund split debt-reduction + credit, reason) documents. No dedicated page; the report row actions are now **Edit**. The raise-return endpoints still exist but are no longer linked from the UI; `returned_quantity` on source lines stays the returnable-quantity source of truth.
 - **Dashboard** (`dashboard.view`, cached ~60 s in Redis): KPIs (today/this-month sales, pending delivery notes, operating expenses today, debt totals, damage/expiry loss, refunds, gross profit), daily sales chart series, low-stock (`quantity ≤ minimum_stock`) and expiring (90/7-day windows) alert counts, recent sales/activity, top products.
+
+## 16. Editing a completed sale / purchase (reverse + reapply)
+
+Sales and purchases are otherwise immutable: `apply_stock_movement` is append-only and `Payment` rows are never edited. Editing reuses that discipline by **appending compensating movements** and re-applying the document, never mutating the ledger.
+
+- **Sale** — `PATCH /pos/sales/{id}` (perm `pos.access`), UI at `/pos?editSaleId=<id>`.
+  - **Guards**: the sale must be `COMPLETED` and have **no returns** (`returned_quantity == 0` on every line); otherwise 409. Discount rules and max-discount settings are re-validated exactly like `complete_sale`.
+  - **Reverse**: for each existing line, restore its `SaleItemBatch` allocations (newest-first, same as a return) and append a compensating `SALE_RETURN` movement (`+base_qty`); then delete the old `SaleItem`s.
+  - **Reapply**: build the new lines through the same UOM/batch/FEFO/discount path as `complete_sale` (new `SaleItem` + `SaleItemBatch` rows + `SALE` movements), and rewrite header `subtotal/discount/delivery/grand_total/currency/exchange_rate/note/sale_date`.
+  - **Debt**: the sale's `customer_debts` row is locked and recalculated from the new grand total using the **already-paid** amount (`paid_for_sale = min(existing_paid, grand_total)`); a walk-in with a resulting balance is rejected. Recorded payments are untouched, so payment-method changes are not part of the edit.
+  - Audited as `sale_update`.
+- **Purchase / Stock In** — `PATCH /stock/in/{id}` (perm `stock.in`), UI at `/reports/purchases/new?editPurchaseId=<id>`.
+  - **Guards**: `transaction_type == STOCK_IN`, `status == CONFIRMED`, and **no purchase returns** (`returned_quantity == 0` on every line); otherwise 409.
+  - **Reverse**: for each existing line, deduct its original batch lot (or FEFO for unbatched lines) and append a compensating `PURCHASE_RETURN` movement (`−base_qty`); then delete the old items.
+  - **Reapply**: create the new `StockTransactionItem`s, `batch_in` each lot and append `STOCK_IN` movements with the same batch/expiry/UOM validation as `stock_in`; rewrite header `discount/tax/currency/exchange_rate/note/reference/date`.
+  - **Debt**: the linked `supplier_debts` row is locked and recalculated from the new total with the already-paid amount; full payment is required when no supplier is set. Immutable payments are kept.
+  - Audited as `stock_in_update`.

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { PAYMENT_METHODS } from '~/config/pos-options'
 import type { ModuleTable } from '~/config/modules'
+import type { AppRecord } from '~/config/admin-seed'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { usePosCommands, useStockQueries } from '~/repositories/index'
 import type { ProductBatchRow } from '~/repositories/contracts/entities'
@@ -9,6 +10,7 @@ import type {
   DocumentTabSchema,
 } from '~/types/stock-pos/common'
 import { conversionForUom, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
+import { buildPurchaseEditLines, buildPurchaseReturnLines } from '~/utils/reports/returns'
 
 /**
  * New Purchase (Stock In = purchase, spec §2.1.x) — built on the same
@@ -60,24 +62,57 @@ const model = reactive<Record<string, unknown>>({
   discount: undefined,
   tax: undefined,
   paidNow: undefined,
+  // Return mode read-only header + reason.
+  purchaseNo: '',
+  supplierName: '',
+  returnReason: '',
   lines: [] as Array<Record<string, unknown>>,
 })
+
+/* ------------------------------ return mode ------------------------------ */
+/** Purchase Return mode: the original purchase is preloaded and Submit records
+ *  an immutable Purchase Return (never a new purchase, never an edit). */
+const returnMode = ref(false)
+const returnPurchaseId = ref('')
+const returnLoading = ref(false)
+const returnReason = ref('')
+
+/* ------------------------------- edit mode ------------------------------- */
+/** Purchase Edit mode: the original Stock In is preloaded and Submit re-saves
+ *  it via PATCH (reverse + reapply on the backend). */
+const editMode = ref(false)
+const editPurchaseId = ref('')
 
 function fieldValue(key: string): unknown {
   // Computed document totals consumed by the line-table footer.
   if (key === 'subtotal') return subtotal.value
   if (key === 'total') return total.value
   if (key === 'remaining') return remaining.value
+  if (key === 'returnReason') return returnReason.value
   return model[key]
 }
 
 function setFieldValue(key: string, value: unknown): void {
+  if (key === 'returnReason') {
+    returnReason.value = String(value ?? '')
+    return
+  }
   model[key] = value
 }
 
 // ---------------------------------------------------------------- masters
 
 onMounted(async () => {
+  const returnId = String(route.query.returnPurchaseId || '')
+  if (returnId) {
+    await loadReturnPurchase(returnId, String(route.query.purchaseNo || ''))
+    return
+  }
+  const editId = String(route.query.editPurchaseId || '')
+  if (editId) {
+    await loadEditPurchase(editId, String(route.query.purchaseNo || ''))
+    return
+  }
   await Promise.all([
     store.fetchList('suppliers'),
     store.fetchList('products'),
@@ -94,6 +129,100 @@ onMounted(async () => {
     model.lines = [{ ...blankLine(), productId: preselect }]
   }
 })
+
+/** Load an original purchase into the form as a return: preload supplier,
+ *  lines, batch/expiry, UOM and unit cost; Submit records a Purchase Return. */
+async function loadReturnPurchase(purchaseId: string, purchaseNo: string) {
+  returnLoading.value = true
+  try {
+    await Promise.all([store.fetchList('products'), store.fetchList('suppliers')])
+    await store.fetchList('stockIns', { q: purchaseNo || undefined, limit: 500 })
+    const docs = store.list('stockIns') as AppRecord[]
+    const doc = docs.find(row => String(row.id) === purchaseId)
+    if (!doc) {
+      toast.add({ title: t('app.purchase.returnLoadFailed'), color: 'error' })
+      await navigateTo('/reports/purchases')
+      return
+    }
+    model.supplierId = String(doc.supplierId || '')
+    model.supplierName = String(doc.supplier || '')
+    model.purchaseNo = String(doc.purchaseNo || purchaseNo || '')
+    model.currency = String(doc.currency || 'USD') === 'KHR' ? 'KHR' : 'USD'
+    model.exchangeRate = Number(doc.exchangeRate || 1)
+    model.transactionDate = String(doc.date || '').slice(0, 10)
+    const productById = new Map(store.list('products').map(row => [String(row.id), row]))
+    const returnLines = buildPurchaseReturnLines(doc, productById)
+    if (!returnLines.length) {
+      toast.add({ title: t('app.reports.nothingToReturn'), color: 'warning' })
+      await navigateTo('/reports/purchases')
+      return
+    }
+    model.lines = returnLines
+    returnMode.value = true
+    returnPurchaseId.value = purchaseId
+    returnReason.value = ''
+    setTitle(t('app.purchase.returnMode'))
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.purchase.returnLoadFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+    await navigateTo('/reports/purchases')
+  }
+  finally {
+    returnLoading.value = false
+  }
+}
+
+/** Load an original purchase into the form for editing (all lines, original
+ *  quantities/costs); Submit re-saves via PATCH (reverse + reapply). */
+async function loadEditPurchase(purchaseId: string, purchaseNo: string) {
+  returnLoading.value = true
+  try {
+    await Promise.all([store.fetchList('products'), store.fetchList('suppliers')])
+    await store.fetchList('stockIns', { q: purchaseNo || undefined, limit: 500 })
+    const docs = store.list('stockIns') as AppRecord[]
+    const doc = docs.find(row => String(row.id) === purchaseId)
+    if (!doc) {
+      toast.add({ title: t('app.purchase.updateLoadFailed'), color: 'error' })
+      await navigateTo('/reports/purchases')
+      return
+    }
+    model.supplierId = String(doc.supplierId || '')
+    model.supplierName = String(doc.supplier || '')
+    model.purchaseNo = String(doc.purchaseNo || purchaseNo || '')
+    model.currency = String(doc.currency || 'USD') === 'KHR' ? 'KHR' : 'USD'
+    model.exchangeRate = Number(doc.exchangeRate || 1)
+    model.transactionDate = String(doc.date || '').slice(0, 10)
+    model.note = String(doc.note || '')
+    model.discount = Number(doc.discount ?? doc.discountAmount ?? 0) || undefined
+    model.tax = Number(doc.tax ?? doc.taxAmount ?? 0) || undefined
+    const productById = new Map(store.list('products').map(row => [String(row.id), row]))
+    const editLines = buildPurchaseEditLines(doc, productById)
+    if (!editLines.length) {
+      toast.add({ title: t('app.purchase.updateLoadFailed'), color: 'warning' })
+      await navigateTo('/reports/purchases')
+      return
+    }
+    model.lines = editLines
+    editMode.value = true
+    editPurchaseId.value = purchaseId
+    setTitle(t('app.purchase.editTitle'))
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.purchase.updateLoadFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+    await navigateTo('/reports/purchases')
+  }
+  finally {
+    returnLoading.value = false
+  }
+}
 
 function blankLine(): Record<string, unknown> {
   return { productId: '', uomId: '', quantity: 0, unitAmount: 0, amount: 0, batchNo: '', expiryDate: '' }
@@ -294,9 +423,27 @@ watch(() => model.lines, (rows) => {
 
 // ---------------------------------------------------------------- schema
 
-const linesTable = computed<ModuleTable>(() => ({
-  key: 'lines',
-  title: t('app.purchase.lines'),
+const linesTable = computed<ModuleTable>(() => {
+  // Return mode: original lines are fixed (read-only) — only the return qty
+  // is editable, so Add-row / row actions are hidden.
+  if (returnMode.value) {
+    return {
+      key: 'lines',
+      title: t('app.purchase.lines'),
+      fitWidth: true,
+      columns: [
+        { key: 'name', label: t('app.pos.product'), type: 'text', computed: true, width: 'min-w-40' },
+        { key: 'batchNo', label: t('app.stock.batchNo'), type: 'text', computed: true, width: 'w-40 min-w-32' },
+        { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date', computed: true, width: 'w-32' },
+        { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number', computed: true },
+        { key: 'quantity', label: t('app.reports.returnQty'), type: 'number', required: true, width: 'w-28 min-w-24' },
+        { key: 'amount', label: t('app.fields.lineTotal'), type: 'number', computed: true },
+      ],
+    }
+  }
+  return {
+    key: 'lines',
+    title: t('app.purchase.lines'),
   addLabelKey: 'app.ui.addRow',
   // Stretch to the page width (no horizontal scroll on desktop); the Product
   // column flex-fills the remainder. Narrow screens scroll via the wrapper.
@@ -326,9 +473,63 @@ const linesTable = computed<ModuleTable>(() => ({
     { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number' },
     { key: 'amount', label: t('app.fields.lineTotal'), type: 'number', computed: true },
   ],
-}))
+  }
+})
 
-const tabs = computed<DocumentTabSchema[]>(() => [{
+const tabs = computed<DocumentTabSchema[]>(() => {
+  if (returnMode.value) {
+    return [
+      {
+        id: 'general',
+        labelKey: 'app.stock.tabGeneral',
+        label: t('app.stock.tabGeneral'),
+        sections: [
+          {
+            id: 'purchase-return',
+            titleKey: 'app.purchase.returnMode',
+            fields: [
+              { key: 'purchaseNo', labelKey: 'app.reports.purchaseNo', type: 'text', readOnly: true },
+              { key: 'supplierName', labelKey: 'app.nav.suppliers', type: 'text', readOnly: true },
+              { key: 'transactionDate', labelKey: 'app.fields.date', type: 'date', readOnly: true },
+              { key: 'currency', labelKey: 'app.fields.currency', type: 'text', readOnly: true },
+            ],
+          },
+          {
+            id: 'return-reason',
+            fields: [
+              { key: 'returnReason', labelKey: 'app.reports.returnReason', type: 'textarea', required: true, colSpan: 2 },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'products',
+        labelKey: 'app.purchase.lines',
+        sections: [
+          {
+            id: 'products',
+            titleKey: 'app.purchase.lines',
+            fields: [
+              {
+                key: 'lines',
+                labelKey: 'app.purchase.lines',
+                type: 'line-table',
+                colSpan: 2,
+                meta: {
+                  table: linesTable.value,
+                  showPricingTotals: true,
+                  // Fixed original lines: no add / remove, no payment footer.
+                  hideAdd: true,
+                  hideRowActions: true,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ]
+  }
+  return [{
   id: 'general',
   labelKey: 'app.stock.tabGeneral',
   label: t('app.stock.tabGeneral'),
@@ -389,7 +590,8 @@ const tabs = computed<DocumentTabSchema[]>(() => [{
       ],
     },
   ],
-}])
+  }]
+})
 
 // ---------------------------------------------------------------- totals
 
@@ -433,15 +635,100 @@ const paidNow = computed(() => round2(Math.min(Math.max(0, Number(model.paidNow 
 const remaining = computed(() => round2(Math.max(0, total.value - paidNow.value)))
 
 const canSave = computed(() =>
-  completedLines.value.length > 0
-  && (remaining.value <= 0 || Boolean(model.supplierId))
-  && (model.currency !== 'KHR' || Number(model.exchangeRate || 0) > 0))
+  returnMode.value
+    ? (completedLines.value.length > 0 && Boolean(returnReason.value.trim()))
+    : (completedLines.value.length > 0
+      && (remaining.value <= 0 || Boolean(model.supplierId))
+      && (model.currency !== 'KHR' || Number(model.exchangeRate || 0) > 0)))
 
 // ---------------------------------------------------------------- submit
 
 const saving = ref(false)
 
+/** Submit the Purchase Return against the original document (immutable). */
+async function saveReturn() {
+  if (!canSave.value || saving.value) return
+  saving.value = true
+  try {
+    await posCommands.returnPurchase({
+      stockInId: returnPurchaseId.value,
+      reason: returnReason.value.trim(),
+      lines: completedLines.value.map(row => ({
+        lineId: String((row as { lineId?: string }).lineId || ''),
+        quantity: Number(row.quantity),
+      })),
+    })
+    toast.add({ title: t('app.reports.returnSaved'), color: 'success' })
+    void store.fetchList('products')
+    void store.fetchList('stockIns')
+    await navigateTo('/reports/purchases')
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.reports.returnFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+/** Save the edited purchase (reverse + reapply on the backend). */
+async function saveEdit() {
+  if (!canSave.value || saving.value) return
+  saving.value = true
+  try {
+    await posCommands.updatePurchase({
+      stockInId: editPurchaseId.value,
+      lines: completedLines.value.map((row) => {
+        const product = productFor(row.productId)
+        const conversion = conversionForUom(product, String(row.uomId || ''))
+        return {
+          productId: row.productId,
+          quantity: Number(row.quantity),
+          unitCost: Number(row.unitAmount),
+          uomId: String(row.uomId || product?.uomId || '') || undefined,
+          uomSymbol: String(conversion?.uomSymbol || product?.uomSymbol || product?.uom || '') || undefined,
+          factorToBase: conversion?.factorToBase ?? 1,
+          batchNo: String(row.batchNo || '').trim() || null,
+          expiryDate: String(row.expiryDate || '').trim() || null,
+        }
+      }),
+      discountAmount: discount.value,
+      taxAmount: tax.value,
+      currency: String(model.currency || 'USD') as 'USD' | 'KHR',
+      exchangeRate: Number(model.exchangeRate || 1),
+      note: String(model.note || '').trim() || null,
+      transactionDate: String(model.transactionDate || '').trim() || null,
+    })
+    toast.add({ title: t('app.purchase.updated'), color: 'success' })
+    void store.fetchList('products')
+    void store.fetchList('stockIns')
+    await navigateTo('/reports/purchases')
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.purchase.updateFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+  }
+  finally {
+    saving.value = false
+  }
+}
+
 async function save() {
+  if (returnMode.value) {
+    await saveReturn()
+    return
+  }
+  if (editMode.value) {
+    await saveEdit()
+    return
+  }
   if (!canSave.value || saving.value) return
   saving.value = true
   try {
@@ -489,19 +776,39 @@ async function save() {
 </script>
 
 <template>
-  <DocumentAppDocumentPage
-    :tabs="tabs"
-    active-tab="general"
-    :field-value="fieldValue"
-    :set-field-value="setFieldValue"
-    :saving="saving"
-    :can-save="canSave"
-    :is-create="true"
-    :show-tabs="false"
-    content-wide
-    :show-cancel="true"
-    list-to="/reports/purchases"
-    :can-export="false"
-    @save="save()"
-  />
+  <div class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      v-if="returnMode"
+      class="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-3 py-1.5 text-sm font-medium text-warning"
+    >
+      <UIcon name="i-lucide-undo-2" class="size-4" />
+      <span>{{ t('app.purchase.returnMode') }}</span>
+      <span v-if="model.purchaseNo" class="text-muted">· {{ model.purchaseNo }}</span>
+    </div>
+    <div
+      v-if="editMode"
+      class="flex items-center gap-2 border-b border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary"
+    >
+      <UIcon name="i-lucide-pencil" class="size-4" />
+      <span>{{ t('app.purchase.editMode') }}</span>
+      <span v-if="model.purchaseNo" class="text-muted">· {{ model.purchaseNo }}</span>
+    </div>
+    <DocumentAppDocumentPage
+      :tabs="tabs"
+      active-tab="general"
+      :field-value="fieldValue"
+      :set-field-value="setFieldValue"
+      :pending="returnLoading"
+      :saving="saving"
+      :can-save="canSave"
+      :save-label="returnMode ? t('app.reports.confirmReturn') : editMode ? t('app.ui.save') : undefined"
+      :is-create="true"
+      :show-tabs="false"
+      content-wide
+      :show-cancel="true"
+      list-to="/reports/purchases"
+      :can-export="false"
+      @save="save()"
+    />
+  </div>
 </template>

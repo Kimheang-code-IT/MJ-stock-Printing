@@ -14,6 +14,7 @@ import type {
   ProductHistoryRow,
   ProductSalePriceRow,
   ProductScopedQuery,
+  SaleDetail,
   SaleReceipt,
   SearchHitItem,
   SearchRepository,
@@ -957,8 +958,168 @@ export function createMockPosRepository(): PosCommandRepository {
       return mockLatency(sale)
     },
 
+    async updateSale(input): Promise<AppRecord> {
+      const db = useMockDb()
+      const sale = db.collections.sales.find(row => String(row.id) === String(input.saleId))
+      if (!sale) throw new Error(`Sale ${input.saleId} not found`)
+      if (db.collections.saleReturns.some(row => String(row.saleId) === String(sale.id))) {
+        throw new Error('Sales with returns cannot be edited')
+      }
+
+      // Reverse the original lines back into stock.
+      const previousItems = (Array.isArray(sale.items) ? sale.items : []) as AppRecord[]
+      for (const item of previousItems) {
+        const product = db.collections.products.find(row => String(row.id) === String(item.productId))
+        const baseQuantity = Number(item.baseQuantity ?? item.quantity ?? 0)
+        if (product && baseQuantity > 0) {
+          product.quantity = roundQty(Number(product.quantity) + baseQuantity)
+          applyMovement(String(product.id), String(product.name), 'Sale Return', baseQuantity, String(sale.invoiceNo || sale.saleNo), 'Sale edit reversal', { uom: String(item.uom || '') })
+        }
+      }
+      const customer = sale.customerId
+        ? db.collections.customers.find(row => String(row.id) === String(sale.customerId)) || null
+        : null
+      const previousRemaining = round2(Number(sale.remaining || 0))
+      if (customer && previousRemaining > 0) {
+        customer.debtBalance = round2(Math.max(0, Number(customer.debtBalance || 0) - previousRemaining))
+      }
+      for (const debt of db.collections.customerDebts) {
+        if (String(debt.saleId) !== String(sale.id)) continue
+        debt.paidAmount = Number(debt.invoiceTotal || 0)
+        debt.remainingAmount = 0
+        debt.status = 'PAID'
+      }
+
+      const items = input.items.map((item) => {
+        const product = db.collections.products.find(row => String(row.id) === String(item.productId))
+        if (!product) throw new Error(`Unknown product: ${item.productId}`)
+        const quantity = Number(item.quantity)
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Quantity must be greater than zero')
+        const factor = Number(item.factorToBase ?? 1)
+        if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
+        const baseQty = convertToBase(quantity, factor)
+        const price = item.unitPrice == null ? Number(product.salePrice) : Number(item.unitPrice)
+        const discountPercent = Math.min(100, Math.max(0, Number(item.discountPercent || 0)))
+        const gross = round2(price * quantity)
+        const lineDiscount = round2(gross * (discountPercent / 100))
+        return {
+          id: createId('line'),
+          productId: product.id,
+          name: product.name,
+          uom: String(item.uomSymbol || product.uomSymbol || product.uom || ''),
+          uomId: item.uomId ? String(item.uomId) : String(product.uomId || ''),
+          factorToBase: factor,
+          quantity,
+          baseQuantity: baseQty,
+          batchNo: 'FEFO',
+          expiryDate: null,
+          price,
+          discountPercent,
+          discount: lineDiscount,
+          total: round2(gross - lineDiscount),
+        }
+      })
+      const subtotal = round2(items.reduce((sum, item) => sum + round2(Number(item.price) * Number(item.quantity)), 0))
+      const lineDiscountTotal = round2(items.reduce((sum, item) => sum + Number(item.discount || 0), 0))
+      const discount = round2(Number(input.discount ?? lineDiscountTotal))
+      const deliveryPrice = round2(Math.max(0, Number(input.deliveryPrice || 0)))
+      const total = round2(subtotal - discount + deliveryPrice)
+      const paidNow = round2(Math.min(Number(sale.paidAmount || 0), total))
+      const remaining = round2(total - paidNow)
+
+      for (const item of items) {
+        const product = db.collections.products.find(row => String(row.id) === String(item.productId))!
+        product.quantity = roundQty(Number(product.quantity) - Number(item.baseQuantity))
+        applyMovement(String(product.id), String(product.name), 'Sale', -Number(item.baseQuantity), String(sale.invoiceNo || sale.saleNo), 'POS sale (edited)', { uom: String(item.uom || '') })
+      }
+
+      Object.assign(sale, {
+        items,
+        lineCount: items.length,
+        subtotal,
+        discount,
+        deliveryPrice,
+        total,
+        paidAmount: paidNow,
+        remaining,
+        status: remaining <= 0 ? 'Paid' : paidNow > 0 ? 'Partial' : 'Unpaid',
+        note: input.note ?? null,
+        currency: input.currency ?? 'USD',
+        exchangeRate: input.exchangeRate ?? 1,
+        customerId: customer?.id ?? null,
+        customer: customer?.name ?? String(sale.customer || 'Walk-in customer'),
+      })
+
+      if (customer && remaining > 0) {
+        customer.debtBalance = round2(Number(customer.debtBalance || 0) + remaining)
+        const existing = db.collections.customerDebts.find(row => String(row.saleId) === String(sale.id))
+        if (existing) {
+          Object.assign(existing, {
+            invoiceTotal: total,
+            paidAmount: paidNow,
+            remainingAmount: remaining,
+            status: paidNow > 0 ? 'PARTIAL' : 'UNPAID',
+            currency: input.currency ?? 'USD',
+            exchangeRate: input.exchangeRate ?? 1,
+          })
+        }
+        else {
+          mockInsert('customerDebts', {
+            saleId: sale.id,
+            customerId: customer.id,
+            customer: customer.name,
+            invoiceNo: String(sale.invoiceNo || sale.saleNo),
+            date: String(sale.date),
+            invoiceTotal: total,
+            paidAmount: paidNow,
+            remainingAmount: remaining,
+            dueDate: null,
+            status: paidNow > 0 ? 'PARTIAL' : 'UNPAID',
+            currency: input.currency ?? 'USD',
+            exchangeRate: input.exchangeRate ?? 1,
+          })
+        }
+      }
+      addAudit('SALE', 'update', 'Sale', String(sale.saleNo), String(sale.saleNo))
+      return mockLatency(sale)
+    },
+
     async getSaleReceipt(saleId: string): Promise<SaleReceipt> {
       return mockLatency(saleReceipt(saleId))
+    },
+
+    async getSale(saleId: string): Promise<SaleDetail> {
+      const db = useMockDb()
+      const sale = db.collections.sales.find(row => String(row.id) === String(saleId))
+      if (!sale) throw new Error(`Sale ${saleId} not found`)
+      const items = (Array.isArray(sale.items) ? sale.items : []) as AppRecord[]
+      return mockLatency({
+        id: String(sale.id),
+        invoiceNo: String(sale.invoiceNo || sale.saleNo || ''),
+        customerId: sale.customerId ? String(sale.customerId) : null,
+        customerName: String(sale.customer || ''),
+        currency: String(sale.currency ?? 'USD') === 'KHR' ? 'KHR' : 'USD',
+        exchangeRate: Number(sale.exchangeRate ?? 1) || 1,
+        items: items.map((item) => {
+          const quantity = Number(item.quantity || 0)
+          const unitPrice = Number(item.price ?? item.unitPrice ?? 0)
+          const discountAmount = Number(item.discount ?? item.discountAmount ?? 0)
+          return {
+            id: String(item.id || ''),
+            productId: String(item.productId || ''),
+            name: String(item.name || ''),
+            uom: String(item.uom || item.uomSymbol || ''),
+            uomId: item.uomId ? String(item.uomId) : undefined,
+            factorToBase: Number(item.factorToBase ?? 1) || 1,
+            quantity,
+            returnedQuantity: Number(item.returnedQuantity || 0),
+            unitPrice,
+            discountPercent: Number(item.discountPercent || 0),
+            discountAmount,
+            lineTotal: Number(item.total ?? round2(unitPrice * quantity - discountAmount)),
+          }
+        }),
+      } as SaleDetail)
     },
 
     async createStockOperation(input): Promise<AppRecord> {
@@ -1114,6 +1275,118 @@ export function createMockPosRepository(): PosCommandRepository {
         note: input.note ?? null,
         createdAt: nowIso(),
       } as AppRecord)
+    },
+
+    async updatePurchase(input): Promise<AppRecord> {
+      const db = useMockDb()
+      const purchase = db.collections.stockIns.find(row => String(row.id) === String(input.stockInId))
+      if (!purchase) throw new Error(`Stock In ${input.stockInId} not found`)
+
+      // Reverse the original receipt.
+      const previousItems = (Array.isArray(purchase.items) ? purchase.items : []) as AppRecord[]
+      for (const item of previousItems) {
+        const product = db.collections.products.find(row => String(row.id) === String(item.productId))
+        const qty = Number(item.baseQuantity ?? item.quantity ?? 0)
+        if (product && qty > 0) {
+          product.quantity = roundQty(Number(product.quantity) - qty)
+          applyMovement(String(product.id), String(product.name), 'Purchase Return', -qty, String(purchase.purchaseNo || ''), 'Purchase edit reversal', { uom: String(item.uom || '') })
+        }
+      }
+      const previousRemaining = round2(Number(purchase.remaining || 0))
+      const supplier = purchase.supplierId
+        ? db.collections.suppliers.find(row => String(row.id) === String(purchase.supplierId)) || null
+        : null
+      if (supplier && previousRemaining > 0) {
+        supplier.totalDebt = round2(Math.max(0, Number(supplier.totalDebt || 0) - previousRemaining))
+      }
+      for (const debt of db.collections.supplierDebts) {
+        if (String(debt.stockTransactionId) !== String(purchase.id)) continue
+        debt.paidAmount = Number(debt.totalAmount || 0)
+        debt.remainingAmount = 0
+        debt.status = 'PAID'
+      }
+
+      let subtotal = 0
+      const items = input.lines.map((line) => {
+        const product = db.collections.products.find(row => String(row.id) === String(line.productId))
+        if (!product) throw new Error(`Unknown product: ${line.productId}`)
+        const quantity = Number(line.quantity)
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Quantity is required for ${String(product.name)}`)
+        const factor = Number(line.factorToBase ?? 1)
+        if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
+        const baseQty = roundQty(convertToBase(quantity, factor))
+        const unitCost = line.unitCost != null ? Number(line.unitCost) : 0
+        product.quantity = roundQty(Number(product.quantity) + baseQty)
+        applyMovement(String(product.id), String(product.name), 'Stock In', baseQty, String(purchase.purchaseNo || ''), input.note ?? '', {
+          uom: String(line.uomSymbol || ''),
+          ...(line.unitCost != null ? { unitCost: divideDecimalSafe(unitCost, factor) } : {}),
+          ...(line.batchNo ? { batchNo: String(line.batchNo) } : {}),
+          ...(line.expiryDate ? { expiryDate: String(line.expiryDate) } : {}),
+        })
+        subtotal = round2(subtotal + round2(quantity * unitCost))
+        return {
+          id: createId('pline'),
+          productId: String(line.productId),
+          name: String(product.name),
+          batchNo: line.batchNo ?? null,
+          expiryDate: line.expiryDate ?? null,
+          uom: String(line.uomSymbol || ''),
+          quantity,
+          baseQuantity: baseQty,
+          price: unitCost,
+          total: round2(quantity * unitCost),
+        }
+      })
+      const discount = round2(Math.max(0, Number(input.discountAmount ?? 0)))
+      const tax = round2(Math.max(0, Number(input.taxAmount ?? 0)))
+      const total = round2(Math.max(0, subtotal - discount + tax))
+      const paid = round2(Math.min(Number(purchase.paidAmount ?? 0), total))
+      const remaining = round2(total - paid)
+
+      Object.assign(purchase, {
+        items,
+        lineCount: items.length,
+        products: items.map(item => item.name),
+        total,
+        discountAmount: discount,
+        taxAmount: tax,
+        paidAmount: paid,
+        remaining,
+        status: remaining <= 0 ? 'Completed' : 'Partial',
+        note: input.note ?? null,
+        currency: input.currency ?? 'USD',
+        exchangeRate: input.exchangeRate ?? 1,
+      })
+
+      if (supplier && remaining > 0) {
+        supplier.totalDebt = round2(Number(supplier.totalDebt || 0) + remaining)
+        const existing = db.collections.supplierDebts.find(row => String(row.stockTransactionId) === String(purchase.id))
+        if (existing) {
+          Object.assign(existing, {
+            totalAmount: total,
+            paidAmount: paid,
+            remainingAmount: remaining,
+            status: paid > 0 ? 'PARTIAL' : 'UNPAID',
+            currency: input.currency ?? 'USD',
+          })
+        }
+        else {
+          mockInsert('supplierDebts', {
+            date: nowIso().slice(0, 10),
+            supplierId: String(supplier.id),
+            supplier: String(supplier.name),
+            purchaseNo: String(purchase.purchaseNo || ''),
+            totalAmount: total,
+            paidAmount: paid,
+            remainingAmount: remaining,
+            status: paid > 0 ? 'PARTIAL' : 'UNPAID',
+            currency: input.currency ?? 'USD',
+            exchangeRate: input.exchangeRate ?? 1,
+          } as unknown as Partial<AppRecord>)
+        }
+      }
+      addAudit('STOCK', 'stock_in_update', 'Purchase', String(purchase.purchaseNo), String(purchase.purchaseNo))
+      return mockLatency(purchase)
     },
 
     async payCustomerDebt(input): Promise<AppRecord> {

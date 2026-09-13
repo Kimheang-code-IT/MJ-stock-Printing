@@ -3,8 +3,16 @@ import { flatKeysToPermissionRows, permissionRowsToFlatKeys } from '../app/utils
 import { resolveUserPermissionKeys } from '../app/utils/auth/user-permissions'
 
 describe('role-only authorization', () => {
-  it('serializes the authoritative role matrix', () => {
-    const keys = ['reports.view', 'reports.export', 'products.view', 'pos.view']
+  it('round-trips backend permission codes through the matrix rows', () => {
+    const keys = [
+      'report.sales',
+      'report.finance',
+      'customer.debt.pay',
+      'stock.view',
+      'pos.access',
+      'supplier.debt.pay',
+      'product.update',
+    ]
     expect(permissionRowsToFlatKeys(flatKeysToPermissionRows(keys))).toEqual([...keys].sort())
   })
 
@@ -16,9 +24,9 @@ describe('role-only authorization', () => {
     expect(resolveUserPermissionKeys({
       name: 'Restricted',
       email: 'restricted@example.com',
-      effectivePermissions: ['reports.view'],
+      effectivePermissions: ['report.sales'],
       permissions: ['ALL_PAGES'],
       pageAccess: ['ALL_PAGES'],
-    })).toEqual(['reports.view'])
+    })).toEqual(['report.sales'])
   })
 })

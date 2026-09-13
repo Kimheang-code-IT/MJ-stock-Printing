@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type {
-  AttachmentMeta,
   DocumentTabSchema,
   PersonSummary,
 } from '~/types/stock-pos/common'
@@ -32,17 +31,11 @@ const props = withDefaults(defineProps<{
   isCreate?: boolean
   /** Force the wider document content shell (matches App Config settings width). */
   contentWide?: boolean
-  attachments?: AttachmentMeta[]
-  currentUser?: { id: string, name: string, email?: string }
   metaTitle?: string
   metaSubtitle?: string
   /** Module icon rendered in the meta rail record tile. */
   metaIcon?: string
-  metaStatus?: string
-  metaStage?: string
   metaOwner?: PersonSummary | null
-  metaAssignee?: PersonSummary | null
-  metaTags?: string[]
   metaCreatedAt?: string
   metaUpdatedAt?: string
   moreItems?: DropdownMenuItem[][]
@@ -67,8 +60,6 @@ const props = withDefaults(defineProps<{
   listNavigationDirection: null,
   isCreate: false,
   contentWide: false,
-  attachments: () => [],
-  metaTags: () => [],
   exporting: false,
   canExport: true,
   confirmSave: true,
@@ -77,7 +68,6 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:activeTab': [string]
-  'update:attachments': [AttachmentMeta[]]
   save: []
   refresh: []
   navigatePrevious: []
@@ -99,7 +89,10 @@ const exportFields = computed(() => {
               && field.type !== 'uom-conversions'
               && field.type !== 'related-records'
               && field.type !== 'permission-matrix'
-              && field.type !== 'batches',
+              && field.type !== 'batches'
+              && field.type !== 'product-movements'
+              && field.type !== 'party-sales-history'
+              && field.type !== 'party-purchase-history',
             )
         .map(field => ({
           label: field.label || t(field.labelKey),
@@ -183,9 +176,6 @@ async function onSaveClick() {
       @save="onSaveClick"
       @toggle-meta-rail="toggleMetaRail"
     >
-      <template v-if="$slots.leading" #leading>
-        <slot name="leading" />
-      </template>
       <slot name="actions" />
     </LayoutAppHeaderPageActions>
 
@@ -239,12 +229,7 @@ async function onSaveClick() {
             />
 
             <template v-else-if="showForm">
-              <slot name="before-form" />
-
-              <div
-                class="flex min-h-0 w-full"
-                :class="$slots.aside && !showMetaRail ? 'flex-col xl:flex-row' : 'flex-col'"
-              >
+              <div class="flex min-h-0 w-full flex-col">
                 <div class="min-w-0 flex-1">
                   <slot name="form">
                     <DocumentAppDocumentForm
@@ -265,13 +250,6 @@ async function onSaveClick() {
                     <slot name="after-form" />
                   </DocumentAppDocumentContentShell>
                 </div>
-
-                <aside
-                  v-if="$slots.aside && !showMetaRail"
-                  class="w-full shrink-0 border-t border-default px-4 py-6 sm:px-6 xl:w-80 xl:border-t-0 xl:border-l xl:overflow-y-auto"
-                >
-                  <slot name="aside" />
-                </aside>
               </div>
             </template>
           </div>

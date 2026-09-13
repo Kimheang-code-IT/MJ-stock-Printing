@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ titleKey: 'app.nav.suppliers', permission: 'suppliers.view' })
+definePageMeta({ titleKey: 'app.nav.suppliers', permission: 'supplier.view' })
 </script>
 
 <template>

@@ -17,7 +17,7 @@ Never load all six at once. Never recreate removed docs.
 
 ## Approved module surface (do not expand)
 
-Dashboard · Stock (Products, Stock Movements) · POS · Delivery Notes · Setup (Categories, Units of Measure, Brands, Suppliers, Customers) · Reports (Sales, Purchases, Customer Returns, Supplier Returns, Customer Debt, Supplier Debt, Finance) · Administration (Users, Roles & Permissions, Document Sequences, Audit Logs, Settings).
+Dashboard · Stock (Products, Stock Movements) · POS · Delivery Notes · Setup (Categories, Units of Measure, Brands, Suppliers, Customers) · Reports (Sales, Purchases, Customer Debt, Supplier Debt, Finance) · Administration (Users, Roles & Permissions, Document Sequences, Audit Logs, Settings).
 
 No standalone pages/routes for sales, purchases, returns, debts, stock in/adjust/damage/expire, or expenses — those are dialogs, tabs, and report actions.
 

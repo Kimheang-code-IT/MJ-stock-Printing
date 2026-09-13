@@ -6,8 +6,8 @@ export type DocumentFormSectionItem
   = | { kind: 'field', field: DocumentFormField }
     | { kind: 'image-pair', left: DocumentFormField[], image: DocumentFormField }
 
-/** Fields that are never allowed on the left side of an image pair. */
-function isFullWidthField(field: DocumentFormField) {
+/** Fields that always span both columns instead of a single grid cell. */
+export function isFullWidthField(field: DocumentFormField) {
   return field.colSpan === 2
     || field.type === 'textarea'
     || field.type === 'permission-matrix'
@@ -17,6 +17,7 @@ function isFullWidthField(field: DocumentFormField) {
     || field.type === 'line-table'
     || field.type === 'uom-conversions'
     || field.type === 'related-records'
+    || field.type === 'batches'
 }
 
 /** Normal single-column fields that may sit to the left of an image upload. */

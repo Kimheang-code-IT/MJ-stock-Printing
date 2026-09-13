@@ -228,11 +228,19 @@ const isRelatedRecords = computed(() => props.field.type === 'related-records')
 const isUomConversions = computed(() => props.field.type === 'uom-conversions')
 const isBatches = computed(() => props.field.type === 'batches')
 const isProductMovements = computed(() => props.field.type === 'product-movements')
-const isSalePriceHistory = computed(() => props.field.type === 'sale-price-history')
+const isPartyHistory = computed(() =>
+  props.field.type === 'party-sales-history' || props.field.type === 'party-purchase-history',
+)
 const isFile = computed(() => props.field.type === 'file')
 
 const lineAction = inject(moduleDocumentLineActionKey, undefined)
 const recordAccess = inject(moduleDocumentRecordKey, null)
+
+/** Whole loaded record for the party ledger panels (id, name, phone…). */
+const partyRecord = computed(() => (recordAccess?.get('__record') as AppRecord | null) ?? null)
+const partyKind = computed<'customer' | 'supplier'>(
+  () => (props.field.meta?.kind === 'supplier' ? 'supplier' : 'customer'),
+)
 
 const lineTable = computed(() => props.field.meta?.table as ModuleTable | undefined)
 const lineRows = computed({
@@ -353,6 +361,8 @@ watch(() => props.field.key, () => {
       :disabled="disabled || lineViewOnly"
       :compact="lineCompact"
       :view-only-actions="lineViewOnly"
+      :hide-add="Boolean(field.meta?.hideAdd)"
+      :hide-row-actions="Boolean(field.meta?.hideRowActions)"
       :currency="field.meta?.currencyToggle ? docCurrency : undefined"
       @update:model-value="lineRows = $event"
       @update:currency="setDocCurrency"
@@ -476,12 +486,12 @@ watch(() => props.field.key, () => {
     :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
   />
 
-  <!-- Sale-price version history (Pricing tab; Product + UOM price). -->
-  <StockSalePriceHistoryPanel
-    v-else-if="isSalePriceHistory"
+  <!-- Customer / Supplier detail History tab. -->
+  <PartyHistoryPanel
+    v-else-if="isPartyHistory"
     class="md:col-span-2"
-    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
-    @changed="recordAccess?.set?.('__reload', Date.now())"
+    :party="partyRecord"
+    :kind="partyKind"
   />
 
   <UAlert

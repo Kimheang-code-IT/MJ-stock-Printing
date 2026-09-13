@@ -17,6 +17,8 @@ export interface ConfirmOptions {
   cancelLabel?: string
   cancelLabelKey?: string
   confirmColor?: ConfirmColor
+  /** Content width preset or Tailwind class (see CommonAppDialog). */
+  width?: string
   /** Used by delete preset: number of items. */
   count?: number
 }
@@ -33,6 +35,7 @@ type ConfirmState = {
   cancelLabel?: string
   cancelLabelKey?: string
   confirmColor: ConfirmColor
+  width?: string
   loading: boolean
 }
 
@@ -121,6 +124,7 @@ export function useConfirm() {
     confirmState.cancelLabel = options.cancelLabel
     confirmState.cancelLabelKey = options.cancelLabelKey || preset.cancelLabelKey
     confirmState.confirmColor = options.confirmColor || preset.confirmColor
+    confirmState.width = options.width
     confirmState.loading = false
     confirmState.open = true
 

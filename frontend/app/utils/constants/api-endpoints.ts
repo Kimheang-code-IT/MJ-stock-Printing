@@ -27,6 +27,10 @@ export const ApiEndpoints = {
   SUPPLIERS: '/api/v1/suppliers',
   SUPPLIER: (id: string) => `/api/v1/suppliers/${id}`,
   SUPPLIER_PAYMENTS: (id: string) => `/api/v1/suppliers/${id}/payments`,
+  /** Party-scoped supplier debts (Setup detail Debt tab / statement). */
+  SUPPLIER_PARTY_DEBTS: (id: string) => `/api/v1/suppliers/${id}/debts`,
+  /** Party-scoped purchase history (Setup detail Purchase History tab). */
+  SUPPLIER_HISTORY: (id: string) => `/api/v1/suppliers/${id}/history`,
   /** Spec §7: POST /suppliers/{id}/debts/{debt_id}/payments. */
   SUPPLIER_DEBT_PAYMENTS: (supplierId: string, debtId: string) =>
     `/api/v1/suppliers/${supplierId}/debts/${debtId}/payments`,
@@ -34,6 +38,10 @@ export const ApiEndpoints = {
   CUSTOMERS: '/api/v1/customers',
   CUSTOMER: (id: string) => `/api/v1/customers/${id}`,
   CUSTOMER_PAYMENTS: (id: string) => `/api/v1/customers/${id}/payments`,
+  /** Party-scoped customer debts (Setup detail Debt tab / statement). */
+  CUSTOMER_PARTY_DEBTS: (id: string) => `/api/v1/customers/${id}/debts`,
+  /** Party-scoped sales history (Setup detail Sales History tab). */
+  CUSTOMER_HISTORY: (id: string) => `/api/v1/customers/${id}/purchase-history`,
   /** Spec §7: POST /customers/{id}/debts/{debt_id}/payments. */
   CUSTOMER_DEBT_PAYMENTS: (customerId: string, debtId: string) =>
     `/api/v1/customers/${customerId}/debts/${debtId}/payments`,
@@ -43,6 +51,8 @@ export const ApiEndpoints = {
   POS_SALE_COMPLETE: '/api/v1/pos/sales',
   SALE_RETURN: (id: string) => `/api/v1/pos/sales/${id}/return`,
   POS_RECEIPT: (id: string) => `/api/v1/pos/sales/${id}/receipt`,
+  /** Original sale detail (lines + currency) for POS return mode. */
+  SALE_DETAIL: (id: string) => `/api/v1/pos/sales/${id}`,
   POS_PRODUCT_SEARCH: '/api/v1/pos/products/search',
   POS_PRODUCT_BARCODE: (barcode: string) => `/api/v1/pos/products/barcode/${encodeURIComponent(barcode)}`,
   POS_PRODUCT_DELIVERY_NOTE: (saleId: string) => `/api/v1/pos/sales/${saleId}/delivery-notes`,
@@ -63,6 +73,7 @@ export const ApiEndpoints = {
 
   /** Spec §7 Stock: one create path per operation — never a generic /stock/operations. */
   STOCK_IN: '/api/v1/stock/in',
+  STOCK_IN_DOC: (id: string) => `/api/v1/stock/in/${id}`,
   STOCK_IN_RETURN: (id: string) => `/api/v1/stock/in/${id}/return`,
   STOCK_ADJUST: '/api/v1/stock/adjust',
   STOCK_DAMAGE: '/api/v1/stock/damage',

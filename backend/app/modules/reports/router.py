@@ -92,6 +92,8 @@ async def customer_debt_report(
     params: ListParams = Depends(list_params),
     customer_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(UNPAID|PARTIAL|PAID)$"),
+    # Optional document-currency filter (USD | KHR); rows are never mixed.
+    currency: str | None = Query(default=None, pattern="^(USD|KHR)$"),
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("report.customer_debt")),
 ) -> dict:
@@ -100,6 +102,7 @@ async def customer_debt_report(
         q=params.q,
         customer_id=customer_id,
         status=status,
+        currency=currency,
         start=params.start_date,
         end=params.end_date,
         page=params.page,
@@ -116,6 +119,8 @@ async def supplier_debt_report(
     params: ListParams = Depends(list_params),
     supplier_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(UNPAID|PARTIAL|PAID)$"),
+    # Optional document-currency filter (USD | KHR); rows are never mixed.
+    currency: str | None = Query(default=None, pattern="^(USD|KHR)$"),
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("report.supplier_debt")),
 ) -> dict:
@@ -124,6 +129,7 @@ async def supplier_debt_report(
         q=params.q,
         supplier_id=supplier_id,
         status=status,
+        currency=currency,
         start=params.start_date,
         end=params.end_date,
         page=params.page,
@@ -348,6 +354,7 @@ async def customer_debt_report_export(
     params: ListParams = Depends(list_params),
     customer_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(UNPAID|PARTIAL|PAID)$"),
+    currency: str | None = Query(default=None, pattern="^(USD|KHR)$"),
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("report.customer_debt")),
 ):
@@ -356,6 +363,7 @@ async def customer_debt_report_export(
         q=params.q,
         customer_id=customer_id,
         status=status,
+        currency=currency,
         start=params.start_date,
         end=params.end_date,
         page=1,
@@ -383,6 +391,7 @@ async def supplier_debt_report_export(
     params: ListParams = Depends(list_params),
     supplier_id: UUID | None = Query(default=None),
     status: str | None = Query(default=None, pattern="^(UNPAID|PARTIAL|PAID)$"),
+    currency: str | None = Query(default=None, pattern="^(USD|KHR)$"),
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("report.supplier_debt")),
 ):
@@ -391,6 +400,7 @@ async def supplier_debt_report_export(
         q=params.q,
         supplier_id=supplier_id,
         status=status,
+        currency=currency,
         start=params.start_date,
         end=params.end_date,
         page=1,

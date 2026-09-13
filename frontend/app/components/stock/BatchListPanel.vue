@@ -18,11 +18,8 @@ import { multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
  */
 const props = withDefaults(defineProps<{
   product?: AppRecord | null
-  /** Bump to reload after an external stock op. */
-  reloadKey?: number
 }>(), {
   product: null,
-  reloadKey: 0,
 })
 
 const open = defineModel<boolean>('open', { default: false })
@@ -83,8 +80,7 @@ watch(open, (value) => {
   void loadBatches()
 })
 
-watch([statusFilter, () => props.reloadKey], ([, next], [, previous]) => {
-  if (next === previous) return
+watch(statusFilter, () => {
   if (open.value) void loadBatches()
 })
 

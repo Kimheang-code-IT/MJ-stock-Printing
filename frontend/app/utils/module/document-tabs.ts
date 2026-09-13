@@ -228,7 +228,44 @@ function rolesTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): Do
 function recipeTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] | null {
   if (module.documentForm === 'roles') return rolesTabs(module, options)
   if (module.documentForm === 'product') return productTabs(module, options)
+  if (module.documentForm === 'party') return partyTabs(module, options)
   return null
+}
+
+/**
+ * Customer / Supplier form tabs (spec §2.1.8 / §4): exactly **General**
+ * (editable master data) and **History** (read-only party-scoped purchase /
+ * sales history). Create mode keeps only General.
+ */
+function partyTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
+  const general: DocumentTabSchema = {
+    id: 'general',
+    labelKey: 'app.sections.general',
+    sections: fieldsToSections(module.fields, options.readOnlyKeys, options),
+  }
+  if (options.isCreate) return [general]
+
+  const supplier = module.collection === 'suppliers'
+  const kind = supplier ? 'supplier' : 'customer'
+  const historyType: FieldType = supplier ? 'party-purchase-history' : 'party-sales-history'
+
+  return [
+    general,
+    {
+      id: 'history',
+      labelKey: 'app.party.tabs.history',
+      sections: [{
+        id: 'history',
+        fields: [{
+          key: '__record',
+          labelKey: 'app.party.tabs.history',
+          type: historyType,
+          colSpan: 2,
+          meta: { kind },
+        }],
+      }],
+    },
+  ]
 }
 
 /**
@@ -317,14 +354,6 @@ function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): 
             key: 'uomConversions',
             labelKey: 'app.stock.tabPricing',
             type: 'uom-conversions',
-            colSpan: 2,
-          },
-          // Sale-price versions (Product + UOM price — never batch cost).
-          // Exactly one POS-active version; old sales keep their price.
-          {
-            key: 'salePriceHistory',
-            labelKey: 'app.stock.priceHistory',
-            type: 'sale-price-history',
             colSpan: 2,
           },
         ],

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ titleKey: 'app.pages.documentSequences', permission: 'configuration.create' })
+definePageMeta({ titleKey: 'app.pages.documentSequences', permission: 'sequence.manage' })
 </script>
 
 <template>

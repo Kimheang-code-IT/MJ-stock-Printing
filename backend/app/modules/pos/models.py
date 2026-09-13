@@ -3,12 +3,18 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    # Resolves the string relation below for type checkers/linters; SQLAlchemy
+    # resolves it through the declarative class registry at runtime.
+    from app.modules.stock.models import BatchStockBalance
 
 
 class Sale(Base):

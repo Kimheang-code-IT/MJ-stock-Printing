@@ -8,6 +8,7 @@ import { formatDate } from '~/utils/format/format-service'
 import {
   invoiceDeliveryStatusLabelKey,
   normalizeDeliverableInvoice,
+  noteSales,
   type DeliverableInvoice,
 } from '~/utils/delivery/notes'
 import { printDeliveryNoteDocument } from '~/utils/print/delivery-note'
@@ -43,13 +44,19 @@ const props = withDefaults(defineProps<{
   initialLocation?: string
   /** Show Save & Confirm (delivery.confirm permission). */
   canConfirm?: boolean
+  /** Allow saving edits (delivery.update permission); edit mode only. */
+  canUpdate?: boolean
   /** Auto-print the bilingual note after creation. */
   printOnCreate?: boolean
   shopName?: string
+  /** Existing draft note to edit — turns the flow into an edit form. */
+  editNote?: AppRecord | null
 }>(), {
   canConfirm: true,
+  canUpdate: true,
   printOnCreate: true,
   shopName: 'Yoeun Sokhon Pharmacy',
+  editNote: null,
 })
 
 const emit = defineEmits<{
@@ -84,9 +91,67 @@ function setFieldValue(key: string, value: unknown): void {
   model[key] = value
 }
 
-const invoices = ref<DeliverableInvoice[]>([])
+/** Deliverable invoices offered by the picker (create mode + additions). */
+const deliverable = ref<DeliverableInvoice[]>([])
 const loading = ref(false)
 const saving = ref(false)
+
+const isEdit = computed(() => Boolean(props.editNote))
+const canSave = computed(() => !isEdit.value || props.canUpdate)
+
+/** Lines of the note being edited (edit mode) as normalized invoices. */
+const noteInvoices = computed<DeliverableInvoice[]>(() => {
+  const note = props.editNote
+  if (!note) return []
+  const links = noteSales(note)
+  const items = Array.isArray(note.items) ? note.items as AppRecord[] : []
+  return links.map((link) => {
+    const mapped = items
+      .filter(item => String(item.saleId || '') === link.saleId || links.length === 1)
+      .map(item => ({
+        saleItemId: String(item.saleItemId || ''),
+        productId: String(item.productId || ''),
+        product: String(item.product || ''),
+        sku: '',
+        uomSymbol: String(item.uomSymbol || ''),
+        qtyOrdered: Number(item.qtyOrdered ?? 0),
+        qtyRemaining: Number(item.qtyToDeliver ?? 0),
+      }))
+    return {
+      saleId: link.saleId,
+      invoiceNo: link.invoiceNo || '—',
+      customerId: String(note.customerId || ''),
+      customer: String(note.customer || ''),
+      phone: String(note.deliveryPhone || ''),
+      location: String(note.deliveryLocation || note.deliveryAddress || ''),
+      saleStatus: '',
+      date: '',
+      deliveryStatus: 'PENDING',
+      qtyRemaining: mapped.reduce((sum, item) => sum + item.qtyRemaining, 0),
+      items: mapped,
+    }
+  })
+})
+
+/** Edit mode keeps the note's own invoices even when fully reserved. */
+const invoices = computed<DeliverableInvoice[]>(() => {
+  const map = new Map<string, DeliverableInvoice>()
+  for (const invoice of noteInvoices.value) map.set(invoice.saleId, invoice)
+  for (const invoice of deliverable.value) if (!map.has(invoice.saleId)) map.set(invoice.saleId, invoice)
+  return [...map.values()]
+})
+
+/** Edit mode: prefill the header + invoice rows from the existing note. */
+function applyEditNote(note: AppRecord) {
+  model.customerId = String(note.customerId || '')
+  model.deliveryPhone = String(note.deliveryPhone || '')
+  model.deliveryLocation = String(note.deliveryLocation || note.deliveryAddress || '')
+  model.deliveryFee = Number(note.deliveryFee ?? note.deliveryPrice ?? note.delivery_fee ?? 0) || undefined
+  model.note = String(note.note || '')
+  model.driverName = String(note.driverName || '')
+  model.vehicleNo = String(note.vehicleNo || '')
+  model.lines = noteSales(note).map(link => ({ saleId: link.saleId, invoiceDate: '', invoiceStatus: '' }))
+}
 
 onMounted(async () => {
   if (props.initialPhone) model.deliveryPhone = props.initialPhone
@@ -94,9 +159,13 @@ onMounted(async () => {
   loading.value = true
   try {
     const rows = await deliveryCommands.deliverableInvoices(null)
-    invoices.value = rows
+    deliverable.value = rows
       .map(row => normalizeDeliverableInvoice(row as Record<string, unknown>))
       .filter(row => row.items.length > 0)
+    if (props.editNote) {
+      applyEditNote(props.editNote)
+      return
+    }
     const preselect = String(props.autoSelectSaleId || '')
     if (preselect) {
       const invoice = invoiceById.value.get(preselect)
@@ -168,6 +237,8 @@ const tabs = computed<DocumentTabSchema[]>(() => [{
           labelKey: 'app.pos.customer',
           type: 'select',
           required: true,
+          // The customer is fixed once a note exists (backend update keeps it).
+          readOnly: isEdit.value,
           optionsEndpoint: collectionOptionsEndpoint('customers'),
         },
         { key: 'deliveryPhone', labelKey: 'app.delivery.deliveryPhone', type: 'text', required: true },
@@ -268,9 +339,35 @@ const canSubmit = computed(() => Boolean(
 async function save(confirm: boolean) {
   if (!canSubmit.value || saving.value) return
   if (confirm && !props.canConfirm) return
+  if (isEdit.value && !props.canUpdate) return
   saving.value = true
   try {
     const first = selectedInvoices.value[0]
+    // Each selected invoice expands to its deliverable item lines at their
+    // full remaining qty (required saleItemId/productId intact). In edit mode
+    // the note's own lines carry their reserved qty as "remaining".
+    const lines = selectedInvoices.value.flatMap(invoice =>
+      invoice.items.map(item => ({
+        saleId: invoice.saleId,
+        saleItemId: item.saleItemId,
+        productId: item.productId,
+        qtyToDeliver: item.qtyRemaining,
+      })))
+
+    if (isEdit.value && props.editNote) {
+      let record = await deliveryCommands.updateDeliveryNote(String(props.editNote.id), {
+        deliveryPhone: String(model.deliveryPhone || '').trim() || null,
+        deliveryLocation: String(model.deliveryLocation || '').trim() || null,
+        deliveryFee: Number(model.deliveryFee ?? 0) > 0 ? Number(model.deliveryFee) : null,
+        note: String(model.note || '').trim() || null,
+        lines,
+      })
+      if (confirm) record = await deliveryCommands.setDeliveryStatus(String(record.id), 'confirm')
+      toast.add({ title: t('app.delivery.updated'), color: 'success' })
+      emit('created', record)
+      return
+    }
+
     const record = await deliveryCommands.createDeliveryNote({
       customerId: String(model.customerId || '').trim() || first?.customerId || null,
       deliveryPhone: String(model.deliveryPhone || '').trim() || null,
@@ -282,15 +379,7 @@ async function save(confirm: boolean) {
       deliveryFee: Number(model.deliveryFee ?? 0) > 0 ? Number(model.deliveryFee) : null,
       note: String(model.note || '').trim() || null,
       confirm,
-      // Each selected invoice expands to ALL of its deliverable item lines
-      // at their full remaining qty (required saleItemId/productId intact).
-      lines: selectedInvoices.value.flatMap(invoice =>
-        invoice.items.map(item => ({
-          saleId: invoice.saleId,
-          saleItemId: item.saleItemId,
-          productId: item.productId,
-          qtyToDeliver: item.qtyRemaining,
-        }))),
+      lines,
     })
     toast.add({
       title: `${t('app.delivery.created')} · ${record.deliveryNo}`,
@@ -301,7 +390,7 @@ async function save(confirm: boolean) {
   }
   catch (error: unknown) {
     toast.add({
-      title: t('app.delivery.createFailed'),
+      title: isEdit.value ? t('app.delivery.updateFailed') : t('app.delivery.createFailed'),
       description: error instanceof Error ? error.message : String(error),
       color: 'error',
     })
@@ -320,8 +409,8 @@ async function save(confirm: boolean) {
     :set-field-value="setFieldValue"
     :pending="loading"
     :saving="saving"
-    :can-save="canSubmit"
-    :is-create="true"
+    :can-save="canSubmit && canSave"
+    :is-create="!isEdit"
     :show-tabs="false"
     :show-save="false"
     content-wide
@@ -332,17 +421,18 @@ async function save(confirm: boolean) {
   >
     <template #actions>
       <UButton
+        v-if="canSave"
         color="neutral"
         variant="soft"
         icon="i-lucide-save"
         size="sm"
-        :label="t('app.delivery.saveDraft')"
+        :label="isEdit ? t('app.ui.save') : t('app.delivery.saveDraft')"
         :loading="saving"
         :disabled="!canSubmit"
         @click="save(false)"
       />
       <UButton
-        v-if="canConfirm"
+        v-if="canSave && canConfirm"
         color="primary"
         icon="i-lucide-check-circle-2"
         size="sm"

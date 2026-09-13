@@ -39,8 +39,8 @@ export const PAPER_STYLES: Record<PrintPaperSize, {
   /** Typical line-row height on paper (mm) — used for layout estimates. */
   rowMm: number
 }> = {
-  A4: { page: 'A4', marginMm: 8, scalePx: 1, printableMm: 281, rowMm: 6.5 },
-  A5: { page: 'A5', marginMm: 6, scalePx: 0.8, printableMm: 198, rowMm: 5.2 },
+  A4: { page: 'A4', marginMm: 8, scalePx: 1, printableMm: 281, rowMm: 7.5 },
+  A5: { page: 'A5', marginMm: 6, scalePx: 0.8, printableMm: 198, rowMm: 6 },
 }
 
 /** Base (A4-scale) invoice px metrics used by printPageCss. */
@@ -49,7 +49,7 @@ const BASE_PX = {
   title: 20,
   meta: 16,
   padX: 3,
-  padY: 2,
+  padY: 3,
   signsTop: 24,
   signsGap: 24,
 } as const
@@ -133,7 +133,14 @@ th span {
 }
 th.num { text-align: center; }
 td.num { text-align: right; }
+/* Unit / Qty / Price / Discount read centred on the product lines. */
+td.center, th.center { text-align: center; }
 td.product { text-align: left; word-wrap: break-word; overflow-wrap: anywhere; }
+/* Product lines: a touch taller + bigger for easier reading. */
+table.lines th, table.lines td {
+  padding: ${px(BASE_PX.padY + 1)} ${px(BASE_PX.padX)};
+  font-size: ${px(BASE_PX.font + 1)};
+}
 tr.empty td { height: ${style.rowMm}mm; }
 .num { white-space: nowrap; }
 .col-no { width: 5%; }
@@ -143,6 +150,13 @@ tr.empty td { height: ${style.rowMm}mm; }
 .col-price { width: 15%; }
 .col-discount { width: 18%; }
 .col-amount { width: 18%; }
+/* Totals + signatures are one atomic block: never split, never orphaned
+   onto an extra page. Short sales keep them on page 1 (filler rows reserve
+   the space); long sales push the whole block to the last page. */
+.doc-footer {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
 .totals { margin: 0; width: 100%; }
 table.summary {
   width: 100%;

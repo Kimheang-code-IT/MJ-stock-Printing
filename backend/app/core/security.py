@@ -60,20 +60,6 @@ def create_refresh_token(
     return token, expires, jti, family
 
 
-def create_service_token(client_id: str) -> tuple[str, datetime]:
-    now = utcnow()
-    expires = now + timedelta(minutes=settings.service_token_expire_minutes)
-    payload = {
-        "sub": client_id,
-        "type": "service",
-        "scope": "telegram.reports.read",
-        "iat": int(now.timestamp()),
-        "exp": int(expires.timestamp()),
-    }
-    token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
-    return token, expires
-
-
 def create_password_reset_jwt(user_id: int, code_hash: str | None = None) -> tuple[str, datetime]:
     now = utcnow()
     expires = now + timedelta(minutes=10)

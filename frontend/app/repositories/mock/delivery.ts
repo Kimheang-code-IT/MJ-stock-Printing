@@ -2,6 +2,7 @@ import type { AppRecord } from '~/config/admin-seed'
 import type {
   DeliveryCommandRepository,
   DeliveryNoteCreateInput,
+  DeliveryNoteUpdateInput,
 } from '~/repositories/contracts/entities'
 import { createId, mockLatency, nowIso } from '~/mocks/query'
 import { mockInsert, mockUpdate, useMockDb } from '~/mocks/db'
@@ -137,6 +138,94 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
       })
       addAudit('create', deliveryNo, deliveryNo)
       return mockLatency(note)
+    },
+
+    async updateDeliveryNote(id: string, input: DeliveryNoteUpdateInput): Promise<AppRecord> {
+      const db = useMockDb()
+      const note = db.collections.deliveryNotes.find(row => String(row.id) === String(id))
+      if (!note) throw new Error(`Delivery note not found: ${id}`)
+      if (String(note.status) !== 'Draft') {
+        throw new Error('Only draft delivery notes can be edited')
+      }
+
+      const patch: Record<string, unknown> = {}
+
+      if (input.lines) {
+        // Rebuild the line set from the requested invoices (same-customer rule,
+        // remaining qty excluding this note's own reservation).
+        const groups = new Map<string, AppRecord>()
+        for (const line of input.lines) {
+          const saleId = String(line.saleId || '')
+          if (!saleId) throw new Error('Every line needs its parent sale')
+          if (!groups.has(saleId)) {
+            const sale = db.collections.sales.find(row => String(row.id) === saleId)
+            if (!sale) throw new Error(`Sale not found: ${saleId}`)
+            if (String(sale.customerId ?? '') !== String(note.customerId ?? '')) {
+              throw new Error('All invoices on one delivery note must belong to the same customer')
+            }
+            groups.set(saleId, sale)
+          }
+        }
+
+        const lines: AppRecord[] = []
+        const saleLinks: AppRecord[] = []
+        for (const [saleId, sale] of groups) {
+          saleLinks.push({
+            id: createId('dls'),
+            saleId,
+            invoiceNo: String(sale.invoiceNo || sale.saleNo || ''),
+          })
+          const saleItems = Array.isArray(sale.items) ? sale.items as AppRecord[] : []
+          for (const line of input.lines.filter(row => String(row.saleId || '') === saleId)) {
+            const qty = Number(line.qtyToDeliver ?? 0)
+            if (!Number.isFinite(qty) || qty <= 0) continue
+            const item = saleItems.find(row =>
+              String(row.id) === String(line.saleItemId) || String(row.productId) === String(line.productId))
+            if (!item) throw new Error(`Sale line not found: ${line.saleItemId}`)
+            const reserved = saleItemReservedQty(saleId, item.id, db.collections.deliveryNotes, note.id)
+            const remaining = Number(item.quantity || 0) - reserved
+            if (qty > remaining) {
+              throw new Error(`Only ${remaining} of ${Number(item.quantity)} remaining to deliver for ${item.name}`)
+            }
+            const product = db.collections.products.find(row => String(row.id) === String(item.productId))
+            lines.push({
+              id: createId('dline'),
+              saleId,
+              saleItemId: String(item.id),
+              productId: String(item.productId),
+              product: String(item.name),
+              uomSymbol: String(product?.uomSymbol || item.uom || ''),
+              qtyOrdered: Number(item.quantity || 0),
+              qtyToDeliver: qty,
+              qtyDelivered: 0,
+            })
+          }
+        }
+        if (!lines.length) throw new Error('Select at least one line with a quantity to deliver')
+        const joined = saleLinks.map(link => String(link.invoiceNo)).filter(Boolean)
+        Object.assign(patch, {
+          sales: saleLinks,
+          invoiceNos: joined,
+          invoiceNo: joined.join(', '),
+          saleId: saleLinks.length === 1 ? String(saleLinks[0]!.saleId) : '',
+          items: lines,
+          itemCount: lines.length,
+        })
+      }
+
+      for (const field of ['deliveryPhone', 'deliveryLocation', 'note'] as const) {
+        if (input[field] !== undefined) patch[field] = input[field] || null
+      }
+      if (input.driverName !== undefined) patch.driverName = input.driverName || null
+      if (input.vehicleNo !== undefined) patch.vehicleNo = input.vehicleNo || null
+      if (input.deliveryDate !== undefined) patch.deliveryDate = input.deliveryDate || null
+      if (input.deliveryFee !== undefined) patch.deliveryFee = Number(input.deliveryFee) || null
+      patch.updatedAt = nowIso()
+
+      const updated = mockUpdate('deliveryNotes', String(note.id), patch)
+      if (!updated) throw new Error(`Delivery note not found: ${id}`)
+      addAudit('update', String(note.deliveryNo), String(note.deliveryNo))
+      return mockLatency(updated)
     },
 
     async setDeliveryStatus(id: string, status: string, reason?: string | null): Promise<AppRecord> {

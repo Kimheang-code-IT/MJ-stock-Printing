@@ -8,6 +8,12 @@ import { useFinanceRepository } from '~/repositories/index'
 import type { DashboardSummary } from '~/repositories/contracts/entities'
 import { datePickerPopoverContent, parsePickerValue, serializePickerValue } from '~/utils/date-picker'
 
+/** Lazy chart: keeps the ~670 KB ECharts/vue-echarts chunk out of the
+ *  landing route's initial JS — it loads only when the chart first renders. */
+const LazyDashboardChart = defineAsyncComponent(
+  () => import('~/components/dashboard/AppEChart.vue'),
+)
+
 /**
  * Stock & POS dashboard: exactly four KPI cards in one desktop row
  * (lg:grid-cols-4), an income/expense chart (date-filtered, auto-fit
@@ -275,7 +281,7 @@ class="min-w-0 lg:col-span-2"
         <!-- min-h keeps the chart readable on stacked small screens; flex-1 fills
              the remaining viewport height on desktop (autoresize handles resizes). -->
         <div v-else class="min-h-[240px] flex-1">
-          <DashboardAppEChart :option="chartOption" :aria-label="t('app.dashboard.chartTitle')" />
+          <LazyDashboardChart :option="chartOption" :aria-label="t('app.dashboard.chartTitle')" />
         </div>
       </UCard>
 

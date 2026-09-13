@@ -16,6 +16,8 @@ const props = withDefaults(defineProps<{
   cancelLabelKey?: string
   confirmColor?: 'error' | 'primary' | 'neutral' | 'warning'
   loading?: boolean
+  /** Content width preset or Tailwind class (see CommonAppDialog). */
+  width?: string
   ui?: Record<string, unknown>
 }>(), {
   confirmColor: 'error',
@@ -70,6 +72,7 @@ function onConfirm() {
     :description="resolvedDescription"
     icon="i-lucide-message-circle-question"
     size="sm"
+    :width="width"
     :dismissible="false"
     :loading="loading"
     :ui="props.ui"

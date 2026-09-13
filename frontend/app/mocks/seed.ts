@@ -50,14 +50,14 @@ export const seedUsers = [
   {
     id: 'u2', username: 'dara', displayName: 'Dara Kim', email: 'dara@stockpos.local',
     roleId: '2', status: 'Active', lastLogin: daysAgo(1),
-    permissions: ['dashboard.view', 'categories.view', 'brand.view', 'products.view', 'customers.view', 'suppliers.view', 'pos.view', 'reports.view', 'sales.view', 'delivery.view'],
-    effectivePermissions: ['dashboard.view', 'categories.view', 'brand.view', 'products.view', 'customers.view', 'suppliers.view', 'pos.view', 'reports.view', 'sales.view', 'delivery.view'],
+    permissions: ['dashboard.view', 'category.view', 'brand.view', 'stock.view', 'customer.view', 'supplier.view', 'pos.access', 'report.sales', 'delivery.view'],
+    effectivePermissions: ['dashboard.view', 'category.view', 'brand.view', 'stock.view', 'customer.view', 'supplier.view', 'pos.access', 'report.sales', 'delivery.view'],
   },
   {
     id: 'u3', username: 'sreymom', displayName: 'Sreymom Lim', email: 'sreymom@stockpos.local',
     roleId: '3', status: 'Inactive', lastLogin: daysAgo(12),
-    permissions: ['dashboard.view', 'reports.view'],
-    effectivePermissions: ['dashboard.view', 'reports.view'],
+    permissions: ['dashboard.view', 'report.sales'],
+    effectivePermissions: ['dashboard.view', 'report.sales'],
   },
 ]
 
@@ -69,16 +69,16 @@ export const seedRoles = [
   {
     id: '2', name: 'Store Staff', description: 'POS, stock and customer operations.',
     permissions: [
-      'dashboard.view', 'categories.view', 'brand.view', 'products.view', 'products.edit', 'products.create',
-      'customers.view', 'customers.create', 'customers.edit', 'suppliers.view',
-      'pos.view', 'pos.create', 'sales.view', 'sales.create', 'reports.view',
+      'dashboard.view', 'category.view', 'brand.view', 'stock.view', 'product.create', 'product.update',
+      'customer.view', 'customer.create', 'customer.update', 'supplier.view',
+      'pos.access', 'pos.print', 'report.sales',
       'delivery.view', 'delivery.create', 'delivery.update', 'delivery.confirm', 'delivery.deliver', 'delivery.cancel',
     ],
     userCount: 1, permissionCount: 22, status: 'Active',
   },
   {
     id: '3', name: 'Report Viewer', description: 'Read-only dashboard and reports.',
-    permissions: ['dashboard.view', 'reports.view', 'sales.view', 'products.view'],
+    permissions: ['dashboard.view', 'report.sales', 'report.purchase', 'report.customer_debt', 'report.supplier_debt', 'report.finance', 'stock.view'],
     userCount: 1, permissionCount: 4, status: 'Active',
   },
 ]

@@ -1,4 +1,4 @@
-import type { AttachmentMeta, PersonSummary } from '~/types/stock-pos/common'
+import type { PersonSummary } from '~/types/stock-pos/common'
 import type { AppRecord } from '~/config/admin-seed'
 import type { ModuleConfig } from '~/config/modules'
 
@@ -39,29 +39,10 @@ export function useModuleRecordChrome(options: {
     if (id && options.module.value) await navigateTo(`${options.module.value.path}/${id}`)
   }
 
-  const attachments = computed<AttachmentMeta[]>(() => {
-    const rows = options.model.value.attachments
-    return Array.isArray(rows) ? rows as AttachmentMeta[] : []
-  })
-
-  const tags = computed<string[]>(() => {
-    const rows = options.model.value.tags
-    if (Array.isArray(rows)) return rows.map(String)
-    const text = String(options.model.value.tags || '').trim()
-    return text ? text.split(',').map(part => part.trim()).filter(Boolean) : []
-  })
-
   const metaOwner = computed<PersonSummary>(() => ({
     id: 'owner',
     name: String(options.model.value.createdBy || options.model.value.assignedStaff || currentUser.value.name),
   }))
-
-  const metaAssignee = computed<PersonSummary | null>(() => {
-    const raw = options.model.value.assignee
-    if (raw && typeof raw === 'object' && 'name' in (raw as object)) return raw as PersonSummary
-    const name = String(options.model.value.assignedStaff || options.model.value.contact || '')
-    return name ? { id: 'assignee', name } : null
-  })
 
   function patch(partial: Record<string, unknown>) {
     options.model.value = { ...options.model.value, ...partial }
@@ -87,10 +68,7 @@ export function useModuleRecordChrome(options: {
     canNavigateNext,
     navigatePrevious,
     navigateNext,
-    attachments,
-    tags,
     metaOwner,
-    metaAssignee,
     setChromeField,
   }
 }

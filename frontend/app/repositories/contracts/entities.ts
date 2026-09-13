@@ -15,6 +15,8 @@ export interface EntityListQuery {
   productId?: string
   paymentMethod?: string
   type?: string
+  /** Document-currency filter for the debt reports (USD | KHR). */
+  currency?: string
 }
 
 export interface EntityListResult<T extends object = AppRecord> {
@@ -106,6 +108,24 @@ export interface DeliveryNoteCreateInput {
   lines: DeliveryNoteLineInput[]
   /** Save directly as Confirmed instead of Draft. */
   confirm?: boolean
+}
+
+/**
+ * Edit an existing DRAFT delivery note (PATCH /delivery-notes/:id). When
+ * `lines` is provided the whole line set is replaced (remaining-quantity
+ * validation still runs, excluding this note); omitted fields are untouched.
+ * Non-draft notes are rejected by the backend (delivery.update).
+ */
+export interface DeliveryNoteUpdateInput {
+  deliveryPhone?: string | null
+  deliveryLocation?: string | null
+  driverName?: string | null
+  vehicleNo?: string | null
+  deliveryDate?: string | null
+  deliveryFee?: number | null
+  receivedBy?: string | null
+  note?: string | null
+  lines?: DeliveryNoteLineInput[]
 }
 
 export type DeliveryStatusActionInput = 'confirm' | 'out_for_delivery' | 'deliver' | 'cancel'
@@ -246,6 +266,35 @@ export interface StockQueryRepository {
   activateSalePrice(productId: string, priceId: string): Promise<ProductSalePriceRow>
 }
 
+/** One original sale line for POS return mode (GET /pos/sales/{id}). */
+export interface SaleDetailItem {
+  /** Sale-item id — the `lineId` the Sale Return API expects. */
+  id: string
+  productId: string
+  name: string
+  uom: string
+  uomId?: string
+  factorToBase: number
+  /** Sold quantity in the line UOM. */
+  quantity: number
+  returnedQuantity: number
+  unitPrice: number
+  discountPercent: number
+  discountAmount: number
+  lineTotal: number
+}
+
+/** Original sale loaded into POS return mode (returnable lines + doc context). */
+export interface SaleDetail {
+  id: string
+  invoiceNo: string
+  customerId: string | null
+  customerName: string
+  currency: 'USD' | 'KHR'
+  exchangeRate: number
+  items: SaleDetailItem[]
+}
+
 /** Printable receipt payload for a completed sale (no PDF/MinIO required). */
 export interface SaleReceipt {
   saleId: string
@@ -304,6 +353,13 @@ export interface PurchaseLineInput {
 export interface PosCommandRepository {
   completeSale(input: PosCompleteSaleInput): Promise<AppRecord>
   /**
+   * Edit a completed sale (PATCH /pos/sales/{id}): the backend reverses the
+   * original stock (append-only compensating movements) and re-applies the new
+   * lines/prices/discounts; customer + recorded payments stay, the customer
+   * debt is recalculated.
+   */
+  updateSale(input: PosCompleteSaleInput & { saleId: string }): Promise<AppRecord>
+  /**
    * Complete purchase via Stock In: every product line is stored on ONE
    * stock-in document (items[], supplier, paid amount → supplier debt for the
    * unpaid balance, payment row, stock movements, audit) in one transaction.
@@ -324,6 +380,22 @@ export interface PosCommandRepository {
     /** Exchange rate applied (KHR per 1 USD) — 1 for USD documents. */
     exchangeRate?: number
     note?: string | null
+  }): Promise<AppRecord>
+  /**
+   * Edit a confirmed purchase/Stock In (PATCH /stock/in/{id}): the backend
+   * reverses the original receipt and re-applies the new lines; supplier +
+   * payments stay, the supplier debt is recalculated.
+   */
+  updatePurchase(input: {
+    stockInId: string
+    lines: PurchaseLineInput[]
+    discountAmount?: number
+    taxAmount?: number
+    currency?: 'USD' | 'KHR'
+    exchangeRate?: number
+    note?: string | null
+    referenceNo?: string | null
+    transactionDate?: string | null
   }): Promise<AppRecord>
   createStockOperation(input: {
     type: 'stock_in' | 'adjustment' | 'damage' | 'expiry'
@@ -368,6 +440,8 @@ export interface PosCommandRepository {
   }): Promise<AppRecord>
   /** Printable receipt payload derived from the stored sale (mock: in-memory). */
   getSaleReceipt(saleId: string): Promise<SaleReceipt>
+  /** Original sale (lines + currency + customer) loaded into POS return mode. */
+  getSale(saleId: string): Promise<SaleDetail>
   /** Customer return against a confirmed sale (POST /pos/sales/{id}/return). */
   returnSale(input: {
     saleId: string
@@ -390,6 +464,8 @@ export interface PosCommandRepository {
  */
 export interface DeliveryCommandRepository {
   createDeliveryNote(input: DeliveryNoteCreateInput): Promise<AppRecord>
+  /** Edit a DRAFT note (delivery.update) — header fields and/or line set. */
+  updateDeliveryNote(id: string, input: DeliveryNoteUpdateInput): Promise<AppRecord>
   /** Update Status (spec §5.13): set a legal next status; cancel needs a reason. */
   setDeliveryStatus(id: string, status: string, reason?: string | null): Promise<AppRecord>
   /** Confirmed sales with remaining deliverable qty (create-page invoice picker). */

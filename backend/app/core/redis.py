@@ -1,6 +1,4 @@
-import json
 import logging
-from typing import Any
 
 from redis import asyncio as aioredis
 
@@ -39,26 +37,6 @@ class CacheClient:
         except Exception:
             return None
 
-    async def get_json(self, key: str) -> Any | None:
-        client = self._get_client()
-        if client is None:
-            return None
-        try:
-            raw = await client.get(key)
-            return json.loads(raw) if raw else None
-        except Exception as exc:
-            logger.warning("redis get failed for %s: %s", key, exc)
-            return None
-
-    async def set_json(self, key: str, value: Any, ttl: int | None = None) -> None:
-        client = self._get_client()
-        if client is None:
-            return
-        try:
-            await client.set(key, json.dumps(value, default=str), ex=ttl)
-        except Exception as exc:
-            logger.warning("redis set failed for %s: %s", key, exc)
-
     async def delete_prefix(self, prefix: str) -> None:
         client = self._get_client()
         if client is None:
@@ -73,15 +51,6 @@ class CacheClient:
                     break
         except Exception as exc:
             logger.warning("redis delete_prefix failed for %s: %s", prefix, exc)
-
-    async def delete_keys(self, *keys: str) -> None:
-        client = self._get_client()
-        if client is None or not keys:
-            return
-        try:
-            await client.delete(*keys)
-        except Exception as exc:
-            logger.warning("redis delete failed: %s", exc)
 
     async def ping(self) -> bool:
         client = self._get_client()

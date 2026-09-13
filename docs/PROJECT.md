@@ -9,9 +9,9 @@ Companion docs (the complete, current set): [FRONTEND.md](FRONTEND.md) · [BACKE
 | Group | Pages |
 |---|---|
 | — | Dashboard (`/`) |
-| — | Stock (`/stock` + `/stock/movements`), POS (`/pos`), Delivery Notes (`/delivery-notes`) |
+| — | POS (`/pos`), Delivery (`/delivery-notes`, sidebar label "Delivery"), Stock (`/stock` + `/stock/movements`) — listed in this sidebar order |
 | Setup | Categories, Units of Measure (UOM), Brands, Suppliers, Customers (`/setup/*`) |
-| Reports | Sales, Purchase, Customer Returns, Supplier Returns, Customer Debt, Supplier Debt, Finance (`/reports/*`) |
+| Reports | Sales, Purchase, Customer Debt, Supplier Debt, Finance (`/reports/*`) |
 | Administration | Users, Roles & Permissions, Document Sequences, Audit Logs, Settings (`/administration/*`) |
 
 There are deliberately **no** separate pages for sales, purchases, returns, debts, stock in, adjustment, damage, expiry, or expenses — those are actions, dialogs, tabs, and report sections. Auth pages live outside the sidebar: Initial Setup (`/auth/setup`, once), Login, Forgot Password (with verify-code step), Reset Password.
@@ -33,7 +33,7 @@ Modular monolith, two deployable apps plus infrastructure:
 - **Backend**: Python 3.12+, FastAPI, SQLAlchemy 2 (async), Pydantic v2, Alembic. Thin routers; business rules in `app/modules/<m>/service.py`; queries in `repository.py`. See [BACKEND.md](BACKEND.md).
 - **Frontend**: Nuxt 4 / Vue 3 strict TypeScript, Nuxt UI, ECharts (dashboard + finance), Pinia for genuinely shared state only. Most pages are configuration-driven (`app/config/*-modules.ts`). See [FRONTEND.md](FRONTEND.md).
 - **Data**: PostgreSQL `NUMERIC` + Python `Decimal` everywhere (money 18,2 · qty 18,4 · factors 18,6). Timestamps UTC, rendered with the configured timezone. Every schema change is an Alembic migration. See [DATABASE.md](DATABASE.md).
-- **Core invariants**: one canonical stock-mutation service (`apply_stock_movement`) with row locks and immutable movement ledger; immutable payments/debt settlement with overpayment rejection; row-locked collision-free document sequences; server-side permission checks on every protected endpoint; audit rows committed inside the business transaction. See [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md).
+- **Core invariants**: one canonical stock-mutation service (`apply_stock_movement`) with row locks and immutable movement ledger; immutable payments/debt settlement with overpayment rejection; row-locked collision-free document sequences; server-side permission checks on every protected endpoint; audit rows committed inside the business transaction. Editing a completed sale/purchase does **not** break these: it appends compensating movements and re-applies the document, then recalculates the linked debt (see [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md) §16). See [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md).
 
 ## 3. Module map
 
@@ -42,11 +42,11 @@ Modular monolith, two deployable apps plus infrastructure:
 | Auth | `auth` | One-time setup, login, JWT rotation, logout revocation, Telegram password reset, profile/avatar, Telegram link codes |
 | Administration | `administration` | Users, roles & permissions, permission catalog, document sequences, audit log read API, settings |
 | Master data | `categories`, `uoms`, `brands`, `suppliers`, `customers` | Setup CRUD + options; party debt-pay endpoints |
-| Stock | `stock` | Products, balances, canonical mutation service, Stock In/Adjust/Damage/Expire, purchase returns, sale-price versioning, UOM conversions, batch/FEFO ledger, movements |
-| POS | `pos` | Search/barcode, atomic sale completion, sale returns, receipt payload, HTML printing |
+| Stock | `stock` | Products, balances, canonical mutation service, Stock In/Adjust/Damage/Expire, **purchase edit (reverse + reapply)**, purchase returns, sale-price versioning, UOM conversions, batch/FEFO ledger, movements |
+| POS | `pos` | Search/barcode, atomic sale completion, **sale edit (reverse + reapply)**, sale returns, receipt payload, HTML printing |
 | Delivery Notes | `delivery_notes` | Delivery tracking of sold items (never re-moves stock), status machine, per-sale deliverable items |
 | Dashboard | `dashboard` | KPIs, chart series, alerts, recent activity |
-| Reports | `reports` | Sales/Purchase/Returns/Debt/Finance reports + expenses + CSV exports |
+| Reports | `reports` | Sales/Purchase/Debt/Finance reports + sale/purchase-return history endpoints + expenses + CSV exports |
 | Images | `image` | Local-disk upload + traversal-safe serving |
 | Telegram | `telegram` + `shared/telegram` | Expiry alerts, reset-code delivery, payment notifications, view-only inquiry bot |
 
@@ -80,7 +80,7 @@ Production boot refuses: placeholder/short `JWT_SECRET_KEY`, placeholder Telegra
 
 ## 6. Documented deviations from the original written spec
 
-1. Two extra read-only report pages exist: `/reports/customer-returns`, `/reports/supplier-returns`; the Purchase Report Create action routes to a full-page purchase flow `/reports/purchases/new` (perm `stock.in`).
+1. Editing reuses the original transaction screens: Sales Report / customer History rows open the POS in **edit mode** (`/pos?editSaleId=<id>` → `PATCH /pos/sales/{id}`), and Purchase Report / supplier History rows open the Purchase form in **edit mode** (`/reports/purchases/new?editPurchaseId=<id>` → `PATCH /stock/in/{id}`). The Purchase Report Create action routes to the same full-page flow `/reports/purchases/new` (perm `stock.in`). The previous **Return** row actions were removed; the raise-return endpoints (`POST /pos/sales/{id}/return`, `POST /stock/in/{id}/return`) still exist but are not linked from the UI, and there are **no** `/reports/customer-returns` / `/reports/supplier-returns` pages (the `GET /reports/sale-returns` / `GET /reports/purchase-returns` history endpoints remain server-side only).
 2. Telegram payment text notifications are implemented (`payment_invoice_notify_enabled`, sale/purchase/daily-summary toggles in Settings), while the original spec said to never send payment text.
 3. Known frontend/backend permission-key drift is documented in [BACKEND.md](BACKEND.md) §8 (only `ALL_PAGES` accounts get full UI navigation today; backend enforcement is unaffected).
 4. Legacy alias endpoints are kept for compatibility (`/reports/purchases` ≙ `/reports/purchase`; `/auth/forgot-password/verify|reset` ≙ `/auth/verify-reset-code` | `/auth/reset-password`).

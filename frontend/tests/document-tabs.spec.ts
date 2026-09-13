@@ -145,3 +145,61 @@ describe('document lifecycle status', () => {
     }
   })
 })
+
+describe('customer / supplier party document tabs', () => {
+  const customer = stockModules.find(item => item.collection === 'customers')!
+  const supplier = stockModules.find(item => item.collection === 'suppliers')!
+
+  it('registers the party document form on both master modules', () => {
+    expect(customer.documentForm).toBe('party')
+    expect(supplier.documentForm).toBe('party')
+  })
+
+  it('gives customers General | History', () => {
+    const tabs = moduleDocumentTabs(customer)
+    expect(tabs.map(tab => tab.id)).toEqual(['general', 'history'])
+    expect(tabs.map(tab => tab.labelKey)).toEqual([
+      'app.sections.general',
+      'app.party.tabs.history',
+    ])
+  })
+
+  it('gives suppliers General | History', () => {
+    const tabs = moduleDocumentTabs(supplier)
+    expect(tabs.map(tab => tab.id)).toEqual(['general', 'history'])
+    expect(tabs.map(tab => tab.labelKey)).toEqual([
+      'app.sections.general',
+      'app.party.tabs.history',
+    ])
+  })
+
+  it('binds the history tab to its customer/supplier panel type', () => {
+    const customerFields = moduleDocumentTabs(customer).flatMap(tab =>
+      tab.sections.flatMap(section => section.fields))
+    const supplierFields = moduleDocumentTabs(supplier).flatMap(tab =>
+      tab.sections.flatMap(section => section.fields))
+
+    expect(customerFields.find(f => f.type === 'party-sales-history')?.meta?.kind).toBe('customer')
+    expect(customerFields.some(f => f.type === 'party-purchase-history')).toBe(false)
+
+    expect(supplierFields.find(f => f.type === 'party-purchase-history')?.meta?.kind).toBe('supplier')
+    expect(supplierFields.some(f => f.type === 'party-sales-history')).toBe(false)
+  })
+
+  it('keeps only the General tab while creating a party', () => {
+    expect(moduleDocumentTabs(customer, { isCreate: true }).map(tab => tab.id)).toEqual(['general'])
+    expect(moduleDocumentTabs(supplier, { isCreate: true }).map(tab => tab.id)).toEqual(['general'])
+  })
+})
+
+describe('debt report currency filter (spec 2.1.10)', () => {
+  it('exposes a USD | KHR currency filter on both debt reports', () => {
+    for (const collection of ['customerDebts', 'supplierDebts'] as const) {
+      const module = stockModules.find(item => item.collection === collection)!
+      const currencyFilter = module.filters?.find(filter => filter.key === 'currency')
+      expect(currencyFilter).toBeTruthy()
+      expect(currencyFilter?.type).toBe('select')
+      expect(currencyFilter?.options).toEqual(['USD', 'KHR'])
+    }
+  })
+})

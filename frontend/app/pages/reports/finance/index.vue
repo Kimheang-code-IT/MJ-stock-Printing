@@ -11,7 +11,7 @@ import { PAYMENT_METHODS } from '~/config/pos-options'
 import { useFinanceRepository } from '~/repositories/index'
 import type { FinanceEntry, FinanceEntryType } from '~/repositories/contracts/entities'
 
-definePageMeta({ titleKey: 'app.pages.financeReport', permission: 'reports.view' })
+definePageMeta({ titleKey: 'app.pages.financeReport', permission: 'report.finance' })
 
 /**
  * Finance Report (spec: Finance Report section): an operational income &

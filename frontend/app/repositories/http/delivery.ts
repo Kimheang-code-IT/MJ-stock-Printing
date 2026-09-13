@@ -2,6 +2,7 @@ import type { AppRecord } from '~/config/admin-seed'
 import type {
   DeliveryCommandRepository,
   DeliveryNoteCreateInput,
+  DeliveryNoteUpdateInput,
 } from '~/repositories/contracts/entities'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 import { deliveryApiStatus } from '~/utils/delivery/notes'
@@ -21,6 +22,13 @@ export function createHttpDeliveryRepository(): DeliveryCommandRepository {
     async createDeliveryNote(input: DeliveryNoteCreateInput): Promise<AppRecord> {
       return unwrap<Record<string, unknown>>(await api.post<unknown>(
         ApiEndpoints.DELIVERY_NOTES,
+        input as unknown as Record<string, unknown>,
+      )) as AppRecord
+    },
+
+    async updateDeliveryNote(id: string, input: DeliveryNoteUpdateInput): Promise<AppRecord> {
+      return unwrap<Record<string, unknown>>(await api.patch<unknown>(
+        ApiEndpoints.DELIVERY_NOTE(id),
         input as unknown as Record<string, unknown>,
       )) as AppRecord
     },

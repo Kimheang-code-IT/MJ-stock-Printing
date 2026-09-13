@@ -17,12 +17,6 @@ class DeliveryNoteRepository:
     async def get(self, delivery_note_id: uuid.UUID) -> DeliveryNote | None:
         return await self.session.get(DeliveryNote, delivery_note_id)
 
-    async def get_by_no(self, delivery_no: str) -> DeliveryNote | None:
-        result = await self.session.execute(
-            select(DeliveryNote).where(DeliveryNote.delivery_no == delivery_no)
-        )
-        return result.scalar_one_or_none()
-
     @staticmethod
     def _sale_exists(sale_id: uuid.UUID) -> ColumnElement[bool]:
         return exists(
@@ -117,27 +111,6 @@ class DeliveryNoteRepository:
         )
         rows = await self.session.execute(stmt)
         return {row[0]: Decimal(row[1]) for row in rows.all()}
-
-    async def remaining_qty_by_sale(
-        self, sale_ids: list[uuid.UUID]
-    ) -> dict[uuid.UUID, Decimal]:
-        """Total remaining-to-deliver qty per sale (non-cancelled notes)."""
-        if not sale_ids:
-            return {}
-        allocated = (
-            select(
-                DeliveryNoteItem.sale_id.label("sid"),
-                func.coalesce(func.sum(DeliveryNoteItem.qty_to_deliver), 0).label("allocated"),
-            )
-            .join(DeliveryNote, DeliveryNote.id == DeliveryNoteItem.delivery_note_id)
-            .where(
-                DeliveryNoteItem.sale_id.in_(sale_ids),
-                DeliveryNote.status != DeliveryNote.STATUS_CANCELLED,
-            )
-            .group_by(DeliveryNoteItem.sale_id)
-        )
-        rows = (await self.session.execute(allocated)).all()
-        return {row.sid: Decimal(row.allocated) for row in rows}
 
     def add(self, note: DeliveryNote) -> None:
         self.session.add(note)

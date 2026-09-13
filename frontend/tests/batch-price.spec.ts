@@ -17,11 +17,12 @@ describe('product document sections (batches + pricing + movements)', () => {
   const productModule = stockModules.find(item => item.collection === 'products')!
   const tabs = moduleDocumentTabs(productModule)
 
-  it('keeps the UOM & Sale Prices pricing section with version history', () => {
+  it('keeps the UOM & Sale Prices pricing section (version rail embedded)', () => {
     const pricing = tabs.find(tab => tab.id === 'pricing')!
     const types = pricing.sections.flatMap(s => s.fields.map(f => f.type))
     expect(types).toContain('uom-conversions')
-    expect(types).toContain('sale-price-history')
+    // Sale-price versions render as a rail inside the pricing field now.
+    expect(types).not.toContain('sale-price-history')
   })
 
   it('owns Track Expiry, Expire Date and the Batches panel on the General tab', () => {

@@ -243,6 +243,8 @@ class ReportsService:
                 StockTransactionItem.unit_cost,
                 StockTransactionItem.line_total,
                 StockTransaction.status,
+                StockTransaction.currency,
+                StockTransaction.exchange_rate,
             )
             .select_from(StockTransactionItem)
             .join(StockTransaction, StockTransaction.id == StockTransactionItem.stock_transaction_id)
@@ -329,6 +331,8 @@ class ReportsService:
                     "paid_amount": Decimal(row.line_total) - remaining if debt else Decimal(row.line_total),
                     "remaining_debt": remaining,
                     "status": debt.status if debt else "PAID",
+                    "currency": row.currency,
+                    "exchange_rate": row.exchange_rate,
                 }
             )
         return data, int(total)
@@ -341,6 +345,7 @@ class ReportsService:
         q: str | None,
         customer_id,
         status: str | None,
+        currency: str | None = None,
         start: date | None,
         end: date | None,
         page: int,
@@ -349,7 +354,8 @@ class ReportsService:
         """Invoice-level customer debt rows (spec 2.1.10 Customer Debt Report).
 
         The Date column/filter is the invoice (sale) date; every UNPAID,
-        PARTIAL and PAID debt document is one row.
+        PARTIAL and PAID debt document is one row. `currency` is an optional
+        document-currency filter — USD and KHR rows are never mixed.
         """
         start_at, end_at = _range(start, end)
 
@@ -366,6 +372,8 @@ class ReportsService:
                 target = target.where(CustomerDebt.customer_id == customer_id)
             if status:
                 target = target.where(CustomerDebt.status == status)
+            if currency:
+                target = target.where(CustomerDebt.currency == currency)
             return target
 
         base = (
@@ -413,6 +421,7 @@ class ReportsService:
         q: str | None,
         supplier_id,
         status: str | None,
+        currency: str | None = None,
         start: date | None,
         end: date | None,
         page: int,
@@ -421,7 +430,8 @@ class ReportsService:
         """Document-level supplier debt rows (spec 2.1.10 Supplier Debt Report).
 
         The Date column/filter is the stock-in / purchase date; every UNPAID,
-        PARTIAL and PAID debt document is one row.
+        PARTIAL and PAID debt document is one row. `currency` is an optional
+        document-currency filter — USD and KHR rows are never mixed.
         """
         start_at, end_at = _range(start, end)
 
@@ -441,6 +451,8 @@ class ReportsService:
                 target = target.where(SupplierDebt.supplier_id == supplier_id)
             if status:
                 target = target.where(SupplierDebt.status == status)
+            if currency:
+                target = target.where(SupplierDebt.currency == currency)
             return target
 
         base = (

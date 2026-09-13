@@ -445,17 +445,6 @@ async def patch_sale_price(
     return _serialize_version(row, selling_price=product.selling_price)
 
 
-async def product_active_price(session: AsyncSession, product_id) -> Decimal:
-    """The POS-active sale price for a product (selling_price mirror)."""
-    result = await session.execute(
-        select(ProductSalePrice.sale_price)
-        .where(ProductSalePrice.product_id == product_id, ProductSalePrice.is_active.is_(True))
-        .limit(1)
-    )
-    value = result.scalar_one_or_none()
-    return Decimal(value) if value is not None else Decimal("0.00")
-
-
 async def active_version_uom_prices(
     session: AsyncSession,
     product_id,

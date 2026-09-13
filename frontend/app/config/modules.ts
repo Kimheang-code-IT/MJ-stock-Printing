@@ -21,6 +21,9 @@ export type ModuleField = {
   options?: readonly ModuleSelectOption[] | ModuleSelectOption[]
   optionsCollection?: string
   optionsEndpoint?: string
+  /** Filter only: use the configured `options` list and never merge values
+   *  discovered in the loaded rows. */
+  optionsOnly?: boolean
   required?: boolean
   colSpan?: 1 | 2
   computed?: boolean
@@ -88,7 +91,18 @@ export type ModuleAction = {
   color?: 'primary' | 'neutral' | 'success' | 'warning' | 'error'
 }
 
-export type ModuleDocumentForm = 'roles' | 'product'
+export type ModuleDocumentForm = 'roles' | 'product' | 'party'
+
+/** Explicit backend permission codes for a module's mutation actions. The
+ *  backend catalog does not follow a single `{module}.{action}` convention
+ *  (e.g. `stock.view` vs `product.update`, `user.manage`), so modules declare
+ *  the exact codes instead of deriving them. */
+export type ModuleActionPermissions = {
+  create?: string
+  edit?: string
+  delete?: string
+  operate?: string
+}
 
 export type ModuleConfig = {
   path: string
@@ -120,6 +134,8 @@ export type ModuleConfig = {
   /** Permission for the Create action when it differs from `{prefix}.create`.
    * Also lets a readOnly report module route Create to a full-page /new flow. */
   createPermission?: string
+  /** Exact backend codes for create/edit/delete/operate on this module. */
+  actionPermissions?: ModuleActionPermissions
   titleKey?: string
   kind?: 'standard' | 'reports'
 }

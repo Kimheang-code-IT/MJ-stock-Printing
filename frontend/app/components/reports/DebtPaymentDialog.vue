@@ -38,7 +38,9 @@ const busy = ref(false)
 /** Debt payments settle cash/bank — not new credit. */
 const methodOptions = PAYMENT_METHODS.filter(method => method !== 'Credit')
 
-const currency = computed(() => props.currency || preferences.currency || 'USD')
+/** The debt's own currency (from its source document) always wins — historical
+ *  debts/payments must never be displayed or settled in the user's preference. */
+const currency = computed(() => String(props.debt?.currency || props.currency || preferences.currency || 'USD'))
 const title = computed(() => props.kind === 'customer'
   ? t('app.reports.payCustomerDebtTitle')
   : t('app.reports.paySupplierDebtTitle'))
@@ -50,6 +52,14 @@ const party = computed(() => {
   if (!props.debt) return ''
   return String(props.debt.customer || props.debt.supplier || '')
 })
+const original = computed(() => {
+  const debt = props.debt
+  if (!debt) return 0
+  const explicit = debt.invoiceTotal ?? debt.totalAmount
+  if (explicit != null) return Number(explicit)
+  return Number(debt.paidAmount || 0) + Number(debt.remainingAmount || 0)
+})
+const paid = computed(() => Number(props.debt?.paidAmount || 0))
 const remaining = computed(() => Number(props.debt?.remainingAmount || 0))
 const canSubmit = computed(() => {
   const pay = Number(amount.value || 0)
@@ -117,6 +127,14 @@ async function onSubmit() {
         <p>
           <span class="text-muted">{{ kind === 'customer' ? t('app.fields.invoiceNo') : t('app.reports.purchaseNo') }}:</span>
           <span class="ms-1 font-medium">{{ docNo || '—' }}</span>
+        </p>
+        <p>
+          <span class="text-muted">{{ t('app.reports.originalAmount') }}:</span>
+          <span class="ms-1 font-medium tabular-nums">{{ money(original) }} ({{ currency }})</span>
+        </p>
+        <p>
+          <span class="text-muted">{{ t('app.reports.paidAmount') }}:</span>
+          <span class="ms-1 font-medium tabular-nums">{{ money(paid) }}</span>
         </p>
         <p>
           <span class="text-muted">{{ t('app.reports.remainingAmount') }}:</span>

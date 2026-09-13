@@ -23,6 +23,7 @@ from app.modules.stock.schemas import (
     StockDamageRequest,
     StockExpireRequest,
     StockInRequest,
+    StockInUpdateRequest,
 )
 from app.modules.stock.service import (
     ProductService,
@@ -333,6 +334,19 @@ async def stock_in(
 ) -> dict:
     service = StockOperationService(db)
     result = await service.stock_in(payload, actor=actor)
+    return envelope(result)
+
+
+@router.patch("/in/{stock_transaction_id}")
+async def update_stock_in(
+    stock_transaction_id: UUID,
+    payload: StockInUpdateRequest,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("stock.in")),
+) -> dict:
+    """Edit a confirmed Stock In (reverse the old receipt, apply the new lines)."""
+    service = StockOperationService(db)
+    result = await service.update_purchase(stock_transaction_id, payload, actor=actor)
     return envelope(result)
 
 

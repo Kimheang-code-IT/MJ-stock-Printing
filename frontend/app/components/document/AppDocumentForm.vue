@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DocumentTabSchema } from '~/types/stock-pos/common'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
-import { documentFormItemKey, documentFormSectionItems } from '~/utils/module/form-layout'
+import { documentFormItemKey, documentFormSectionItems, isFullWidthField } from '~/utils/module/form-layout'
 
 const props = withDefaults(defineProps<{
   tabs: DocumentTabSchema[]
@@ -16,22 +16,10 @@ const props = withDefaults(defineProps<{
   wide: false,
 })
 
-const { t, te } = useI18n()
-
 provide(moduleDocumentRecordKey, {
   get: (key: string) => props.fieldValue(key),
   set: (key: string, value: unknown) => { props.setFieldValue(key, value) },
 })
-
-function sectionHeading(section: DocumentTabSchema['sections'][0]) {
-  if (section.titleKey && te(section.titleKey)) return t(section.titleKey)
-  return section.title || ''
-}
-
-function sectionDescription(section: DocumentTabSchema['sections'][0]) {
-  if (section.descriptionKey && te(section.descriptionKey)) return t(section.descriptionKey)
-  return section.description || ''
-}
 
 const wideForm = computed(() =>
   props.wide
@@ -42,24 +30,14 @@ const wideForm = computed(() =>
         || field.type === 'line-table'
         || field.type === 'uom-conversions'
         || field.type === 'related-records'
-        || field.type === 'batches',
+        || field.type === 'batches'
+        || field.type === 'product-movements'
+        || field.type === 'party-sales-history'
+        || field.type === 'party-purchase-history',
       ),
     ),
   ),
 )
-
-function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) {
-  return field.colSpan === 2
-    || field.type === 'textarea'
-    || field.type === 'permission-matrix'
-    || field.type === 'notification-rules'
-    || field.type === 'connection-status'
-    || field.type === 'alert'
-    || field.type === 'line-table'
-    || field.type === 'uom-conversions'
-    || field.type === 'related-records'
-    || field.type === 'batches'
-}
 
 const sectionItems = (fields: DocumentTabSchema['sections'][0]['fields']) =>
   documentFormSectionItems(fields)
@@ -79,15 +57,6 @@ const itemKey = (item: ReturnType<typeof documentFormSectionItems>[number], inde
             class="space-y-4"
             :class="sectionIndex > 0 ? 'border-t border-default pt-6' : ''"
           >
-            <div v-if="sectionHeading(section) || sectionDescription(section)">
-              <h3 v-if="sectionHeading(section)" class="text-sm font-medium text-highlighted">
-                {{ sectionHeading(section) }}
-              </h3>
-              <p v-if="sectionDescription(section)" class="mt-1 text-xs text-muted">
-                {{ sectionDescription(section) }}
-              </p>
-            </div>
-
             <div class="grid min-w-0 grid-cols-1 gap-x-5 gap-y-5 sm:grid-cols-2">
               <template
                 v-for="(item, itemIndex) in sectionItems(section.fields)"

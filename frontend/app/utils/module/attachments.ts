@@ -75,26 +75,6 @@ export function fileTableRowCreated(row: Record<string, unknown>) {
   return String(row.uploadedAt || row.uploadDate || row.createdAt || '').trim()
 }
 
-/** Job Files tab uses the same attachment rows as quotations. Fall back to related documents. */
-export function jobFileAttachments(
-  job: Record<string, unknown>,
-  documents: Array<Record<string, unknown>> = [],
-) {
-  const stored = Array.isArray(job.attachments) ? job.attachments : []
-  if (stored.length) return stored as Array<Record<string, unknown>>
-  return documents.map((row) => {
-    const fileName = fileTableRowName(row)
-    return {
-      fileName,
-      file: fileName,
-      uploadedBy: fileTableRowBy(row),
-      uploadedAt: fileTableRowCreated(row),
-      mimeType: mimeFromFileName(fileName, String(row.mimeType || '')),
-      fileSize: row.fileSize,
-    }
-  })
-}
-
 function canCreateObjectUrl() {
   return typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
 }

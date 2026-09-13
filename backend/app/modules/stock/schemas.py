@@ -4,10 +4,8 @@ from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
-
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class ProductCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -49,7 +47,6 @@ class ProductCreate(BaseModel):
     def strip_text(cls, value):
         return value.strip() if isinstance(value, str) else value
 
-
 class ProductUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -84,44 +81,6 @@ class ProductUpdate(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
-class ProductOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    sku: str | None
-    barcode: str
-    name: str
-    category_id: UUID | None
-    category_name: str | None = None
-    uom_id: UUID
-    uom_code: str | None = None
-    uom_name: str | None = None
-    uom_symbol: str | None = None
-    brand_id: UUID | None = None
-    brand_name: str | None = None
-    cost_price: Decimal
-    selling_price: Decimal
-    minimum_stock: Decimal
-    expiry_tracking: bool
-    track_batch: bool = False
-    fifo: bool = False
-    image_object_key: str | None
-    image_url: str | None = None
-    status: str
-    note: str | None
-    quantity: Decimal = Decimal("0")
-    average_cost: Decimal = Decimal("0.00")
-    # Derived from immutable stock_movements (never persisted on the product).
-    stock_in_qty: Decimal = Decimal("0")
-    stock_out_qty: Decimal = Decimal("0")
-    damage_qty: Decimal = Decimal("0")
-    # Soonest lot expiry_date from stock movements; null when none / not tracked.
-    expiry_date: date | None = None
-    created_at: datetime
-    # Pricing rows (snake_case + the camelCase key the UI reads).
-    uom_conversions: list[dict] = Field(default_factory=list)
-    uomConversions: list[dict] = Field(default_factory=list)
-
 # ---------------------------------------------------------------- stock operations
 
 
@@ -145,7 +104,6 @@ class StockInItem(BaseModel):
     factor_to_base: Decimal | None = Field(
         default=None, gt=0, validation_alias=AliasChoices("factor_to_base", "factorToBase")
     )
-
 
 class StockInRequest(BaseModel):
     """POST /stock/in — Stock In = purchase (spec 2.1.x).
@@ -187,6 +145,36 @@ class StockInRequest(BaseModel):
     )
     items: list[StockInItem] = Field(min_length=1, validation_alias=AliasChoices("items", "lines"))
 
+class StockInUpdateRequest(BaseModel):
+    """PATCH /stock/in/{id} — edit a confirmed Stock In (no purchase returns).
+
+    The original received quantities are reversed (batch + compensating
+    PURCHASE_RETURN movement) before the new lines are received. The supplier
+    and immutable payments stay; the outstanding supplier debt is recalculated.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    transaction_date: datetime | None = None
+    reference_no: str | None = Field(default=None, max_length=100)
+    note: str | None = None
+    discount_amount: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        validation_alias=AliasChoices("discount_amount", "discountAmount"),
+    )
+    tax_amount: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        validation_alias=AliasChoices("tax_amount", "taxAmount"),
+    )
+    currency: str = Field(default="USD", pattern="^(USD|KHR)$")
+    exchange_rate: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        validation_alias=AliasChoices("exchange_rate", "exchangeRate"),
+    )
+    items: list[StockInItem] = Field(min_length=1, validation_alias=AliasChoices("items", "lines"))
 
 class AdjustmentItem(BaseModel):
     product_id: UUID
@@ -195,13 +183,11 @@ class AdjustmentItem(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
     note: str | None = None
 
-
 class StockAdjustmentRequest(BaseModel):
     transaction_date: datetime | None = None
     reference_no: str | None = Field(default=None, max_length=100)
     note: str | None = None
     items: list[AdjustmentItem] = Field(min_length=1)
-
 
 class DamageItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -225,13 +211,11 @@ class DamageItem(BaseModel):
         default=None, gt=0, validation_alias=AliasChoices("factor_to_base", "factorToBase")
     )
 
-
 class StockDamageRequest(BaseModel):
     transaction_date: datetime | None = None
     reference_no: str | None = Field(default=None, max_length=100)
     note: str | None = None
     items: list[DamageItem] = Field(min_length=1)
-
 
 class ExpireItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -255,13 +239,11 @@ class ExpireItem(BaseModel):
         default=None, gt=0, validation_alias=AliasChoices("factor_to_base", "factorToBase")
     )
 
-
 class StockExpireRequest(BaseModel):
     transaction_date: datetime | None = None
     reference_no: str | None = Field(default=None, max_length=100)
     note: str | None = None
     items: list[ExpireItem] = Field(min_length=1)
-
 
 class PurchaseReturnItemRequest(BaseModel):
     """One line of POST /stock/in/{id}/return (spec 2.1.x Return to supplier)."""
@@ -273,7 +255,6 @@ class PurchaseReturnItemRequest(BaseModel):
     )
     quantity: Decimal = Field(gt=0)
 
-
 class PurchaseReturnRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -283,7 +264,6 @@ class PurchaseReturnRequest(BaseModel):
     )
     return_date: datetime | None = None
 
-
 class PurchaseReturnItemOut(BaseModel):
     id: UUID
     stock_transaction_item_id: UUID
@@ -292,7 +272,6 @@ class PurchaseReturnItemOut(BaseModel):
     quantity: Decimal
     unit_cost: Decimal
     line_refund: Decimal
-
 
 class PurchaseReturnOut(BaseModel):
     id: UUID
@@ -306,7 +285,6 @@ class PurchaseReturnOut(BaseModel):
     credit_amount: Decimal = Decimal("0.00")
     reason: str
     items: list[PurchaseReturnItemOut]
-
 
 class OperationItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -331,7 +309,6 @@ class OperationItemOut(BaseModel):
     entered_uom_symbol: str | None = None
     entered_factor_to_base: Decimal | None = None
 
-
 class StockOperationOut(BaseModel):
     id: UUID
     document_no: str
@@ -350,7 +327,6 @@ class StockOperationOut(BaseModel):
     debt_created: bool = False
     debt_id: UUID | None = None
     items: list[OperationItemOut]
-
 
 class QuickStockOperationRequest(BaseModel):
     """Single-product quick operation from the Stock list
@@ -384,7 +360,6 @@ class QuickStockOperationRequest(BaseModel):
         gt=0,
         validation_alias=AliasChoices("factor_to_base", "factorToBase"),
     )
-
 
 class MovementOut(BaseModel):
     """GET /stock/movements row (Stock Movements page).
@@ -425,30 +400,6 @@ class MovementOut(BaseModel):
     created_at: datetime
 
 
-class ProductHistoryRow(BaseModel):
-    """Compact row for the product stock-history dialogs (spec section 2.1.5)."""
-
-    id: UUID
-    date: datetime
-    type: str
-    kind: str
-    qty: Decimal
-    # Product name and line-unit snapshot for the Stock In / Stock Out dialogs.
-    product: str = ""
-    unit: str | None = None
-    unit_price: Decimal
-    reference: str | None = None
-    reference_type: str
-    # Sale linkage for the Stock Out dialog click-through to the invoice.
-    reference_id: UUID | None = None
-    # Batch traceability (batch lots the row received / consumed).
-    batch_no: str | None = None
-    batch_id: UUID | None = None
-    expiry_date: date | None = None
-    user: str | None = None
-    note: str | None = None
-
-
 # ---------------------------------------------------------------- sale prices
 
 
@@ -480,7 +431,6 @@ class SalePriceUomIn(BaseModel):
         default=None,
         validation_alias=AliasChoices("is_default_sale", "isDefaultSale"),
     )
-
 
 class SalePriceCreate(BaseModel):
     """Add Sale Price payload (snake_case and camelCase accepted)."""
@@ -521,7 +471,6 @@ class SalePriceCreate(BaseModel):
         default=None,
         validation_alias=AliasChoices("uom_prices", "uomPrices"),
     )
-
 
 class SalePriceUpdate(BaseModel):
     """PATCH payload: `{isActive: true}` runs the activate transaction."""

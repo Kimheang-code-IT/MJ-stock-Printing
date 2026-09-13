@@ -43,12 +43,6 @@ class AdminUserOut(BaseModel):
     created_at: datetime
 
 
-class PageMeta(BaseModel):
-    page: int
-    limit: int
-    total: int
-
-
 # ---------------------------------------------------------------- roles
 
 

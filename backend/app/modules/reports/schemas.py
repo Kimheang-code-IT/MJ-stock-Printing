@@ -56,6 +56,9 @@ class PurchaseReportRow(BaseModel):
     paid_amount: Decimal
     remaining_debt: Decimal
     status: str
+    # Document currency + saved rate (returns keep the stored snapshot).
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
 
 
 class CustomerDebtReportRow(BaseModel):

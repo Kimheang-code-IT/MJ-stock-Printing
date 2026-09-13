@@ -46,6 +46,10 @@ const props = defineProps<{
   canOperate: boolean
   completing?: boolean
   disabled?: boolean
+  /** Return mode: the cart holds original-invoice lines to return. */
+  returnMode?: boolean
+  returnReason?: string
+  returnRestock?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -61,6 +65,8 @@ const emit = defineEmits<{
   'update:needsDelivery': [value: boolean]
   'update:depositInput': [value: number]
   'update:includedDebtIds': [value: string[]]
+  'update:returnReason': [value: string]
+  'update:returnRestock': [value: boolean]
   back: []
   complete: []
 }>()
@@ -195,11 +201,23 @@ const outstandingDisplay = computed(() =>
 /** Walk-in customers cannot leave an outstanding balance (spec §5.11),
  *  so the Credit tender is disabled until a registered customer is picked. */
 const walkInCreditDisabled = computed(() => !props.customerId)
+const returnTotal = computed(() => saleNet.value)
 const canComplete = computed(() =>
   Boolean(props.cart.length)
   && props.canOperate
   && !props.disabled
-  && (outstandingAmount.value <= 0 || Boolean(props.customerId)))
+  && (props.returnMode
+    ? Boolean(String(props.returnReason || '').trim())
+    : (outstandingAmount.value <= 0 || Boolean(props.customerId))))
+
+const returnReasonProxy = computed({
+  get: () => String(props.returnReason || ''),
+  set: (value: string) => emit('update:returnReason', value),
+})
+const returnRestockProxy = computed({
+  get: () => props.returnRestock !== false,
+  set: (value: boolean) => emit('update:returnRestock', value === true),
+})
 
 const includedDebtIdsProxy = computed({
   get: () => props.includedDebtIds,
@@ -280,12 +298,20 @@ function onNeedsDelivery(value: unknown) {
           @click="emit('back')"
         />
         <UCheckbox
+          v-if="!returnMode"
           :model-value="needsDelivery"
           :label="t('app.pos.needsDelivery')"
           size="lg"
           :disabled="disabled"
           @update:model-value="onNeedsDelivery($event)"
         />
+        <div
+          v-else
+          class="inline-flex items-center gap-2 rounded-sm bg-warning/10 px-3 py-1 text-sm font-medium text-warning"
+        >
+          <UIcon name="i-lucide-undo-2" class="size-4" />
+          {{ t('app.pos.returnMode') }}
+        </div>
       </div>
       <TableAppListTable
         v-model:search="search"
@@ -300,7 +326,56 @@ function onNeedsDelivery(value: unknown) {
 
     <aside class="flex w-full shrink-0 flex-col overflow-y-auto lg:w-md xl:w-xl">
       <div class="rounded-sm border border-default bg-default p-4">
-        <div class="grid gap-3">
+        <div v-if="returnMode" class="grid gap-3">
+          <UFormField
+            :label="t('app.pos.customerName')"
+            size="md"
+          >
+            <p class="text-base font-medium">
+              {{ customerName || t('app.pos.walkIn') }}
+            </p>
+          </UFormField>
+
+          <div class="flex justify-between border-t border-default pt-3 text-base">
+            <span class="text-muted">{{ t('app.reports.returnTotal') }}</span>
+            <span class="font-semibold tabular-nums">{{ money(returnTotal) }}</span>
+          </div>
+
+          <UFormField
+            :label="t('app.reports.returnReason')"
+            size="md"
+            required
+          >
+            <UTextarea
+              v-model="returnReasonProxy"
+              :rows="3"
+              class="w-full"
+              :disabled="disabled"
+            />
+          </UFormField>
+
+          <div class="border-t border-default pt-3">
+            <UCheckbox
+              v-model="returnRestockProxy"
+              :label="t('app.reports.restock')"
+              :disabled="disabled"
+            />
+            <p class="mt-1 text-xs text-muted">
+              {{ t('app.pos.returnRestockHint') }}
+            </p>
+          </div>
+
+          <UButton
+            block
+            color="warning"
+            size="xl"
+            :disabled="!canComplete"
+            :loading="completing"
+            :label="t('app.reports.confirmReturn')"
+            @click="emit('complete')"
+          />
+        </div>
+        <div v-else class="grid gap-3">
           <UFormField
             :label="t('app.pos.customerName')"
             size="md"

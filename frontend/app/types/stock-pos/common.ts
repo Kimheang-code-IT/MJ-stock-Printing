@@ -73,7 +73,8 @@ export type FieldType =
   | 'uom-conversions'
   | 'batches'
   | 'product-movements'
-  | 'sale-price-history'
+  | 'party-sales-history'
+  | 'party-purchase-history'
 
 export interface FieldOption {
   label?: string

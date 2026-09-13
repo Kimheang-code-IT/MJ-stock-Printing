@@ -1,7 +1,7 @@
 <script setup lang="ts">
 definePageMeta({
   titleKey: 'app.pages.categories',
-  permission: 'categories.view',
+  permission: 'category.view',
 })
 </script>
 

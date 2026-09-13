@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from argon2 import PasswordHasher
-
 SUPER_ADMIN_ROLE = "Administrator"
 SUPER_ADMIN_PERMISSION = "ALL_PAGES"
 
@@ -87,27 +85,6 @@ def cashier_permissions() -> list[str]:
     ]
 
 
-def stock_staff_permissions() -> list[str]:
-    return [
-        "dashboard.view",
-        "category.view",
-        "brand.view",
-        "stock.view",
-        "stock.in",
-        "stock.adjust",
-        "stock.damage",
-        "stock.expire",
-        "product.create",
-        "product.update",
-        "supplier.view",
-        "supplier.create",
-    ]
-
-
-def permissions_hasher() -> PasswordHasher:
-    return PasswordHasher()
-
-
 def effective_permissions(user: object) -> list[str]:
     """Resolve access exclusively from the authoritative related role."""
     role = getattr(user, "role_ref", None)
@@ -119,23 +96,6 @@ def effective_permissions(user: object) -> list[str]:
     return [value for value in values if value in ASSIGNABLE_PERMISSIONS]
 
 
-def is_super_admin_user(user: object) -> bool:
-    role = getattr(user, "role_ref", None)
-    return bool(
-        role
-        and getattr(role, "name", None) == SUPER_ADMIN_ROLE
-        and SUPER_ADMIN_PERMISSION in (getattr(role, "permissions", None) or [])
-    )
-
-
 def user_has_permission(user: object, required: str) -> bool:
     values = effective_permissions(user)
     return SUPER_ADMIN_PERMISSION in values or required in values
-
-
-def is_super_admin(role: str | None, permissions: list[str] | None) -> bool:
-    return role == SUPER_ADMIN_ROLE or bool(permissions and SUPER_ADMIN_PERMISSION in permissions)
-
-
-def has_permission(role: str | None, permissions: list[str] | None, required: str) -> bool:
-    return is_super_admin(role, permissions) or bool(permissions and required in permissions)

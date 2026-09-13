@@ -90,7 +90,7 @@ describe('i18n locale files', () => {
     const pages = km.app.pages as Record<string, string>
     expect(nav.dashboard).toBe('ផ្ទាំងគ្រប់គ្រង')
     expect(nav.stock).toBe('ស្តុក')
-    expect(nav.deliveryNotes).toBe('ប័ណ្ណដឹកជញ្ជូន')
+    expect(nav.deliveryNotes).toBe('ការដឹកជញ្ជូន')
     expect(nav.setup).toBe('ការកំណត់ទិន្នន័យ')
     expect(nav.administration).toBe('ការគ្រប់គ្រងប្រព័ន្ធ')
     expect(pages.stockMovements).toBe('ចលនាស្តុក')

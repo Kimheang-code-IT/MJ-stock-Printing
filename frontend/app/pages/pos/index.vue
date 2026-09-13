@@ -26,7 +26,8 @@ import {
   checkoutSaleNet,
   type CheckoutDebtRow,
 } from '~/utils/pos/checkout'
-import { printSaleInvoice, type PrintCurrencyChoice, type SaleInvoicePrintInput } from '~/utils/print/invoice'
+import { printSaleInvoice, type SaleInvoicePrintInput } from '~/utils/print/invoice'
+import { saleEditCartLines, saleReturnCartLines } from '~/utils/pos/return'
 import type { PrintPaperSize } from '~/utils/print/html'
 import { conversionForUom, salePriceForUom } from '~/utils/stock/uom-conversions'
 
@@ -37,6 +38,7 @@ import { conversionForUom, salePriceForUom } from '~/utils/stock/uom-conversions
 type PosStep = 'cart' | 'checkout'
 
 const store = useAppDataStore()
+const route = useRoute()
 const preferences = usePreferencesStore()
 const auth = useAuthStore()
 const { t, locale } = useI18n()
@@ -103,6 +105,7 @@ const {
 /** Global cart currency switch (cart header selector): runs the shared
  *  rate-dialog flow, then converts the stored cart prices once. */
 function onSaleCurrencyRequested(value: 'USD' | 'KHR') {
+  if (returnMode.value) return
   if (value === saleCurrency.value) return
   const from = saleCurrency.value
   if (value === 'KHR' && saleRate.value <= 0) {
@@ -124,6 +127,24 @@ function onConfirmSaleRate(rate: number) {
 }
 const lastSaleNo = ref('')
 const lastSaleId = ref('')
+
+/* ------------------------------ return mode ------------------------------ */
+/** POS return mode: the original invoice is loaded and Submit records an
+ *  immutable Sale Return against it (never a new sale). */
+const returnMode = ref(false)
+const returnSaleId = ref('')
+const returnInvoiceNo = ref('')
+const returnReason = ref('')
+const returnRestock = ref(true)
+const returnLoading = ref(false)
+
+/* ------------------------------- edit mode ------------------------------- */
+/** POS edit mode: an existing invoice is loaded with its original lines and
+ *  prices; Submit re-saves it via PATCH (reverse + reapply on the backend). */
+const editMode = ref(false)
+const editSaleId = ref('')
+const editInvoiceNo = ref('')
+const editLoading = ref(false)
 
 onBeforeUnmount(() => {
   hidePosAppHeader.value = false
@@ -147,13 +168,17 @@ onMounted(async () => {
   catch {
     // Keep default shop name when settings are unavailable.
   }
+  const returnId = String(route.query.returnSaleId || '')
+  if (returnId) {
+    await loadReturnSale(returnId)
+    return
+  }
+  const editId = String(route.query.editSaleId || '')
+  if (editId) await loadEditSale(editId)
 })
 
 const canOperate = computed(() =>
-  auth.canAccessPage('pos.create')
-  || auth.canAccessPage('pos.edit')
-  || auth.canAccessPage('pos.access')
-  || auth.canAccessPage('ALL_PAGES'))
+  auth.canAccessPage('pos.access'))
 
 const currency = computed(() => preferences.currency)
 
@@ -268,6 +293,7 @@ const canCreateDelivery = computed(() =>
 const lineUomOptions = uomOptionsFor
 
 function addProduct(row: Record<string, unknown>) {
+  if (returnMode.value) return
   const id = String(row.id)
   const stock = Number(row.quantity || 0)
   if (stock <= 0) {
@@ -422,23 +448,224 @@ watch(isCredit, (credit) => {
   }
 })
 
-/* ------------------------- Invoice print size + currency chooser ------------------------- */
+/* ------------------------------ return mode ------------------------------ */
 
-/** Paper-size + print-currency chooser opened after a successful Submit (A4 default). */
+/** Load an original invoice into the POS as a return: preload the returnable
+ *  lines (original UOM, price, discount, currency/rate, customer) and record
+ *  a Sale Return on Submit — never a new sale. */
+async function loadReturnSale(saleId: string) {
+  returnLoading.value = true
+  try {
+    await store.fetchList('products')
+    const sale = await posCommands.getSale(saleId)
+    const productById = new Map(store.list('products').map(row => [String(row.id), row]))
+    saleCurrency.value = sale.currency
+    exchangeRateInput.value = sale.currency === 'KHR' ? sale.exchangeRate : undefined
+    customerId.value = sale.customerId ? String(sale.customerId) : undefined
+    customerName.value = sale.customerName
+    returnInvoiceNo.value = sale.invoiceNo
+    const lines = saleReturnCartLines(sale, productById)
+    if (!lines.length) {
+      toast.add({ title: t('app.reports.nothingToReturn'), color: 'warning' })
+      await navigateTo('/reports/sales')
+      return
+    }
+    cart.value = lines
+    returnMode.value = true
+    returnSaleId.value = saleId
+    returnReason.value = ''
+    returnRestock.value = true
+    step.value = 'cart'
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.pos.returnLoadFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+    await navigateTo('/reports/sales')
+  }
+  finally {
+    returnLoading.value = false
+  }
+}
+
+function exitReturnMode() {
+  returnMode.value = false
+  returnSaleId.value = ''
+  returnInvoiceNo.value = ''
+  returnReason.value = ''
+  returnRestock.value = true
+  cart.value = []
+  customerId.value = undefined
+  customerName.value = ''
+  step.value = 'cart'
+}
+
+/** Submit the return against the original invoice (immutable Sale Return). */
+async function completeReturn() {
+  if (!returnSaleId.value || !cart.value.length || completing.value) return
+  const reason = returnReason.value.trim()
+  if (!reason) {
+    toast.add({ title: t('app.reports.returnQtyRequired'), color: 'warning' })
+    return
+  }
+  const lines = cart.value
+    .filter(line => line.saleItemId && Number(line.quantity) > 0)
+    .map(line => ({
+      lineId: String(line.saleItemId),
+      quantity: Number(line.quantity),
+      restock: returnRestock.value,
+    }))
+  if (!lines.length) {
+    toast.add({ title: t('app.reports.returnQtyRequired'), color: 'warning' })
+    return
+  }
+  completing.value = true
+  try {
+    const result = await posCommands.returnSale({
+      saleId: returnSaleId.value,
+      reason,
+      lines,
+    })
+    toast.add({
+      title: `${t('app.reports.returnSaved')} · ${String(result.returnNo || '')}`,
+      color: 'success',
+    })
+    void store.fetchList('products')
+    void store.fetchList('sales')
+    void store.fetchList('stockMovements')
+    const invoiceNo = returnInvoiceNo.value
+    const saleId = returnSaleId.value
+    exitReturnMode()
+    await navigateTo(`/reports/sales?q=${encodeURIComponent(invoiceNo || saleId)}`)
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.reports.returnFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+  }
+  finally {
+    completing.value = false
+  }
+}
+
+/* ------------------------------- edit mode ------------------------------- */
+
+/** Load an existing invoice into the POS for editing: original lines, prices,
+ *  discounts, UOM, currency/rate and customer. Submit re-saves via PATCH. */
+async function loadEditSale(saleId: string) {
+  editLoading.value = true
+  try {
+    await store.fetchList('products')
+    const sale = await posCommands.getSale(saleId)
+    const productById = new Map(store.list('products').map(row => [String(row.id), row]))
+    saleCurrency.value = sale.currency
+    exchangeRateInput.value = sale.currency === 'KHR' ? sale.exchangeRate : undefined
+    customerId.value = sale.customerId ? String(sale.customerId) : undefined
+    customerName.value = sale.customerName
+    editInvoiceNo.value = sale.invoiceNo
+    cart.value = saleEditCartLines(sale, productById)
+    editMode.value = true
+    editSaleId.value = saleId
+    step.value = 'cart'
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.pos.updateFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+    await navigateTo('/reports/sales')
+  }
+  finally {
+    editLoading.value = false
+  }
+}
+
+function exitEditMode() {
+  editMode.value = false
+  editSaleId.value = ''
+  editInvoiceNo.value = ''
+  cart.value = []
+  customerId.value = undefined
+  customerName.value = ''
+  step.value = 'cart'
+}
+
+/** Save the edited invoice (reverse + reapply on the backend). */
+async function saveEditSale() {
+  if (!editSaleId.value || !cart.value.length || !canOperate.value || completing.value) return
+  if (saleCurrency.value === 'KHR' && saleRate.value <= 0) {
+    toast.add({ title: t('app.pos.exchangeRateRequired'), color: 'warning' })
+    return
+  }
+  completing.value = true
+  try {
+    await posCommands.updateSale({
+      saleId: editSaleId.value,
+      customerId: customerId.value ? String(customerId.value) : null,
+      customerName: customerName.value || null,
+      items: cart.value.map(line => ({
+        productId: line.productId,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        discountPercent: line.discountPercent,
+        uomId: line.uomId || undefined,
+        uomSymbol: line.uom || undefined,
+        factorToBase: line.factorToBase || 1,
+      })),
+      paymentMethod: paymentMethod.value,
+      paidAmount: paidAmount.value,
+      discount: discountTotal.value,
+      deliveryPrice: appliedDeliveryPrice.value,
+      currency: saleCurrency.value,
+      exchangeRate: saleRate.value,
+    })
+    toast.add({
+      title: `${t('app.pos.saleUpdated')} · ${editInvoiceNo.value}`,
+      color: 'success',
+    })
+    void store.fetchList('products')
+    void store.fetchList('sales')
+    void store.fetchList('customerDebts')
+    void store.fetchList('stockMovements')
+    const invoice = editInvoiceNo.value
+    exitEditMode()
+    await navigateTo(`/reports/sales?q=${encodeURIComponent(invoice)}`)
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.pos.updateFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+  }
+  finally {
+    completing.value = false
+  }
+}
+
+/* ------------------------------ Invoice print size ------------------------------ */
+
+/** Paper-size chooser opened after a successful Submit (A4 default). The
+ *  invoice always prints in the sale's own currency (KHR sale → KHR). */
 const printSizeOpen = ref(false)
-let printSizeResolver: ((choice: { size: PrintPaperSize, options: PrintCurrencyChoice } | null) => void) | null = null
+let printSizeResolver: ((size: PrintPaperSize | null) => void) | null = null
 
-/** Resolves with the chosen size + currency, or null when the cashier closes/cancels. */
-function choosePrintSize(): Promise<{ size: PrintPaperSize, options: PrintCurrencyChoice } | null> {
+/** Resolves with the chosen size, or null when the cashier closes/cancels. */
+function choosePrintSize(): Promise<PrintPaperSize | null> {
   return new Promise((resolve) => {
     printSizeResolver = resolve
     printSizeOpen.value = true
   })
 }
 
-function onPrintSizeConfirm(size: PrintPaperSize, options: PrintCurrencyChoice) {
+function onPrintSizeConfirm(size: PrintPaperSize) {
   printSizeOpen.value = false
-  printSizeResolver?.({ size, options })
+  printSizeResolver?.(size)
   printSizeResolver = null
 }
 
@@ -451,6 +678,14 @@ watch(printSizeOpen, (open) => {
 })
 
 async function completeSale() {
+  if (returnMode.value) {
+    await completeReturn()
+    return
+  }
+  if (editMode.value) {
+    await saveEditSale()
+    return
+  }
   if (!cart.value.length || !canOperate.value || completing.value) return
   if (outstandingAmount.value > 0 && !customerId.value) {
     toast.add({ title: t('app.pos.creditRequiresCustomer'), color: 'warning' })
@@ -546,9 +781,10 @@ async function completeSale() {
     void store.fetchList('customers')
     void store.fetchList('customerDebts')
     void store.fetchList('stockMovements')
-    // Ask which paper size + print currency to use; closing skips print.
-    const printChoice = await choosePrintSize()
-    if (printChoice) await printSaleInvoice(printInput, printChoice.size, printChoice.options)
+    // Ask which paper size to use (invoice prints in the sale's own currency);
+    // closing skips print.
+    const printSize = await choosePrintSize()
+    if (printSize) await printSaleInvoice(printInput, printSize)
     if (shouldOpenDelivery) {
       await navigateTo(`/delivery-notes/new?saleId=${lastSaleId.value}&phone=${encodeURIComponent(deliveryPhone.value)}&location=${encodeURIComponent(deliveryLocation.value)}`)
     }
@@ -569,6 +805,42 @@ async function completeSale() {
 
 <template>
   <div class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      v-if="returnMode"
+      class="flex flex-wrap items-center gap-2 border-b border-warning/40 bg-warning/10 px-3 py-1.5 text-sm font-medium text-warning"
+    >
+      <UIcon name="i-lucide-undo-2" class="size-4" />
+      <span>{{ t('app.pos.returnMode') }}</span>
+      <span v-if="returnInvoiceNo" class="text-muted">· {{ returnInvoiceNo }}</span>
+      <UButton
+        class="ms-auto"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        icon="i-lucide-x"
+        :label="t('common.cancel')"
+        @click="exitReturnMode"
+      />
+    </div>
+
+    <div
+      v-if="editMode"
+      class="flex flex-wrap items-center gap-2 border-b border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary"
+    >
+      <UIcon name="i-lucide-pencil" class="size-4" />
+      <span>{{ t('app.pos.editMode') }}</span>
+      <span v-if="editInvoiceNo" class="text-muted">· {{ editInvoiceNo }}</span>
+      <UButton
+        class="ms-auto"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        icon="i-lucide-x"
+        :label="t('common.cancel')"
+        @click="exitEditMode"
+      />
+    </div>
+
     <LayoutAppHeaderPageActions
       v-if="step === 'cart'"
       :can-create="false"
@@ -597,7 +869,7 @@ async function completeSale() {
         :products="products"
         :categories="categoryOptions"
         :currency="currency"
-        :disabled="!canOperate"
+        :disabled="!canOperate || returnMode"
         @add="addProduct"
         @search-enter="onSearchEnter"
       />
@@ -605,6 +877,7 @@ async function completeSale() {
         :cart="cart"
         :sale-currency="saleCurrency"
         :disabled="!canOperate"
+        :return-mode="returnMode"
         @change-qty="changeQty"
         @change-uom="changeUom"
         @update-price="updatePrice"
@@ -636,13 +909,17 @@ async function completeSale() {
       :customer-options="customerOptions"
       :can-operate="canOperate"
       :completing="completing"
+      :return-mode="returnMode"
+      :return-reason="returnReason"
+      :return-restock="returnRestock"
+      @update:return-reason="returnReason = $event"
+      @update:return-restock="returnRestock = $event"
       @back="goBack"
       @complete="completeSale"
     />
 
     <PosPrintSizeDialog
       v-model:open="printSizeOpen"
-      :document-currency="saleCurrency"
       @confirm="onPrintSizeConfirm"
     />
 

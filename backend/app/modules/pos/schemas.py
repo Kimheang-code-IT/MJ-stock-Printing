@@ -166,6 +166,34 @@ class SaleCreateRequest(BaseModel):
         return self
 
 
+class SaleUpdateRequest(BaseModel):
+    """PATCH /pos/sales/{id} — edit a completed sale (no returns).
+
+    Items/quantities/prices/discounts/delivery are re-applied; the original
+    stock is reversed (restored to its batches) before the new lines are
+    applied. The customer and any recorded payments stay untouched — the
+    outstanding customer debt is recalculated from the new grand total.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    sale_date: datetime | None = None
+    discount: Decimal = Field(default=Decimal("0"), ge=0)
+    delivery_price: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        validation_alias=AliasChoices("delivery_price", "deliveryPrice"),
+    )
+    note: str | None = None
+    currency: str = Field(default="USD", pattern="^(USD|KHR)$")
+    exchange_rate: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        validation_alias=AliasChoices("exchange_rate", "exchangeRate"),
+    )
+    items: list[SaleItemRequest] = Field(min_length=1)
+
+
 class SaleItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -295,14 +323,3 @@ class CustomerDebtOut(BaseModel):
     currency: str = "USD"
     exchange_rate: Decimal = Decimal("1")
     created_at: datetime
-
-
-class CustomerHistoryOut(BaseModel):
-    id: UUID
-    invoice_no: str
-    sale_date: datetime
-    grand_total: Decimal
-    paid_amount: Decimal
-    debt_amount: Decimal
-    payment_status: str
-    sale_status: str

@@ -1,201 +1,186 @@
 import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
 
 /**
- * Actions used by Stock & POS page authorization.
- * Keys expand to `{permissionPrefix}.{action}` (e.g. products.view).
+ * Frontend mirror of the backend permission catalog
+ * (`backend/app/core/permissions.py`). `permissionPrefix` is the backend
+ * **module** code; actions are the backend action names (including dotted
+ * actions such as `debt.pay`). The Role & Permissions matrix renders the live
+ * catalog from `GET /admin/permissions`; this mirror powers row labels,
+ * role seeding and the permission-ID validation test.
  */
-export const ROLE_PERMISSION_ACTIONS = [
-  'view',
-  'create',
-  'edit',
-  'delete',
-  'update',
-  'confirm',
-  'deliver',
-  'cancel',
-  'export',
-  'print',
-  'operate',
-  'configure',
-] as const
-
-export type RolePermissionAction = (typeof ROLE_PERMISSION_ACTIONS)[number]
-
 export interface RoleDocumentTypeDefinition {
+  /** Backend module code (also the matrix row key / `documentType`). */
   value: string
   labelKey: string
   permissionPrefix: string
-  actions: readonly RolePermissionAction[]
+  actions: readonly string[]
 }
 
-const CRUD: readonly RolePermissionAction[] = ['view', 'create', 'edit', 'delete']
-const CRUD_EXPORT: readonly RolePermissionAction[] = ['view', 'create', 'edit', 'delete', 'export']
-const POS: readonly RolePermissionAction[] = ['view', 'create', 'edit', 'delete', 'export', 'print', 'operate']
-const VIEW_EXPORT: readonly RolePermissionAction[] = ['view', 'export']
-const VIEW_EXPORT_PRINT: readonly RolePermissionAction[] = ['view', 'export', 'print']
-const SETTINGS: readonly RolePermissionAction[] = ['view', 'edit', 'configure']
-const DELIVERY: readonly RolePermissionAction[] = ['view', 'create', 'update', 'confirm', 'deliver', 'cancel']
-
-/**
- * One matrix row per app page / menu entry.
- * Keep in sync with `useMenu` routes and `definePageMeta({ permission })`.
- */
 export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
-  { value: 'dashboard', labelKey: 'app.pages.dashboard', permissionPrefix: 'dashboard', actions: ['view'] },
-  { value: 'categories', labelKey: 'app.nav.categories', permissionPrefix: 'categories', actions: CRUD_EXPORT },
-  { value: 'uoms', labelKey: 'app.nav.uoms', permissionPrefix: 'uom', actions: CRUD_EXPORT },
-  { value: 'brands', labelKey: 'app.nav.brands', permissionPrefix: 'brand', actions: CRUD_EXPORT },
-  { value: 'products', labelKey: 'app.nav.stock', permissionPrefix: 'products', actions: CRUD_EXPORT },
-  { value: 'suppliers', labelKey: 'app.nav.suppliers', permissionPrefix: 'suppliers', actions: CRUD_EXPORT },
-  { value: 'customers', labelKey: 'app.nav.customers', permissionPrefix: 'customers', actions: CRUD_EXPORT },
-  { value: 'delivery', labelKey: 'app.nav.deliveryNotes', permissionPrefix: 'delivery', actions: DELIVERY },
-  { value: 'pos', labelKey: 'app.nav.pos', permissionPrefix: 'pos', actions: POS },
-  { value: 'sales', labelKey: 'app.pages.salesReport', permissionPrefix: 'sales', actions: VIEW_EXPORT_PRINT },
-  { value: 'reports', labelKey: 'app.nav.reports', permissionPrefix: 'reports', actions: VIEW_EXPORT_PRINT },
-  { value: 'admin_users', labelKey: 'app.pages.users', permissionPrefix: 'admin.users', actions: CRUD },
-  { value: 'admin_roles', labelKey: 'app.pages.roles', permissionPrefix: 'admin.roles', actions: CRUD },
-  { value: 'admin_sequences', labelKey: 'app.pages.documentSequences', permissionPrefix: 'configuration', actions: CRUD },
-  { value: 'app_config', labelKey: 'app.pages.settings', permissionPrefix: 'settings.app_config', actions: SETTINGS },
-  { value: 'admin_audit', labelKey: 'app.pages.auditLogs', permissionPrefix: 'admin.audit_logs', actions: VIEW_EXPORT },
+  { value: 'dashboard', labelKey: 'app.pages.dashboard', permissionPrefix: 'dashboard', actions: ['view', 'view_profit'] },
+  { value: 'category', labelKey: 'app.nav.categories', permissionPrefix: 'category', actions: ['view', 'create', 'update', 'delete'] },
+  { value: 'uom', labelKey: 'app.nav.uoms', permissionPrefix: 'uom', actions: ['view', 'create', 'update', 'delete'] },
+  { value: 'brand', labelKey: 'app.nav.brands', permissionPrefix: 'brand', actions: ['view', 'create', 'update', 'delete'] },
+  { value: 'stock', labelKey: 'app.nav.stock', permissionPrefix: 'stock', actions: ['view', 'in', 'adjust', 'damage', 'expire'] },
+  { value: 'product', labelKey: 'app.pages.products', permissionPrefix: 'product', actions: ['create', 'update', 'delete'] },
+  { value: 'supplier', labelKey: 'app.nav.suppliers', permissionPrefix: 'supplier', actions: ['view', 'create', 'update', 'delete', 'debt.pay'] },
+  { value: 'pos', labelKey: 'app.nav.pos', permissionPrefix: 'pos', actions: ['access', 'discount', 'debt_sale', 'print'] },
+  { value: 'customer', labelKey: 'app.nav.customers', permissionPrefix: 'customer', actions: ['view', 'create', 'update', 'delete', 'debt.pay'] },
+  { value: 'delivery', labelKey: 'app.nav.deliveryNotes', permissionPrefix: 'delivery', actions: ['view', 'create', 'update', 'confirm', 'deliver', 'cancel'] },
+  { value: 'report', labelKey: 'app.nav.reports', permissionPrefix: 'report', actions: ['sales', 'purchase', 'customer_debt', 'supplier_debt', 'finance'] },
+  { value: 'expense', labelKey: 'app.reports.addExpense', permissionPrefix: 'expense', actions: ['create'] },
+  { value: 'user', labelKey: 'app.pages.users', permissionPrefix: 'user', actions: ['manage'] },
+  { value: 'role', labelKey: 'app.pages.roles', permissionPrefix: 'role', actions: ['manage'] },
+  { value: 'sequence', labelKey: 'app.pages.documentSequences', permissionPrefix: 'sequence', actions: ['manage'] },
+  { value: 'audit', labelKey: 'app.pages.auditLogs', permissionPrefix: 'audit', actions: ['view'] },
+  { value: 'settings', labelKey: 'app.pages.settings', permissionPrefix: 'settings', actions: ['manage'] },
 ] as const
 
-const ACTION_SET = new Set<string>(ROLE_PERMISSION_ACTIONS)
-const LEGACY_ACTION_MAP: Record<string, RolePermissionAction | undefined> = {
-  select: 'view',
-  read: 'view',
-  write: 'edit',
-  manage: 'edit',
-  archive: 'delete',
-  purge: 'delete',
-  share: 'export',
-  report: 'view',
-  import: 'create',
-  transition: 'edit',
-  assign: 'edit',
-  mask: 'view',
+/** Backend action names are free-form (e.g. `debt.pay`), so keep them strings. */
+export type RolePermissionAction = string
+
+export const SUPER_ADMIN_PERMISSION = 'ALL_PAGES'
+
+/** Every permission code in the frontend mirror (tests / ALL_PAGES expansion). */
+export function allFrontendPermissionCodes(): string[] {
+  return ROLE_DOCUMENT_TYPES.flatMap(def => def.actions.map(action => `${def.permissionPrefix}.${action}`))
 }
 
-export function normalizePermissionActions(actions: readonly string[] | null | undefined): RolePermissionAction[] {
-  const normalized = new Set<RolePermissionAction>()
-  for (const raw of actions || []) {
-    const action = ACTION_SET.has(raw)
-      ? raw as RolePermissionAction
-      : LEGACY_ACTION_MAP[raw]
-    if (action) normalized.add(action)
+function normalizeActions(actions: readonly string[] | null | undefined): string[] {
+  const seen = new Set<string>()
+  for (const action of actions || []) {
+    const value = String(action || '').trim()
+    if (value) seen.add(value)
   }
-  if ([...normalized].some(action => action !== 'view')) normalized.add('view')
-  return ROLE_PERMISSION_ACTIONS.filter(action => normalized.has(action))
+  return [...seen]
 }
 
-/** Merge API rows with the current matrix catalog and discard unknown rows/actions. */
+/** Merge duplicate rows and trim action noise; order follows the catalog. */
 export function normalizePermissionRows(
   rows: readonly AppRolePermissionRow[] | null | undefined,
   includeEmpty = true,
 ): AppRolePermissionRow[] {
-  const byType = new Map((rows || []).map(row => [row.documentType, row]))
-  const normalized = ROLE_DOCUMENT_TYPES.map((definition) => {
-    const existing = byType.get(definition.value)
-    const actions = normalizePermissionActions(existing?.actions)
-      .filter(action => definition.actions.includes(action))
-    return {
-      id: existing?.id || `perm_${definition.value}`,
-      documentType: definition.value,
+  const byType = new Map<string, AppRolePermissionRow>()
+  for (const row of rows || []) {
+    const documentType = String(row.documentType || '').trim()
+    if (!documentType) continue
+    const actions = normalizeActions(row.actions)
+    const existing = byType.get(documentType)
+    byType.set(documentType, {
+      id: row.id || `perm_${documentType}`,
+      documentType,
       onlyIfCreator: false,
       level: 0,
-      actions,
-    }
-  })
-  return includeEmpty ? normalized : normalized.filter(row => row.actions.length > 0)
+      actions: existing ? normalizeActions([...existing.actions, ...actions]) : actions,
+    })
+  }
+  const ordered = ROLE_DOCUMENT_TYPES
+    .filter(def => byType.has(def.value))
+    .map(def => byType.get(def.value)!)
+  const extras = [...byType.values()].filter(row => !ROLE_DOCUMENT_TYPES.some(def => def.value === row.documentType))
+  const all = [...ordered, ...extras]
+  return includeEmpty ? all : all.filter(row => row.actions.length > 0)
 }
 
-/** Enforce action dependencies consistently for checkbox and API payload flows. */
+/** Toggle one action; non-view actions imply view when the module defines it. */
 export function setPermissionAction(
   row: AppRolePermissionRow,
   action: string,
   enabled: boolean,
+  hasViewAction = true,
 ): AppRolePermissionRow {
-  const normalizedAction = ACTION_SET.has(action)
-    ? action as RolePermissionAction
-    : LEGACY_ACTION_MAP[action]
-  if (!normalizedAction) return row
-  const actions = new Set(normalizePermissionActions(row.actions))
+  const actions = new Set(normalizeActions(row.actions))
   if (enabled) {
-    actions.add(normalizedAction)
-    actions.add('view')
+    actions.add(action)
+    if (action !== 'view' && hasViewAction) actions.add('view')
   }
-  else if (normalizedAction === 'view') {
+  else if (action === 'view') {
     actions.clear()
   }
   else {
-    actions.delete(normalizedAction)
+    actions.delete(action)
   }
-  const ordered = ROLE_PERMISSION_ACTIONS.filter(item => actions.has(item))
-  return {
-    ...row,
-    actions: ordered,
-    onlyIfCreator: false,
-  }
+  return { ...row, actions: normalizeActions([...actions]), onlyIfCreator: false }
 }
 
-/** Expanded capabilities sent with structured rows for fast authorization checks. */
-export function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[] {
-  const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.value, item]))
-  const keys = new Set<string>()
+/**
+ * Toggle one flat backend code (`module.action`) on the matrix rows, applying
+ * the same view-dependency rules as `setPermissionAction`. Backs the matrix
+ * **Page access** list, where each page maps to exactly one code.
+ */
+export function setFlatPermission(
+  rows: readonly AppRolePermissionRow[] | null | undefined,
+  code: string,
+  enabled: boolean,
+): AppRolePermissionRow[] {
+  const separator = code.indexOf('.')
+  if (separator <= 0) return normalizePermissionRows(rows, true)
+  const module = code.slice(0, separator)
+  const action = code.slice(separator + 1)
+  const definition = ROLE_DOCUMENT_TYPES.find(item => item.value === module)
+  const hasView = Boolean(definition?.actions.includes('view'))
+  const normalized = normalizePermissionRows(rows, true)
+  const found = normalized.find(row => row.documentType === module)
+  const target: AppRolePermissionRow = found || {
+    id: `perm_${module}`,
+    documentType: module,
+    onlyIfCreator: false,
+    level: 0,
+    actions: [],
+  }
+  const updated = setPermissionAction(target, action, enabled, hasView)
+  const next = found
+    ? normalized.map(row => (row.documentType === module ? updated : row))
+    : [...normalized, updated]
+  return normalizePermissionRows(next, true)
+}
+
+/** Matrix rows → flat backend codes (`module.action`). */
+export function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[] {  const keys = new Set<string>()
   for (const row of normalizePermissionRows(rows, false)) {
-    const prefix = definitions.get(row.documentType)?.permissionPrefix
-    if (!prefix) continue
-    for (const action of row.actions) keys.add(`${prefix}.${action}`)
+    for (const action of row.actions) keys.add(`${row.documentType}.${action}`)
   }
   return [...keys].sort()
 }
 
+/** Flat backend codes → matrix rows (module = first dotted segment). */
 export function flatKeysToPermissionRows(keys: readonly string[]): AppRolePermissionRow[] {
-  const rows = ROLE_DOCUMENT_TYPES.map(definition => ({
-    id: `perm_${definition.value}`,
-    documentType: definition.value,
+  if (keys.includes(SUPER_ADMIN_PERMISSION)) {
+    return normalizePermissionRows(ROLE_DOCUMENT_TYPES.map(def => ({
+      id: `perm_${def.value}`,
+      documentType: def.value,
+      onlyIfCreator: false,
+      level: 0,
+      actions: [...def.actions],
+    })), true)
+  }
+  const byType = new Map<string, string[]>()
+  for (const key of keys) {
+    const separator = key.indexOf('.')
+    if (separator <= 0) continue
+    const module = key.slice(0, separator)
+    const action = key.slice(separator + 1)
+    if (!action) continue
+    byType.set(module, [...(byType.get(module) || []), action])
+  }
+  return normalizePermissionRows([...byType.entries()].map(([documentType, actions]) => ({
+    id: `perm_${documentType}`,
+    documentType,
     onlyIfCreator: false,
     level: 0,
-    actions: keys.includes('ALL_PAGES')
-      ? [...definition.actions]
-      : definition.actions.filter(action => keys.includes(`${definition.permissionPrefix}.${action}`)),
-  }))
-  return normalizePermissionRows(rows)
+    actions,
+  })), true)
 }
 
 export type SeedRolePermissionMode = 'all' | 'staff' | 'viewer'
 
-/** Fixture rows for seeded roles (Admin / Store Staff / Report Viewer). */
+/** Fixture rows for seeded roles (Administrator / Store Staff / Report Viewer). */
 export function seedRolePermissionRows(mode: SeedRolePermissionMode): AppRolePermissionRow[] {
-  const allow = (prefix: string) => {
-    if (mode === 'all') return true
-    if (mode === 'staff') {
-      return prefix === 'dashboard'
-        || ['categories', 'uom', 'brand', 'products', 'suppliers', 'customers', 'delivery', 'pos', 'sales'].includes(prefix)
-        || prefix === 'reports'
-    }
-    // viewer
-    return prefix === 'dashboard' || prefix === 'reports' || prefix === 'sales'
-  }
-
-  const allowedActions = (prefix: string, actions: readonly RolePermissionAction[]) => {
-    if (mode === 'viewer') {
-      return actions.filter(action => action === 'view' || action === 'export' || action === 'print')
-    }
-    if (mode === 'staff' && (prefix.startsWith('admin.') || prefix === 'configuration' || prefix.startsWith('settings.'))) {
-      return []
-    }
-    return [...actions]
-  }
-
-  return normalizePermissionRows(
-    ROLE_DOCUMENT_TYPES.map(definition => ({
-      id: `perm_${definition.value}`,
-      documentType: definition.value,
-      onlyIfCreator: false,
-      level: 0,
-      actions: allow(definition.permissionPrefix)
-        ? allowedActions(definition.permissionPrefix, definition.actions)
-        : [],
-    })),
-  )
+  const restricted = new Set(['user', 'role', 'sequence', 'settings', 'audit'])
+  return normalizePermissionRows(ROLE_DOCUMENT_TYPES.map((def) => {
+    let actions: string[] = [...def.actions]
+    if (mode === 'viewer') actions = actions.filter(action => action === 'view')
+    else if (mode === 'staff' && restricted.has(def.value)) actions = []
+    return { id: `perm_${def.value}`, documentType: def.value, onlyIfCreator: false, level: 0, actions }
+  }))
 }

@@ -711,6 +711,246 @@ class StockOperationService:
         )
         return self._operation_out(transaction, items=item_rows, total_amount=total, paid_amount=paid, debt=debt)
 
+    async def update_purchase(self, stock_transaction_id, payload, *, actor: User) -> StockOperationOut:
+        """Edit a confirmed Stock In: reverse the original received quantities
+        (batch + compensating PURCHASE_RETURN movements) then receive the new
+        lines. The supplier and immutable payments stay; the outstanding
+        supplier debt is recalculated from the new total."""
+        result = await self.session.execute(
+            select(StockTransaction)
+            .where(StockTransaction.id == stock_transaction_id)
+            .with_for_update()
+        )
+        transaction = result.scalar_one_or_none()
+        if transaction is None:
+            raise NotFoundError("Stock In not found")
+        if transaction.transaction_type != "STOCK_IN":
+            raise ConflictError("Only Stock In documents can be edited")
+        existing_items = list(transaction.items)
+        if any(Decimal(item.returned_quantity or 0) > 0 for item in existing_items):
+            raise ConflictError("Stock In documents with purchase returns cannot be edited")
+
+        old_subtotal = sum((Decimal(item.line_total) for item in existing_items), Decimal("0.00"))
+        old_total = (
+            old_subtotal - _q2(transaction.discount_amount) + _q2(transaction.tax_amount)
+        ).quantize(TWO, rounding=ROUND_HALF_UP)
+
+        products: dict = {}
+        for item in payload.items:
+            if item.product_id in products:
+                raise ValidationError("Duplicate product in request", field_errors={"items": "Duplicate product"})
+            products[item.product_id] = await self._get_product(item.product_id)
+
+        negative_ok = await allow_negative_stock(self.session)
+
+        from app.modules.stock import batch_service
+
+        # 1) Reverse the original received quantities.
+        for row in existing_items:
+            quantity = _q4(row.quantity)
+            if quantity <= 0:
+                continue
+            movement_batch_id = None
+            movement_expiry = None
+            if row.batch_no:
+                batch = await batch_service.deduct_from_batch(
+                    self.session,
+                    product_id=row.product_id,
+                    batch_no=row.batch_no,
+                    quantity_base=quantity,
+                )
+                movement_batch_id = batch.id
+                movement_expiry = batch.expiry_date
+            else:
+                allocations = await batch_service.allocate_fefo(
+                    self.session,
+                    product=row.product_ref,
+                    quantity_base=quantity,
+                    allow_negative=negative_ok,
+                    include_expired=True,
+                )
+                await batch_service.deduct_allocations(self.session, allocations)
+            await apply_stock_movement(
+                self.session,
+                product_id=row.product_id,
+                movement_type="PURCHASE_RETURN",
+                quantity_delta=-quantity,
+                unit_cost=row.unit_cost,
+                reference_type="stock_transaction",
+                reference_id=transaction.id,
+                created_by=actor.id,
+                document_no=transaction.document_no,
+                batch_no=row.batch_no,
+                batch_id=movement_batch_id,
+                expiry_date=movement_expiry,
+                allow_negative=negative_ok,
+                uom_symbol=row.uom_symbol,
+            )
+            await self.session.delete(row)
+        await self.session.flush()
+
+        # 2) Receive the new lines with the same rules as stock_in.
+        total = Decimal("0.00")
+        item_rows: list[StockTransactionItem] = []
+        for item in payload.items:
+            product = products[item.product_id]
+            if product.track_batch:
+                if not (item.batch_no or "").strip():
+                    raise ValidationError(
+                        "Batch number is required for batch-tracked products",
+                        field_errors={"items": "Batch number is required"},
+                    )
+                if product.expiry_tracking and item.expiry_date is None:
+                    raise ValidationError(
+                        "Expiry date is required for expiry-tracked products",
+                        field_errors={"items": "Expiry date is required"},
+                    )
+            factor = item.factor_to_base
+            if item.uom_id is not None:
+                if str(item.uom_id) == str(product.uom_id):
+                    factor = Decimal("1")
+                else:
+                    conversion = next(
+                        (row for row in (product.uom_conversions or []) if str(row.get("uom_id")) == str(item.uom_id)),
+                        None,
+                    )
+                    if conversion is None:
+                        raise ValidationError(
+                            "The selected UOM is not a Pricing UOM of this product",
+                            field_errors={"items": "Invalid UOM"},
+                        )
+                    row_factor = Decimal(str(conversion.get("factor_to_base", 1)))
+                    if factor is not None and Decimal(str(factor)) != row_factor:
+                        raise ValidationError(
+                            "factor_to_base does not match the product's Pricing row",
+                            field_errors={"items": "Invalid factor"},
+                        )
+                    factor = row_factor
+            if factor is None:
+                factor = Decimal("1")
+            if factor <= 0:
+                raise ValidationError("factor_to_base must be greater than zero", field_errors={"items": "Invalid factor"})
+            base_quantity = _q4(Decimal(item.quantity) * factor)
+            if base_quantity <= 0:
+                raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
+            base_unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
+            line_total = (Decimal(item.quantity) * Decimal(item.unit_cost)).quantize(TWO, rounding=ROUND_HALF_UP)
+            line_uom_symbol = (
+                item.uom_symbol
+                or (product.uom_ref.symbol if item.uom_id is None and product.uom_ref else None)
+            )
+            row = StockTransactionItem(
+                stock_transaction_id=transaction.id,
+                product_id=item.product_id,
+                product_ref=product,
+                quantity=base_quantity,
+                unit_cost=base_unit_cost,
+                batch_no=item.batch_no,
+                expiry_date=item.expiry_date,
+                uom_symbol=line_uom_symbol,
+                line_total=line_total,
+            )
+            item_rows.append(row)
+            self.session.add(row)
+            batch_lot = await batch_service.batch_in(
+                self.session,
+                product_id=item.product_id,
+                batch_no=item.batch_no,
+                expiry_date=item.expiry_date,
+                quantity_base=base_quantity,
+                unit_cost_per_base=base_unit_cost,
+                supplier_id=transaction.supplier_id,
+                document_no=transaction.document_no,
+            )
+            await apply_stock_movement(
+                self.session,
+                product_id=item.product_id,
+                movement_type="STOCK_IN",
+                quantity_delta=base_quantity,
+                unit_cost=base_unit_cost,
+                reference_type="stock_transaction",
+                reference_id=transaction.id,
+                created_by=actor.id,
+                document_no=transaction.document_no,
+                batch_no=item.batch_no,
+                batch_id=batch_lot.id if (item.batch_no or "").strip() else None,
+                expiry_date=item.expiry_date,
+                allow_negative=negative_ok,
+                uom_symbol=line_uom_symbol,
+            )
+            total += line_total
+
+        subtotal = total.quantize(TWO, rounding=ROUND_HALF_UP)
+        discount = _q2(payload.discount_amount or 0)
+        tax = _q2(payload.tax_amount or 0)
+        if discount > subtotal:
+            raise ValidationError(
+                "Discount cannot exceed the line subtotal",
+                field_errors={"discount_amount": "Discount exceeds subtotal"},
+            )
+        new_total = (subtotal - discount + tax).quantize(TWO, rounding=ROUND_HALF_UP)
+
+        transaction.transaction_date = self._resolve_date(payload.transaction_date)
+        transaction.reference_no = payload.reference_no
+        transaction.note = payload.note
+        transaction.discount_amount = discount
+        transaction.tax_amount = tax
+        transaction.currency = payload.currency
+        transaction.exchange_rate = payload.exchange_rate
+
+        # 3) Recalculate the outstanding supplier debt (payments stay immutable).
+        debt_result = await self.session.execute(
+            select(SupplierDebt)
+            .where(SupplierDebt.stock_transaction_id == transaction.id)
+            .with_for_update()
+        )
+        debt = debt_result.scalars().first()
+        existing_paid = _q2(debt.paid_amount) if debt is not None else _q2(old_total)
+        paid = max(Decimal("0.00"), min(existing_paid, new_total))
+        outstanding = new_total - paid
+        if outstanding > 0 and transaction.supplier_id is None:
+            raise ValidationError(
+                "Full payment is required when no supplier is selected",
+                field_errors={"paid_amount": "Full payment required"},
+            )
+        if debt is not None:
+            debt.original_amount = new_total
+            debt.paid_amount = paid
+            debt.remaining_amount = outstanding
+            debt.status = "PAID" if outstanding == 0 else ("PARTIAL" if paid > 0 else "UNPAID")
+            debt.currency = transaction.currency
+        elif outstanding > 0:
+            from app.modules.suppliers import create_supplier_debt_for_stock_in
+
+            debt = await create_supplier_debt_for_stock_in(
+                self.session,
+                supplier_id=transaction.supplier_id,
+                stock_transaction_id=transaction.id,
+                document_no=transaction.document_no,
+                original_amount=new_total,
+                paid_amount=paid,
+                currency=transaction.currency,
+            )
+
+        await record_audit(
+            self.session,
+            action="stock_in_update",
+            module="stock",
+            user_id=actor.id,
+            entity_type="stock_transaction",
+            entity_id=transaction.id,
+            new_values={
+                "document_no": transaction.document_no,
+                "subtotal": str(subtotal),
+                "discount": str(discount),
+                "tax": str(tax),
+                "total": str(new_total),
+                "paid": str(paid),
+            },
+        )
+        await self.session.commit()
+        return self._operation_out(transaction, items=item_rows, total_amount=new_total, paid_amount=paid, debt=debt)
+
     async def purchase_return(self, stock_transaction_id: uuid.UUID, payload, *, actor: User):
         """Return to supplier (spec: Purchase Return Transaction).
 

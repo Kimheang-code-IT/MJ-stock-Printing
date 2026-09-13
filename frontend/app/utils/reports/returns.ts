@@ -53,6 +53,34 @@ export function buildReturnLines(doc: AppRecord | null | undefined, kind: Return
   }).filter(line => line.returnableQty > 0 && line.lineId)
 }
 
+/**
+ * Build Purchase Edit line drafts from an original purchase document: every
+ * line with its original quantity, unit cost, batch/expiry and UOM so the
+ * purchase can be edited and re-saved via PATCH.
+ */
+export function buildPurchaseEditLines(
+  doc: AppRecord | null | undefined,
+  productById: Map<string, AppRecord> = new Map(),
+): PurchaseReturnLineDraft[] {
+  return documentLines(doc).map((line) => {
+    const product = productById.get(String(line.productId || '')) || null
+    const qty = roundMoney(Number(line.quantity || 0))
+    const cost = Number(line.price || line.unitCost || 0)
+    return {
+      lineId: String(line.id || ''),
+      name: String(line.name || product?.name || ''),
+      productId: String(line.productId || ''),
+      batchNo: String(line.batchNo || ''),
+      expiryDate: String(line.expiryDate || ''),
+      uomId: String(product?.uomId || ''),
+      quantity: qty,
+      unitAmount: cost,
+      returnableQuantity: qty,
+      amount: roundMoney(qty * cost),
+    }
+  }).filter(line => line.lineId && line.productId)
+}
+
 export function documentHasReturnableLines(doc: AppRecord | null | undefined): boolean {
   return buildReturnLines(doc, 'sale').length > 0
 }
@@ -74,4 +102,50 @@ export function validateReturnLines(lines: ReturnLineDraft[]): string | null {
     if (qty > line.returnableQty + 1e-9) return 'over'
   }
   return null
+}
+
+/** One fixed original purchase line for Purchase Return mode. */
+export type PurchaseReturnLineDraft = {
+  lineId: string
+  name: string
+  productId: string
+  batchNo: string
+  expiryDate: string
+  uomId: string
+  quantity: number
+  unitAmount: number
+  returnableQuantity: number
+  amount: number
+}
+
+/**
+ * Build Purchase Return line drafts from an original purchase document:
+ * only lines that still have a returnable quantity, carrying the original
+ * batch, expiry, UOM and unit cost. Quantity defaults to the full returnable
+ * amount (the user may reduce it before submitting).
+ */
+export function buildPurchaseReturnLines(
+  doc: AppRecord | null | undefined,
+  productById: Map<string, AppRecord> = new Map(),
+): PurchaseReturnLineDraft[] {
+  return documentLines(doc)
+    .filter(line => Number(line.returnableQuantity || 0) > 0)
+    .map((line) => {
+      const product = productById.get(String(line.productId || '')) || null
+      const qty = roundMoney(Number(line.returnableQuantity || 0))
+      const cost = Number(line.price || line.unitCost || 0)
+      return {
+        lineId: String(line.id || ''),
+        name: String(line.name || product?.name || ''),
+        productId: String(line.productId || ''),
+        batchNo: String(line.batchNo || ''),
+        expiryDate: String(line.expiryDate || ''),
+        uomId: String(product?.uomId || ''),
+        quantity: qty,
+        unitAmount: cost,
+        returnableQuantity: qty,
+        amount: roundMoney(qty * cost),
+      }
+    })
+    .filter(line => line.lineId)
 }

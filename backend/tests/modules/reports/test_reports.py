@@ -381,6 +381,142 @@ async def test_debt_reports_rows_filters_and_unpaid_inclusion(client):
 
 
 @pytest.mark.asyncio
+async def test_debt_reports_currency_filter(client):
+    """Optional document-currency filter keeps USD and KHR rows separate on
+    both debt reports (spec 2.1.10) and rejects unknown codes."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    tag = _uuid.uuid4().hex[:6]
+
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"REPC-{tag}", "name": "Rep Cur Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={
+                "sku": f"REPC-{tag}",
+                "name": f"Rep Cur {tag}",
+                "category_id": category["id"],
+                "uom_id": str(DEFAULT_UOM_ID),
+                "selling_price": "10.00",
+            },
+            headers=headers,
+        )
+    ).json()["data"]
+    customer = (
+        await client.post(
+            "/api/v1/customers", json={"code": f"REPC-C-{tag}", "name": f"Rep Cur Customer {tag}"}, headers=headers
+        )
+    ).json()["data"]
+    supplier = (
+        await client.post(
+            "/api/v1/suppliers", json={"code": f"REPC-S-{tag}", "name": f"Rep Cur Supplier {tag}"}, headers=headers
+        )
+    ).json()["data"]
+
+    # Stock the product so the debt sales below can be completed.
+    opening_stock = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "100.00",
+            "items": [{"product_id": product["id"], "quantity": "20", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert opening_stock.status_code == 201, opening_stock.text
+
+    # Customer: one USD partial debt and one KHR unpaid debt for the same party.
+    usd_sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": customer["id"],
+            "amount_received": "5.00",
+            "items": [{"product_id": product["id"], "quantity": "2"}],
+        },
+        headers=headers,
+    )
+    assert usd_sale.status_code == 201, usd_sale.text
+    khr_sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": customer["id"],
+            "amount_received": "0",
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "items": [{"product_id": product["id"], "quantity": "1"}],
+        },
+        headers=headers,
+    )
+    assert khr_sale.status_code == 201, khr_sale.text
+    khr_invoice = khr_sale.json()["data"]["invoice_no"]
+
+    all_customer = await client.get(
+        f"/api/v1/reports/customer-debts?customer_id={customer['id']}", headers=headers
+    )
+    assert {r["currency"] for r in all_customer.json()["data"]} == {"USD", "KHR"}
+
+    khr_only = await client.get(
+        f"/api/v1/reports/customer-debts?customer_id={customer['id']}&currency=KHR", headers=headers
+    )
+    assert khr_only.status_code == 200, khr_only.text
+    assert khr_only.json()["meta"]["total"] == 1
+    assert khr_only.json()["data"][0]["invoice_no"] == khr_invoice
+    assert khr_only.json()["data"][0]["currency"] == "KHR"
+
+    usd_only = await client.get(
+        f"/api/v1/reports/customer-debts?customer_id={customer['id']}&currency=USD", headers=headers
+    )
+    assert usd_only.json()["meta"]["total"] == 1
+    assert all(r["currency"] == "USD" for r in usd_only.json()["data"])
+
+    # Supplier: one USD partial debt and one KHR unpaid debt for the same party.
+    stock_usd = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "supplier_id": supplier["id"],
+            "paid_amount": "5.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert stock_usd.status_code == 201, stock_usd.text
+    stock_khr = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "supplier_id": supplier["id"],
+            "paid_amount": "0",
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "items": [{"product_id": product["id"], "quantity": "5", "unit_cost": "100.00"}],
+        },
+        headers=headers,
+    )
+    assert stock_khr.status_code == 201, stock_khr.text
+
+    khr_supplier = await client.get(
+        f"/api/v1/reports/supplier-debts?supplier_id={supplier['id']}&currency=KHR", headers=headers
+    )
+    assert khr_supplier.json()["meta"]["total"] == 1
+    assert khr_supplier.json()["data"][0]["currency"] == "KHR"
+
+    usd_supplier = await client.get(
+        f"/api/v1/reports/supplier-debts?supplier_id={supplier['id']}&currency=USD", headers=headers
+    )
+    assert usd_supplier.json()["meta"]["total"] == 1
+    assert usd_supplier.json()["data"][0]["currency"] == "USD"
+
+    # Unknown currency code is rejected by the shared validation envelope.
+    invalid = await client.get("/api/v1/reports/customer-debts?currency=EUR", headers=headers)
+    assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_finance_report_reconciles_with_transactions(client, finance_baseline):
     headers = await admin_headers(client)
     await _seed(client, headers)

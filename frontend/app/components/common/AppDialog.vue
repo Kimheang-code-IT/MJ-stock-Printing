@@ -17,6 +17,9 @@ const props = withDefaults(defineProps<{
   /** Icon tone (drives badge color). */
   color?: 'primary' | 'neutral' | 'success' | 'warning' | 'error' | 'info'
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
+  /** Explicit content width. A preset (`sm`…`7xl`, `full`, `max`) or any
+   *  Tailwind width class (e.g. `max-w-[60rem]`). Overrides `size`/`wide`. */
+  width?: string
   /** Wide viewport-scaled dialog: ~70vw on desktop, ~95vw on small screens. */
   wide?: boolean
   /** Allow closing via overlay / Esc / close button. */
@@ -59,14 +62,37 @@ const canClose = computed(() => props.dismissible && !(props.loading && props.pr
 
 const WIDE_CONTENT_CLASS = 'w-[95vw] max-w-[95vw] sm:w-[70vw] sm:max-w-[70vw]'
 
+/** Preset width → content class. Anything else is treated as a raw class. */
+const WIDTH_PRESETS: Record<string, string> = {
+  sm: 'max-w-sm',
+  md: 'max-w-md',
+  lg: 'max-w-lg',
+  xl: 'max-w-xl',
+  '2xl': 'max-w-2xl',
+  '3xl': 'max-w-3xl',
+  '4xl': 'max-w-4xl',
+  '5xl': 'max-w-5xl',
+  '6xl': 'max-w-6xl',
+  '7xl': 'max-w-7xl',
+  // Longest presets: nearly full viewport (mobile → desktop).
+  full: 'w-[95vw] max-w-[95vw] sm:w-[90vw] sm:max-w-[90vw]',
+  max: 'w-[95vw] max-w-[95vw]',
+}
+
+const widthClass = computed(() => {
+  if (!props.width) return ''
+  return WIDTH_PRESETS[props.width] || props.width
+})
+
 const mergedUi = computed<Record<string, unknown>>(() => {
-  if (!props.wide) return props.ui ?? {}
+  const contentClass = widthClass.value || (props.wide ? WIDE_CONTENT_CLASS : '')
+  if (!contentClass) return props.ui ?? {}
   const extra = props.ui?.content
   return {
     ...props.ui,
     content: typeof extra === 'string' && extra
-      ? `${WIDE_CONTENT_CLASS} ${extra}`
-      : WIDE_CONTENT_CLASS,
+      ? `${contentClass} ${extra}`
+      : contentClass,
   }
 })
 

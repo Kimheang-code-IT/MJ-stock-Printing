@@ -58,7 +58,8 @@ Permissions: list/get/options require `category.view` / `uom.view` / `brand.view
 | GET `/stock/operations` | `stock.view` | Purchase/operation documents (type, supplier, date range, status, q) — read model for the purchase list & dialogs |
 | POST `/stock/operations` | current user | Quick single-product operation `type=stock_in\|adjustment\|damage\|expiry` from the Stock list |
 | POST `/stock/in` | `stock.in` | Stock In transaction (lines in pricing UOM, supplier, header discount/tax, document currency `USD`\|`KHR` + exchange rate, paid amount, supplier debt, payment) |
-| POST `/stock/in/{id}/return` | `stock.in` | Purchase return (PRT) against a confirmed Stock In |
+| PATCH `/stock/in/{id}` | `stock.in` | **Edit a confirmed Stock In** (guarded: only `CONFIRMED` docs with no purchase returns). Reverses the original receipt (batch + compensating `PURCHASE_RETURN` movements), re-applies the new lines, recalculates header totals and the outstanding supplier debt (immutable payments kept). Body: `items[]`, `discount_amount`, `tax_amount`, `currency`, `exchange_rate`, `note?`, `reference_no?`, `transaction_date?` |
+| POST `/stock/in/{id}/return` | `stock.in` | Purchase return (PRT) against a confirmed Stock In (endpoint kept; not linked from the UI) |
 | POST `/stock/adjust` | `stock.adjust` | Counted adjustment (system vs actual) |
 | POST `/stock/damage` | `stock.damage` | Damage write-off |
 | POST `/stock/expire` | `stock.expire` | Expiry write-off (product must track expiry) |
@@ -72,8 +73,9 @@ Permissions: list/get/options require `category.view` / `uom.view` / `brand.view
 | GET `/pos/products/barcode/{barcode}` | `pos.access` | Barcode scan lookup |
 | GET `/pos/sales` | `pos.access` | Sales list (q=invoice no, customer, date range) |
 | POST `/pos/sales` · **`POST /pos/sales/complete`** | `pos.access` | Complete sale atomically (the SPA uses `/complete`) |
-| GET `/pos/sales/{id}` | `pos.access` | Sale detail + items |
-| POST `/pos/sales/{id}/return` | `pos.access` | Sale return (SRT), optional restock |
+| PATCH `/pos/sales/{id}` | `pos.access` | **Edit a completed sale** (guarded: only `COMPLETED` with no returns). Reverses the original stock (compensating `SALE_RETURN` movements restored to the original batches) and re-applies the new lines/prices/discounts; customer and immutable payments stay, the customer debt is recalculated. Body: `items[]`, `discount`, `delivery_price`, `currency`, `exchange_rate`, `note?`, `sale_date?` |
+| GET `/pos/sales/{id}` | `pos.access` | Sale detail + items; loaded into POS **edit mode** (`/pos?editSaleId=<id>`) and legacy **return mode** (`/pos?returnSaleId=<id>`) |
+| POST `/pos/sales/{id}/return` | `pos.access` | Sale return (SRT), optional restock (endpoint kept; not linked from the UI) |
 | POST `/pos/sales/{id}/delivery-notes` | `delivery.create` | Create delivery note from the sale |
 | GET `/pos/sales/{id}/receipt` | `pos.access` | JSON print payload for the HTML printer (no PDF endpoint exists — invoices print from the browser only). Carries invoice no, date, customer + phone/address, cashier, payment method, document `currency` + `exchange_rate` (preserved from sale time), items (UOM/qty/unit price/discount/line total), subtotal/discount/delivery fee/grand total/paid/debt/change, shop info, paper size, exchange-rate display flag, footer |
 
@@ -122,10 +124,10 @@ CRUD (`supplier.*`), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/paymen
 |---|---|---|
 | GET `/reports/sales` + `/sales/export` | `report.sales` | Sales report (+CSV) |
 | GET `/reports/purchase` and `/reports/purchases` (+ `/export` each) | `report.purchase` | Purchase report (plural = SPA alias) |
-| GET `/reports/sale-returns` | `report.sales` | Customer-return history (immutable `sale_returns` documents) — page `/reports/customer-returns` |
-| GET `/reports/purchase-returns` | `report.purchase` | Supplier-return history (immutable `purchase_returns` documents) — page `/reports/supplier-returns` |
-| GET `/reports/customer-debts` (+ export) | `report.customer_debt` | Customer debt report |
-| GET `/reports/supplier-debts` (+ export) | `report.supplier_debt` | Supplier debt report |
+| GET `/reports/sale-returns` | `report.sales` | Customer-return history (immutable `sale_returns` documents). No dedicated page; history stays server-side. The Sales Report row action is now **Edit** (not Return) |
+| GET `/reports/purchase-returns` | `report.purchase` | Supplier-return history (immutable `purchase_returns` documents). No dedicated page; history stays server-side. The Purchase Report row action is now **Edit** (not Return) |
+| GET `/reports/customer-debts` (+ export) | `report.customer_debt` | Customer debt report; optional `currency=USD\|KHR` filter (USD and KHR rows are never mixed) |
+| GET `/reports/supplier-debts` (+ export) | `report.supplier_debt` | Supplier debt report; optional `currency=USD\|KHR` filter |
 | GET `/reports/finance` | `report.finance` | Finance summary (formulas in [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md) §14) |
 | GET `/reports/finance/summary` · `/finance/entries` | `report.finance` | Summary cards / income & expense ledger |
 | POST `/reports/finance/expenses` | `report.finance` **and** `expense.create` | Add Expense modal |

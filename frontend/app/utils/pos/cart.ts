@@ -19,6 +19,8 @@ export type PosCartLine = {
   unitPrice: number
   discountPercent: number
   quantity: number
+  /** POS return mode: the original sale-item id this line returns. */
+  saleItemId?: string
 }
 
 export function lineGross(line: PosCartLine): number {

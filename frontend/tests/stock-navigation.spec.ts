@@ -85,8 +85,6 @@ describe('stock movements table (read-only history)', () => {
       'Sale',
       'Sale Return',
       'Purchase Return',
-      'Adjustment Increase',
-      'Adjustment Decrease',
       'Damage',
       'Expiry',
     ])

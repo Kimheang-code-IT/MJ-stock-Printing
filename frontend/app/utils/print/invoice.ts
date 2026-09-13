@@ -146,10 +146,10 @@ export function buildSaleInvoiceHtml(
     <tr>
       <td class="num">${index + 1}</td>
       <td class="product">${escapeHtml(line.name)}</td>
-      <td>${escapeHtml(line.uom || '—')}</td>
-      <td class="num">${escapeHtml(line.quantity)}</td>
-      <td class="num">${money(line.unitPrice)}</td>
-      <td class="num">${escapeHtml(line.discountPercent || 0)}%</td>
+      <td class="center">${escapeHtml(line.uom || '—')}</td>
+      <td class="num center">${escapeHtml(line.quantity)}</td>
+      <td class="num center">${money(line.unitPrice)}</td>
+      <td class="num center">${escapeHtml(line.discountPercent || 0)}%</td>
       <td class="num">${money(lineNet(line))}</td>
     </tr>`).join('')
 
@@ -181,35 +181,39 @@ export function buildSaleInvoiceHtml(
     ${colgroup}
     <thead>
       <tr>
-        <th>ល.រ<span>N°</span></th>
+        <th class="center">ល.រ<span>N°</span></th>
         <th>មុខទំនិញ<span>Product</span></th>
-        <th>ឯកតា<span>Unit</span></th>
-        <th class="num">ចំនួន<span>Qty</span></th>
-        <th class="num">តម្លៃ<span>Price</span></th>
-        <th class="num">បញ្ចុះតម្លៃ<span>Discount</span></th>
+        <th class="center">ឯកតា<span>Unit</span></th>
+        <th class="num center">ចំនួន<span>Qty</span></th>
+        <th class="num center">តម្លៃ<span>Price</span></th>
+        <th class="num center">បញ្ចុះតម្លៃ<span>Discount</span></th>
         <th class="num">តម្លៃសរុប<span>Amount</span></th>
       </tr>
     </thead>
     <tbody>${rows}${emptyInvoiceRows(lines.length, paperSize)}</tbody>
   </table>
-  <div class="totals">
-    <table class="summary">
-      ${colgroup}
-      ${summaryRow('ទឹកប្រាក់សរុប / Total Amount', money(total))}
-      ${summaryRow('ខ្វះមុន', money(input.previousDebtAmount))}
-      ${summaryRow('តម្លៃដឹកជញ្ជូន_____/_____/_____', money(input.deliveryPrice))}
-      ${summaryRow('បានទូទាត់_____/_____/_____', money(input.depositAmount))}
-      ${summaryRow('ខ្វះសរុប', money(input.outstandingAmount), true)}
-    </table>
-  </div>
-  <div class="signs"> 
-    <div class="sign">
-      <div class="line"></div>
-      <p>អ្នកទិញ / Buyer</p>
+  <!-- Totals + signatures stay together on one page: page 1 for a short sale,
+       the LAST page when the product lines overflow to 2-3 pages. -->
+  <div class="doc-footer">
+    <div class="totals">
+      <table class="summary">
+        ${colgroup}
+        ${summaryRow('ទឹកប្រាក់សរុប / Total Amount', money(total))}
+        ${summaryRow('ខ្វះមុន', money(input.previousDebtAmount))}
+        ${summaryRow('តម្លៃដឹកជញ្ជូន_____/_____/_____', money(input.deliveryPrice))}
+        ${summaryRow('បានទូទាត់_____/_____/_____', money(input.depositAmount))}
+        ${summaryRow('ខ្វះសរុប', money(input.outstandingAmount), true)}
+      </table>
     </div>
-    <div class="sign">
-      <div class="line"></div>
-      <p>អ្នកលក់ / Seller</p>
+    <div class="signs">
+      <div class="sign">
+        <div class="line"></div>
+        <p>អ្នកទិញ / Buyer</p>
+      </div>
+      <div class="sign">
+        <div class="line"></div>
+        <p>អ្នកលក់ / Seller</p>
+      </div>
     </div>
   </div>
 </article>`

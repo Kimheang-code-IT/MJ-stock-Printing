@@ -45,10 +45,7 @@ const {
   canNavigateNext,
   navigatePrevious,
   navigateNext,
-  attachments,
-  tags,
   metaOwner,
-  metaAssignee,
   setChromeField,
 } = useModuleRecordChrome({ module, isCreate, recordId, model })
 
@@ -143,18 +140,26 @@ onBeforeUnmount(clear)
 usePageSeo({ title: () => title.value })
 
 const related = computed(() => module.value && !isCreate.value ? store.related(module.value, model.value) : [])
+/** Exact backend code for a document action (falls back to `{module}.{action}`). */
+function moduleActionPermission(action: 'create' | 'edit' | 'delete'): string {
+  const moduleConfig = module.value
+  if (!moduleConfig) return ''
+  const explicit = moduleConfig.actionPermissions?.[action]
+  if (explicit) return explicit
+  const prefix = moduleConfig.permission.replace(/\.(view|manage|access)$/, '')
+  return prefix === moduleConfig.permission ? '' : `${prefix}.${action}`
+}
 const readOnly = computed(() => {
   if (!module.value) return true
   if (module.value.readOnly) return true
   if (module.value.collection === 'roles' && model.value.name === 'SuperAdmin') return true
-  const prefix = module.value.permission.replace(/\.view$/, '')
-  return !auth.canAccessPage(`${prefix}.${isCreate.value ? 'create' : 'edit'}`)
+  return !auth.canAccessPage(moduleActionPermission(isCreate.value ? 'create' : 'edit'))
 })
 const canMutateRecord = computed(() => Boolean(module.value) && !readOnly.value && !isCreate.value && Boolean(model.value.id))
 const canDeleteRecord = computed(() => {
   if (!module.value || isCreate.value || !model.value.id) return false
   if (module.value.collection === 'roles' && (model.value.isSystem || Number(model.value.userCount || 0) > 0)) return false
-  return auth.canAccessPage(`${module.value.permission.replace(/\.view$/, '')}.delete`)
+  return auth.canAccessPage(moduleActionPermission('delete'))
 })
 const deactivationOnly = computed(() => module.value?.group === 'master' || module.value?.collection === 'documentSequences')
 
@@ -475,21 +480,15 @@ async function deleteRecord() {
       :can-navigate-previous="canNavigatePrevious"
       :can-navigate-next="canNavigateNext"
       :list-to="listTo"
-      :attachments="attachments"
-      :current-user="currentUser"
       :meta-title="title"
       :meta-subtitle="moduleSingular(module)"
       :meta-icon="module.icon"
-      :meta-status="String(model.status || '')"
       :meta-owner="metaOwner"
-      :meta-assignee="metaAssignee"
-      :meta-tags="tags"
       :meta-created-at="String(model.createdAt || '')"
       :meta-updated-at="String(model.updatedAt || '')"
       :more-items="moreItems"
       :can-export="false"
       @update:active-tab="activeTab = $event"
-      @update:attachments="setChromeField('attachments', $event)"
       @save="save()"
       @refresh="() => { void load() }"
       @navigate-previous="navigatePrevious"

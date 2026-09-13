@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ titleKey: 'app.pages.supplierDebtReport', permission: 'reports.view' })
+definePageMeta({ titleKey: 'app.pages.supplierDebtReport', permission: 'report.supplier_debt' })
 </script>
 
 <template>

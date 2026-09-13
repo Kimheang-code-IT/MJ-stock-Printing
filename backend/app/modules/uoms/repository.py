@@ -35,10 +35,6 @@ class UOMRepository:
         result = await self.session.execute(select(UOM).where(UOM.code == code))
         return result.scalar_one_or_none()
 
-    async def get_default(self) -> UOM | None:
-        """PCS is the canonical default UOM used for backfills."""
-        return await self.get_by_code("PCS")
-
     async def count_products(self, uom_id: uuid.UUID) -> int:
         result = await self.session.execute(
             select(func.count()).select_from(Product).where(Product.uom_id == uom_id)

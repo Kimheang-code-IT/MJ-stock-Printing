@@ -23,10 +23,10 @@ import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/lis
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/module/audit-logs'
+import { selectedDebtsShareScope } from '~/utils/reports/debts'
 import { usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
 import { STOCK_OPERATION_META, STOCK_OPERATION_TYPES, type StockHistoryKind, type StockOperationType } from '~/config/pos-options'
-import { documentHasReturnableLines, type ReturnDocumentKind } from '~/utils/reports/returns'
 import type { DebtPaymentKind } from '~/components/reports/DebtPaymentDialog.vue'
 
 const { module, route } = useModuleRoute()
@@ -41,6 +41,11 @@ const posCommands = usePosCommands()
 const { localization } = useAppLocalization()
 
 const q = ref('')
+/** Debounced copy of the search box: the list filters instantly (in-memory)
+ *  but the server refetch waits so typing does not fire one request per key. */
+const debouncedQ = ref('')
+const applyDebouncedQ = useDebounceFn((value: string) => { debouncedQ.value = value }, 300)
+watch(q, (value) => { applyDebouncedQ(value) })
 const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
 const filters = reactive<Record<string, string[]>>({})
 const rowSelection = ref<Record<string, boolean>>({})
@@ -54,10 +59,6 @@ const stockOperationNote = ref('')
 const stockOperationBusy = ref(false)
 const dateFrom = ref('')
 const dateTo = ref('')
-const returnOpen = ref(false)
-const returnKind = ref<ReturnDocumentKind>('sale')
-const returnDocument = ref<AppRecord | null>(null)
-const returnBusy = ref(false)
 const documentDetailOpen = ref(false)
 const documentDetailKind = ref<'sale' | 'purchase'>('sale')
 const documentDetailRecord = ref<AppRecord | null>(null)
@@ -65,61 +66,74 @@ const debtPayOpen = ref(false)
 const debtPayKind = ref<DebtPaymentKind>('customer')
 const debtPayRow = ref<AppRecord | null>(null)
 const debtPayBusy = ref(false)
+const debtSelectedOpen = ref(false)
+const debtSelectedKind = ref<DebtPaymentKind>('customer')
+const debtSelectedRows = ref<AppRecord[]>([])
 
 const current = computed(() => module.value)
 const pending = computed(() => Boolean(current.value && store.isLoading(current.value.collection)))
 const isTableOnly = computed(() => Boolean(current.value?.tableOnly))
-/** Table-only reports that still need row actions (Return / Pay). */
+/** Table-only debt reports still support checkbox selection (multi-pay). */
+const supportsSelection = computed(() =>
+  !isTableOnly.value
+  || current.value?.collection === 'customerDebts'
+  || current.value?.collection === 'supplierDebts',
+)
+/** Table-only reports that still need row actions (Edit / Pay). */
 const showRowActions = computed(() => {
   if (!isTableOnly.value) return true
   const collection = current.value?.collection
-  if (collection === 'sales') return canReturnSale.value
-  if (collection === 'stockIns') return canReturnPurchase.value
-  if (collection === 'customerDebts') return canPayCustomerDebt.value
-  if (collection === 'supplierDebts') return canPaySupplierDebt.value
+  if (collection === 'sales') return canEditSale.value
+  if (collection === 'stockIns') return canEditPurchase.value
+  if (collection === 'customerDebts') return true
+  if (collection === 'supplierDebts') return true
   return false
 })
-const permissionPrefix = computed(() => current.value?.permission.replace(/\.view$/, '') || '')
+/** Exact backend permission code for a mutation action (falls back to the
+ *  legacy `{module}.{action}` shape when a module has no explicit code). */
+function actionPermission(action: 'create' | 'edit' | 'delete' | 'operate'): string {
+  const module = current.value
+  if (!module) return ''
+  const explicit = module.actionPermissions?.[action]
+  if (explicit) return explicit
+  if (action === 'create' && module.createPermission) return module.createPermission
+  const prefix = module.permission.replace(/\.(view|manage|access)$/, '')
+  return prefix === module.permission ? '' : `${prefix}.${action}`
+}
 const canCreate = computed(() => Boolean(
   current.value?.canCreate
-  // createPermission lets report modules route Create to a /new flow with
-  // the operation's own permission (Purchase Report â†’ stock.in).
-  && auth.canAccessPage(current.value.createPermission || `${permissionPrefix.value}.create`),
+  && auth.canAccessPage(actionPermission('create')),
 ))
 const canEdit = computed(() => Boolean(
   current.value
   && !current.value.readOnly
-  && auth.canAccessPage(`${permissionPrefix.value}.edit`),
+  && auth.canAccessPage(actionPermission('edit')),
 ))
 const canDelete = computed(() => Boolean(
   current.value
   && !current.value.readOnly
-  && auth.canAccessPage(`${permissionPrefix.value}.delete`),
+  && auth.canAccessPage(actionPermission('delete')),
 ))
 const canOperate = computed(() => Boolean(
   current.value
   && !current.value.readOnly
-  && (auth.canAccessPage(`${permissionPrefix.value}.operate`) || auth.canAccessPage(`${permissionPrefix.value}.edit`)),
+  && (auth.canAccessPage(actionPermission('operate')) || auth.canAccessPage(actionPermission('edit'))),
 ))
-// Backend returns require pos.access (PosService.return_sale) â€” the UI
-// check only hides the action.
-const canReturnSale = computed(() =>
+// Editing a sale reuses the POS screen (PATCH /pos/sales/{id}); editing a
+// purchase reuses the purchase entry screen (PATCH /stock/in/{id}).
+const canEditSale = computed(() =>
   auth.canAccessPage('pos.access'),
 )
-const canReturnPurchase = computed(() =>
+const canEditPurchase = computed(() =>
   auth.canAccessPage('stock.in'),
 )
 const canPayCustomerDebt = computed(() =>
-  auth.canAccessPage('customers.edit')
-  || auth.canAccessPage('customers.operate')
-  || auth.canAccessPage('reports.view')
-  || auth.canAccessPage('ALL_PAGES'),
+  auth.canAccessPage('customer.debt.pay')
+  || auth.canAccessPage('report.customer_debt'),
 )
 const canPaySupplierDebt = computed(() =>
-  auth.canAccessPage('suppliers.edit')
-  || auth.canAccessPage('suppliers.operate')
-  || auth.canAccessPage('reports.view')
-  || auth.canAccessPage('ALL_PAGES'),
+  auth.canAccessPage('supplier.debt.pay')
+  || auth.canAccessPage('report.supplier_debt'),
 )
 const deactivationOnly = computed(() => current.value?.group === 'master' || current.value?.collection === 'documentSequences')
 const dateField = computed(() => {
@@ -144,9 +158,9 @@ const result = computed(() => {
       stockInQty: stockTotalsByProduct.value.get(String(row.id))?.stockIn ?? 0,
       stockOutQty: stockTotalsByProduct.value.get(String(row.id))?.stockOut ?? 0,
       damageQty: stockTotalsByProduct.value.get(String(row.id))?.damage ?? 0,
-      uom: String(row.uom || uomById(String(row.uomId))?.name || ''),
-      uomSymbol: String(row.uomSymbol || uomById(String(row.uomId))?.symbol || ''),
-      brand: String(row.brand || brandById(String(row.brandId))?.name || ''),
+      uom: String(row.uom || uomLookup.value.get(String(row.uomId))?.name || ''),
+      uomSymbol: String(row.uomSymbol || uomLookup.value.get(String(row.uomId))?.symbol || ''),
+      brand: String(row.brand || brandLookup.value.get(String(row.brandId))?.name || ''),
     }))
     return { rows: all, total: queried.total, all }
   }
@@ -167,11 +181,13 @@ const result = computed(() => {
   return queried
 })
 
-/** UOM lookup for product display enrichment. */
-const uomById = (id: string) => store.list('uoms').find(uom => String(uom.id) === id)
+/** UOM lookup for product display enrichment (O(1) — was O(n) per row). */
+const uomLookup = computed(() =>
+  new Map(store.list('uoms').map(uom => [String(uom.id), uom])))
 
-/** Brand lookup for product display enrichment. */
-const brandById = (id: string) => store.list('brands').find(brand => String(brand.id) === id)
+/** Brand lookup for product display enrichment (O(1) — was O(n) per row). */
+const brandLookup = computed(() =>
+  new Map(store.list('brands').map(brand => [String(brand.id), brand])))
 
 /** Products linked to each brand â€” used to keep the brand list informative. */
 const brandProductCounts = computed(() => {
@@ -238,12 +254,29 @@ function onStockHistorySaved() {
 }
 
 const selectedIds = computed(() => listTableSelectedIds(rowSelection.value))
+/** Selected open debt rows on the customer/supplier debt reports. */
+const selectedDebtRows = computed<AppRecord[]>(() => {
+  const collection = current.value?.collection
+  if (collection !== 'customerDebts' && collection !== 'supplierDebts') return []
+  const ids = new Set(selectedIds.value)
+  return result.value.all.filter(row => ids.has(String(row.id)) && Number(row.remainingAmount || 0) > 0)
+})
+const canPaySelectedDebts = computed(() => {
+  if (!selectedDebtRows.value.length) return false
+  return current.value?.collection === 'customerDebts' ? canPayCustomerDebt.value : canPaySupplierDebt.value
+})
 
 const hasActiveFilters = computed(() => Boolean(
   Object.values(filters).some(value => isFilterValueActive(value))
   || isFilterValueActive(dateFrom.value)
   || isFilterValueActive(dateTo.value),
 ))
+
+/** Optional document-currency filter of the debt reports (server-side too). */
+const currencyFilter = computed(() => parseFilterQuery(filters.currency)[0] || '')
+const isDebtReport = computed(() =>
+  current.value?.collection === 'customerDebts' || current.value?.collection === 'supplierDebts',
+)
 
 const visibleFilters = computed(() => limitFilterSelects(
   current.value?.filters || [],
@@ -283,9 +316,10 @@ watch([q, filters, dateFrom, dateTo], () => {
 function reloadModuleData() {
   if (!import.meta.client || !current.value) return
   void store.fetchList(current.value.collection, {
-    q: q.value || undefined,
+    q: debouncedQ.value || undefined,
     startDate: dateFrom.value || undefined,
     endDate: dateTo.value || undefined,
+    currency: isDebtReport.value && currencyFilter.value ? currencyFilter.value : undefined,
   })
   if (current.value.collection === 'products') {
     void store.fetchList('stockMovements')
@@ -300,9 +334,13 @@ onMounted(() => {
   reloadModuleData()
 })
 
-watch([current, q, dateFrom, dateTo], () => {
+watch([current, debouncedQ, dateFrom, dateTo], () => {
   reloadModuleData()
 })
+
+// The debt-report currency filter is applied server-side too, so refetch when
+// it changes (other toolbar filters stay client-side).
+watch(currencyFilter, () => reloadModuleData())
 
 function recordPath(id: unknown) {
   if (!current.value) return '/'
@@ -345,43 +383,43 @@ const pageSummary = computed(() =>
 function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   const collection = current.value?.collection
   if (collection === 'sales') {
-    if (!canReturnSale.value) return []
+    if (!canEditSale.value) return []
     return [[{
-      label: t('app.reports.return'),
-      icon: 'i-lucide-undo-2',
-      color: 'warning',
-      disabled: !documentHasReturnableLines(row as AppRecord),
-      onSelect: () => openReturn('sale', row as AppRecord),
+      label: t('app.reports.edit'),
+      icon: 'i-lucide-pencil',
+      color: 'primary',
+      // Edit reuses the POS screen with the invoice loaded (PATCH on save).
+      onSelect: () => {
+        void navigateTo(`/pos?editSaleId=${encodeURIComponent(String(row.id || ''))}`)
+      },
     }]]
   }
   if (collection === 'stockIns') {
-    if (!canReturnPurchase.value) return []
+    if (!canEditPurchase.value) return []
+    const purchaseNo = String(row.purchaseNo || '')
     return [[{
-      label: t('app.reports.return'),
-      icon: 'i-lucide-undo-2',
-      color: 'warning',
-      disabled: !documentHasReturnableLines(row as AppRecord),
-      onSelect: () => openReturn('purchase', row as AppRecord),
+      label: t('app.reports.edit'),
+      icon: 'i-lucide-pencil',
+      color: 'primary',
+      // Edit reuses the Purchase screen with the document loaded (PATCH on save).
+      onSelect: () => {
+        void navigateTo(`/reports/purchases/new?editPurchaseId=${encodeURIComponent(String(row.id || ''))}&purchaseNo=${encodeURIComponent(purchaseNo)}`)
+      },
     }]]
   }
-  if (collection === 'customerDebts') {
-    if (!canPayCustomerDebt.value) return []
+  if (collection === 'customerDebts' || collection === 'supplierDebts') {
+    const isCustomer = collection === 'customerDebts'
+    const kind: DebtPaymentKind = isCustomer ? 'customer' : 'supplier'
+    const debtRow = row as AppRecord
+    const canPay = isCustomer ? canPayCustomerDebt.value : canPaySupplierDebt.value
+    if (!canPay) return []
+    // Debt surfaces expose the payment dialog only.
     return [[{
       label: t('app.reports.pay'),
       icon: 'i-lucide-hand-coins',
       color: 'success',
-      disabled: Number(row.remainingAmount || 0) <= 0,
-      onSelect: () => openDebtPayment('customer', row as AppRecord),
-    }]]
-  }
-  if (collection === 'supplierDebts') {
-    if (!canPaySupplierDebt.value) return []
-    return [[{
-      label: t('app.reports.pay'),
-      icon: 'i-lucide-hand-coins',
-      color: 'success',
-      disabled: Number(row.remainingAmount || 0) <= 0,
-      onSelect: () => openDebtPayment('supplier', row as AppRecord),
+      disabled: Number(debtRow.remainingAmount || 0) <= 0,
+      onSelect: () => openDebtPayment(kind, debtRow),
     }]]
   }
   const items: DropdownMenuItem[] = [
@@ -535,25 +573,18 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   }))
 
   return [
-    ...(!isTableOnly.value ? [listTableSelectColumn<Record<string, unknown>>(t)] : []),
+    ...(supportsSelection.value ? [listTableSelectColumn<Record<string, unknown>>(t)] : []),
     ...dataColumns,
     ...(showRowActions.value
       ? [listTableRowMetaColumn<Record<string, unknown>>({
           summary: pageSummary.value,
           items: rowMenuItems,
           loadingId: busyId.value
-            || (returnBusy.value ? String(returnDocument.value?.id || '') : '')
             || (debtPayBusy.value ? String(debtPayRow.value?.id || '') : ''),
         })]
       : []),
   ]
 })
-
-function openReturn(kind: ReturnDocumentKind, row: AppRecord) {
-  returnKind.value = kind
-  returnDocument.value = row
-  returnOpen.value = true
-}
 
 function openDebtPayment(kind: DebtPaymentKind, row: AppRecord) {
   debtPayKind.value = kind
@@ -565,51 +596,6 @@ function openDocumentDetail(row: AppRecord, kind: 'sale' | 'purchase') {
   documentDetailKind.value = kind
   documentDetailRecord.value = row
   documentDetailOpen.value = true
-}
-
-async function submitReturn(payload: {
-  kind: ReturnDocumentKind
-  documentId: string
-  reason: string
-  lines: Array<{ lineId: string, quantity: number, restock: boolean }>
-}) {
-  returnBusy.value = true
-  busyId.value = payload.documentId
-  try {
-    if (payload.kind === 'sale') {
-      await posCommands.returnSale({
-        saleId: payload.documentId,
-        reason: payload.reason,
-        lines: payload.lines,
-      })
-    }
-    else {
-      await posCommands.returnPurchase({
-        stockInId: payload.documentId,
-        reason: payload.reason,
-        lines: payload.lines.map(line => ({ lineId: line.lineId, quantity: line.quantity })),
-      })
-    }
-    if (current.value) await store.fetchList(current.value.collection)
-    if (payload.kind === 'sale') await store.fetchList('products')
-    else {
-      await store.fetchList('products')
-      await store.fetchList('stockIns')
-    }
-    returnOpen.value = false
-    toast.add({ title: t('app.reports.returnSaved'), color: 'success' })
-  }
-  catch (error: unknown) {
-    toast.add({
-      title: t('app.reports.returnFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
-  }
-  finally {
-    returnBusy.value = false
-    busyId.value = ''
-  }
 }
 
 async function submitDebtPayment(payload: {
@@ -661,11 +647,73 @@ async function submitDebtPayment(payload: {
   }
 }
 
+/** Multi-select payment: settle several open debt documents (one party+currency). */
+function openSelectedDebtPayment() {
+  const collection = current.value?.collection
+  if (collection !== 'customerDebts' && collection !== 'supplierDebts') return
+  const rows = selectedDebtRows.value
+  if (!rows.length) return
+  const kind = collection === 'customerDebts' ? 'customer' : 'supplier'
+  if (!selectedDebtsShareScope(rows, kind)) {
+    toast.add({ title: t('app.reports.paySelectedMixed'), color: 'warning' })
+    return
+  }
+  debtSelectedKind.value = kind
+  debtSelectedRows.value = rows
+  debtSelectedOpen.value = true
+}
+
+async function submitSelectedDebtPayment(payload: {
+  amount: number
+  paymentMethod: string
+  reference: string | null
+}) {
+  const collection = current.value?.collection
+  const rows = debtSelectedRows.value
+  if (!collection || !rows.length) return
+  const partyId = String(collection === 'customerDebts' ? rows[0]!.customerId : rows[0]!.supplierId)
+  debtPayBusy.value = true
+  try {
+    if (collection === 'customerDebts') {
+      await posCommands.payCustomerDebt({
+        customerId: partyId,
+        amount: payload.amount,
+        paymentMethod: payload.paymentMethod,
+        reference: payload.reference,
+      })
+      await store.fetchList('customerDebts')
+      await store.fetchList('customers')
+    }
+    else {
+      await posCommands.paySupplierDebt({
+        supplierId: partyId,
+        amount: payload.amount,
+        paymentMethod: payload.paymentMethod,
+        reference: payload.reference,
+      })
+      await store.fetchList('supplierDebts')
+      await store.fetchList('suppliers')
+    }
+    debtSelectedOpen.value = false
+    rowSelection.value = {}
+    toast.add({ title: t('app.reports.paymentSaved'), color: 'success' })
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.reports.paymentFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+  }
+  finally {
+    debtPayBusy.value = false
+  }
+}
+
 function openCreate() {
   if (!current.value) return
   navigateTo(`${current.value.path}/new`)
 }
-
 function openRow(row: Record<string, unknown>) {
   if (!current.value || !row.id) return
   navigateTo(recordPath(row.id))
@@ -819,9 +867,9 @@ function optionValue(option: ModuleSelectOption) {
   return typeof option === 'string' ? option : option.value
 }
 
-function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleSelectOption[], key: string }) {
+function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleSelectOption[], key: string, optionsOnly?: boolean }) {
   const fromOptions = (filter.options || []).map(optionValue)
-  const sourceRows = current.value
+  const sourceRows = !filter.optionsOnly && current.value
     ? store.list(current.value.collection).map(row => current.value?.collection === 'auditLogs' ? normalizeAuditLog(row) : row)
     : []
   const fromData = [...new Set(sourceRows.map(row => String(row[filter.key] ?? '').trim()).filter(Boolean))]
@@ -878,6 +926,25 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
         />
       </template>
       <template #actions>
+        <template v-if="selectedDebtRows.length && canPaySelectedDebts">
+          <UButton
+            color="success"
+            variant="soft"
+            size="sm"
+            icon="i-lucide-hand-coins"
+            class="shrink-0"
+            :label="`${t('app.reports.paySelected')} (${selectedDebtRows.length})`"
+            @click="openSelectedDebtPayment()"
+          />
+          <UButton
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            class="shrink-0"
+            :label="t('app.ui.clear')"
+            @click="rowSelection = {}"
+          />
+        </template>
         <template v-if="selectedIds.length && (canEdit || canDelete)">
           <UButton
             :color="deactivationOnly ? 'warning' : 'error'"
@@ -964,20 +1031,20 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
       @saved="onStockHistorySaved"
     />
 
-    <ReportsDocumentReturnDialog
-      v-model:open="returnOpen"
-      :kind="returnKind"
-      :document="returnDocument"
-      :currency="preferences.currency"
-      @submit="submitReturn"
-    />
-
     <ReportsDebtPaymentDialog
       v-model:open="debtPayOpen"
       :kind="debtPayKind"
       :debt="debtPayRow"
-      :currency="preferences.currency"
+      :currency="String(debtPayRow?.currency || preferences.currency)"
       @submit="submitDebtPayment"
+    />
+
+    <ReportsDebtPaySelectedDialog
+      v-model:open="debtSelectedOpen"
+      :kind="debtSelectedKind"
+      :debts="debtSelectedRows"
+      :currency="String(debtSelectedRows[0]?.currency || preferences.currency)"
+      @submit="submitSelectedDebtPayment"
     />
 
     <!-- Read-only document detail: opened by clicking a Sale/Purchase No. -->
@@ -985,7 +1052,7 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
       v-model:open="documentDetailOpen"
       :kind="documentDetailKind"
       :document="documentDetailRecord"
-      :currency="preferences.currency"
+      :currency="String(documentDetailRecord?.currency || preferences.currency)"
     />
 
   </div>

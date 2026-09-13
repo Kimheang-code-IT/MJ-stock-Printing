@@ -15,11 +15,8 @@ import { useStockQueries } from '~/repositories/index'
  */
 const props = withDefaults(defineProps<{
   product?: AppRecord | null
-  /** Bump to reload after an external stock op. */
-  reloadKey?: number
 }>(), {
   product: null,
-  reloadKey: 0,
 })
 
 const stockQueries = useStockQueries()
@@ -52,7 +49,6 @@ async function load() {
 }
 
 watch(() => props.product?.id, () => void load(), { immediate: true })
-watch(() => props.reloadKey, () => void load())
 
 const filteredRows = computed(() => {
   const needle = search.value.trim().toLowerCase()
@@ -143,8 +139,11 @@ const columns = computed<TableColumn<ProductHistoryRow & Record<string, unknown>
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
-    <p v-if="loadError" class="text-sm text-error">{{ loadError }}</p>
+  <!-- Fit the viewport so the table fills the height and only the rows scroll
+       (sticky header + footer); viewport units keep it responsive on all
+       devices. Mirrors the shared BatchListPanel / HistoryPanel pattern. -->
+  <div class="flex h-[60vh] max-h-[70vh] min-h-[55vh] min-w-0 flex-col overflow-hidden">
+    <p v-if="loadError" class="px-3 pt-2 text-sm text-error">{{ loadError }}</p>
     <TableAppListTable
       v-model:search="search"
       v-model:pagination="pagination"

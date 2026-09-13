@@ -1,4 +1,5 @@
 import type { NavigationMenuItem } from '@nuxt/ui'
+import { ROUTE_PERMISSION } from '~/utils/role/page-permissions'
 
 const SIDEBAR_COLLAPSED_KEY = 'stock-pos:sidebar:collapsed'
 const SIDEBAR_AUTO_MQ = '(max-width: 1023px)'
@@ -34,29 +35,6 @@ export function useMenu() {
 
   const pageLink = (label: string, to: string): NavigationMenuItem => ({ label, to, exact: true, class: 'text-sm gap-2', onSelect: close })
 
-  const ROUTE_PERMISSION: Record<string, string> = {
-    '/': 'dashboard.view',
-    '/stock/products': 'products.view',
-    '/stock/movements': 'products.view',
-    '/pos': 'pos.view',
-    '/delivery-notes': 'delivery.view',
-    '/setup/categories': 'categories.view',
-    '/setup/uoms': 'uom.view',
-    '/setup/brands': 'brand.view',
-    '/setup/suppliers': 'suppliers.view',
-    '/setup/customers': 'customers.view',
-    '/reports/sales': 'reports.view',
-    '/reports/purchases': 'reports.view',
-    '/reports/customer-debts': 'reports.view',
-    '/reports/supplier-debts': 'reports.view',
-    '/reports/finance': 'reports.view',
-    '/administration/users': 'admin.users.view',
-    '/administration/roles': 'admin.roles.view',
-    '/administration/document-sequences': 'configuration.view',
-    '/administration/settings': 'settings.app_config.view',
-    '/administration/audit-logs': 'admin.audit_logs.view',
-  }
-
   const auth = useAuthStore()
 
   function canSee(to: string) {
@@ -88,12 +66,12 @@ export function useMenu() {
   const links = computed<NavigationMenuItem[][]>(() => {
     const tree: NavigationMenuItem[] = [
       { label: t('app.nav.dashboard'), icon: 'i-lucide-layout-dashboard', to: '/', exact: true, class: 'text-sm gap-2', onSelect: close },
+      { label: t('app.nav.pos'), icon: 'i-lucide-store', to: '/pos', class: 'text-sm gap-2', onSelect: close },
+      { label: t('app.nav.deliveryNotes'), icon: 'i-lucide-package-check', to: '/delivery-notes', class: 'text-sm gap-2', onSelect: close },
       group('stock', t('app.nav.stock'), 'i-lucide-package', [
         pageLink(t('app.stock.tabProducts'), '/stock/products'),
         pageLink(t('app.stock.tabMovements'), '/stock/movements'),
       ]),
-      { label: t('app.nav.pos'), icon: 'i-lucide-store', to: '/pos', class: 'text-sm gap-2', onSelect: close },
-      { label: t('app.nav.deliveryNotes'), icon: 'i-lucide-package-check', to: '/delivery-notes', class: 'text-sm gap-2', onSelect: close },
       group('setup', t('app.nav.setup'), 'i-lucide-settings-2', [
         pageLink(t('app.nav.categories'), '/setup/categories'),
         pageLink(t('app.nav.uoms'), '/setup/uoms'),
@@ -104,8 +82,6 @@ export function useMenu() {
       group('reports', t('app.nav.reports'), 'i-lucide-bar-chart-3', [
         pageLink(t('app.pages.salesReport'), '/reports/sales'),
         pageLink(t('app.pages.purchaseReport'), '/reports/purchases'),
-        pageLink(t('app.pages.customerReturns'), '/reports/customer-returns'),
-        pageLink(t('app.pages.supplierReturns'), '/reports/supplier-returns'),
         pageLink(t('app.pages.customerDebtReport'), '/reports/customer-debts'),
         pageLink(t('app.pages.supplierDebtReport'), '/reports/supplier-debts'),
         pageLink(t('app.pages.financeReport'), '/reports/finance'),

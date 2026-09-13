@@ -1,6 +1,6 @@
 # Database — PostgreSQL schema (as implemented)
 
-Authoritative store for all stock, sales, payments, debts, sequences, settings and audit data. SQLAlchemy 2 models define the schema; **every change goes through an Alembic migration** (`backend/alembic/versions/0001…0024`). Primary keys are `UUID` (`uuid.uuid4`); timestamps are `DateTime(timezone=True)` with `server_default=func.now()`; money is `NUMERIC(18,2)`, quantities `NUMERIC(18,4)`, UOM factors `NUMERIC(18,6)`.
+Authoritative store for all stock, sales, payments, debts, sequences, settings and audit data. SQLAlchemy 2 models define the schema; **every change goes through an Alembic migration** (`backend/alembic/versions/0001…0025`). Primary keys are `UUID` (`uuid.uuid4`); timestamps are `DateTime(timezone=True)` with `server_default=func.now()`; money is `NUMERIC(18,2)`, quantities `NUMERIC(18,4)`, UOM factors `NUMERIC(18,6)`.
 
 ## 1. Migration inventory
 
@@ -29,6 +29,7 @@ Authoritative store for all stock, sales, payments, debts, sequences, settings a
 | `0022_batch_fefo` | `batch_stock_balances` per (product, batch_no) remaining/received quantity, expiry, cost — written only by the canonical mutation service under row lock; FEFO sale allocation; outbound-line UOM entries |
 | `0023_batch_lifecycle` | `products.track_batch` (batched Stock In lines MUST carry batch_no + expiry); batch lifecycle status; ledger links |
 | `0024_batch_integrity` | DB check constraints: `batch_stock_balances.remaining_quantity >= 0` and `received_quantity >= remaining_quantity` |
+| `0025_sale_price_version_uoms` | `product_sale_prices` + `batch_no`/`purchase_date`/`expiry_date` and the widened one-active-per-`(product, COALESCE(batch_no,''))` index; new `product_sale_price_uoms` (per-UOM price rows) backfilled from `uom_conversions` |
 
 ## 2. Identity & access
 

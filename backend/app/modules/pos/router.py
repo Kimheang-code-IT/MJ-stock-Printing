@@ -15,6 +15,7 @@ from app.modules.delivery_notes.schemas import DeliveryNoteFromSaleCreate
 from app.modules.pos.schemas import (
     SaleCreateRequest,
     SaleReturnRequest,
+    SaleUpdateRequest,
 )
 from app.modules.pos.service import POSService, sale_to_out
 
@@ -93,6 +94,18 @@ async def get_sale(
 ) -> dict:
     service = POSService(db)
     return envelope(sale_to_out(await service.get_sale(sale_id)))
+
+
+@router.patch("/sales/{sale_id}")
+async def update_sale(
+    sale_id: UUID,
+    payload: SaleUpdateRequest,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("pos.access")),
+) -> dict:
+    """Edit a completed sale (reverse the old stock, apply the new lines)."""
+    service = POSService(db)
+    return envelope(await service.update_sale(sale_id, payload, actor=actor))
 
 
 @router.post("/sales/{sale_id}/return", status_code=http_status.HTTP_201_CREATED)

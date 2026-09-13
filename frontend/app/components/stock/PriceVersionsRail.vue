@@ -1,10 +1,7 @@
 <script setup lang="ts">
-import type { TableColumn } from '@nuxt/ui'
-import type { PaginationState } from '@tanstack/vue-table'
-import { UBadge, UButton } from '#components'
-import { h } from 'vue'
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { AppRecord } from '~/config/admin-seed'
-import type { ProductSalePriceRow, SalePriceUomRow } from '~/repositories/contracts/entities'
+import type { ProductSalePriceRow } from '~/repositories/contracts/entities'
 import { useStockQueries } from '~/repositories/index'
 import { formatMoney } from '~/utils/format/format-service'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
@@ -12,29 +9,19 @@ import type { SalePriceVersionSelection } from '~/utils/stock/uom-conversions'
 import { pricingRowsFor, salePriceVersionSelection } from '~/utils/stock/uom-conversions'
 
 /**
- * Sale-price version history of one product (product detail Pricing tab).
- * One row per version: Version + optional Batch/Lot scope + its UOM prices +
- * effective date + status. Selecting a row loads the version into the Pricing
- * table below for review (POS-active = editable, older = read-only history);
- * "View Details" opens the full pricing breakdown (purchase date/cost when the
- * API reports them). Exactly one version per product + batch scope is
- * POS-active; activating deactivates the previous matching scope and copies
- * the default-sale UOM price onto `products.salePrice`. Old sales keep their
- * stored historical price. Batch expiry/stock logic is untouched.
+ * Compact sale-price version rail shown to the right of the Pricing table
+ * (product detail Pricing tab). Each entry shows only the version + effective
+ * date; clicking a version loads its UOM prices into the Pricing table
+ * (read-only snapshot). Add / View details / Activate stay in the row menu.
+ * Exactly one version per product + batch scope is POS-active; activating
+ * deactivates the previous matching scope and copies the default-sale UOM
+ * price onto `products.salePrice`. Old sales keep their historical price.
  */
 const props = withDefaults(defineProps<{
   product?: AppRecord | null
-  /** Bump to reload after an external change. */
-  reloadKey?: number
 }>(), {
   product: null,
-  reloadKey: 0,
 })
-
-const emit = defineEmits<{
-  /** Active price changed (parent may refresh the record). */
-  changed: []
-}>()
 
 const stockQueries = useStockQueries()
 const { t } = useI18n()
@@ -42,9 +29,9 @@ const toast = useToast()
 const recordAccess = inject(moduleDocumentRecordKey, null)
 
 /**
- * Version currently selected in the history table and loaded into the Pricing
- * table below. Shared through the document record so both panels stay in sync;
- * it is UI state only (never POSTed — `adaptProductIn` forwards known keys).
+ * Version currently selected in the rail and loaded into the Pricing table.
+ * Shared through the document record so both panels stay in sync; it is UI
+ * state only (never POSTed — `adaptProductIn` forwards known keys).
  */
 const selection = computed<SalePriceVersionSelection | null>(() => {
   const raw = recordAccess?.get('__salePriceSelection')
@@ -59,11 +46,9 @@ const loading = ref(false)
 const busy = ref(false)
 const loadError = ref<string | null>(null)
 const rows = ref<ProductSalePriceRow[]>([])
-const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 10 })
 
 const addOpen = ref(false)
 const addDate = ref(new Date().toISOString().slice(0, 10))
-const addPrice = ref<number | undefined>()
 const addBatchNo = ref('')
 const addPurchaseDate = ref('')
 const addExpiryDate = ref('')
@@ -81,7 +66,6 @@ const addUomPrices = ref<UomPriceDraft[]>([])
 
 function openAdd() {
   addDate.value = new Date().toISOString().slice(0, 10)
-  addPrice.value = undefined
   addBatchNo.value = ''
   addPurchaseDate.value = ''
   addExpiryDate.value = ''
@@ -123,28 +107,40 @@ watch(() => props.product?.id, () => {
   }
   void load()
 }, { immediate: true })
-watch(() => props.reloadKey, () => void load())
 
-/** Load a version into the Pricing table below (click again to clear). */
+function isSelected(row: ProductSalePriceRow) {
+  return selectedId.value === String(row.id)
+}
+
+/** Load a version into the Pricing table (click again to clear). */
 function selectVersion(row: ProductSalePriceRow) {
   if (!recordAccess?.set) return
-  if (selectedId.value === String(row.id)) {
+  if (isSelected(row)) {
     recordAccess.set('__salePriceSelection', null)
     return
   }
   recordAccess.set('__salePriceSelection', salePriceVersionSelection(row))
 }
 
-function onRowSelect(event: Event, row: { original: ProductSalePriceRow }) {
-  const target = event.target as HTMLElement | null
-  // Clicks on row buttons (Activate / View Details) must not change selection.
-  if (target?.closest('a, button, input, [role="menuitem"], [data-slot="dropdown-menu"]')) return
-  selectVersion(row.original)
-}
-
 function openDetails(row: ProductSalePriceRow) {
   detailVersion.value = row
   detailsOpen.value = true
+}
+
+function menuItems(row: ProductSalePriceRow): DropdownMenuItem[][] {
+  return [[
+    {
+      label: t('app.stock.priceHistoryViewDetails'),
+      icon: 'i-lucide-eye',
+      onSelect: () => openDetails(row),
+    },
+    {
+      label: t('app.stock.priceHistoryActivate'),
+      icon: 'i-lucide-check',
+      disabled: row.isActive || busy.value,
+      onSelect: () => { void activate(row) },
+    },
+  ]]
 }
 
 const canAdd = computed(() =>
@@ -176,7 +172,6 @@ async function addVersion() {
     addOpen.value = false
     toast.add({ title: t('app.stock.priceHistoryAdded'), color: 'success' })
     await load()
-    emit('changed')
   }
   catch (error: unknown) {
     toast.add({
@@ -202,7 +197,6 @@ async function activate(row: ProductSalePriceRow) {
       const refreshed = rows.value.find(item => String(item.id) === String(row.id))
       if (refreshed) recordAccess.set('__salePriceSelection', salePriceVersionSelection(refreshed))
     }
-    emit('changed')
   }
   catch (error: unknown) {
     toast.add({
@@ -215,99 +209,6 @@ async function activate(row: ProductSalePriceRow) {
     busy.value = false
   }
 }
-
-const versionCell = ({ row }: { row: { original: ProductSalePriceRow } }) => {
-  const selected = selectedId.value === String(row.original.id)
-  return h('div', { class: 'flex items-center gap-1.5' }, [
-    h('span', { class: selected ? 'font-semibold text-primary tabular-nums' : 'font-medium tabular-nums' },
-      `v${row.original.version}`),
-    selected
-      ? h(UBadge, { color: 'primary', variant: 'subtle', size: 'sm' }, () => t('app.stock.priceHistorySelected'))
-      : null,
-  ])
-}
-
-const priceCell = ({ row }: { row: { original: ProductSalePriceRow } }) => {
-  // Base/default-sale price + the version's other UOM prices underneath.
-  const otherPrices = (row.original.uomPrices || [])
-    .filter((uomRow: SalePriceUomRow) => !uomRow.isDefaultSale && uomRow.salePrice !== row.original.salePrice)
-  return h('div', { class: 'text-end' }, [
-    h('span', { class: 'tabular-nums whitespace-nowrap font-medium' }, formatMoney(row.original.salePrice)),
-    ...otherPrices.map((uomRow: SalePriceUomRow) => h(
-      'span',
-      { class: 'block text-[11px] leading-tight text-muted tabular-nums whitespace-nowrap' },
-      `${uomRow.uomSymbol || ''} ×${uomRow.factorToBase}: ${formatMoney(uomRow.salePrice)}`,
-    )),
-  ])
-}
-
-const activeCell = ({ row }: { row: { original: ProductSalePriceRow } }) =>
-  h(UBadge, {
-    color: row.original.isActive ? 'success' : 'neutral',
-    variant: 'subtle',
-    size: 'sm',
-  }, () => row.original.isActive ? t('app.stock.priceHistoryActive') : t('app.stock.priceHistoryInactive'))
-
-const actionCell = ({ row }: { row: { original: ProductSalePriceRow } }) =>
-  h('div', { class: 'flex items-center justify-end gap-1' }, [
-    h(UButton, {
-      size: 'xs',
-      variant: 'ghost',
-      color: 'neutral',
-      icon: 'i-lucide-eye',
-      label: t('app.stock.priceHistoryViewDetails'),
-      onClick: () => openDetails(row.original),
-    }),
-    h(UButton, {
-      size: 'xs',
-      variant: 'soft',
-      color: 'primary',
-      icon: 'i-lucide-check',
-      label: t('app.stock.priceHistoryActivate'),
-      disabled: row.original.isActive || busy.value,
-      onClick: () => void activate(row.original),
-    }),
-  ])
-
-const columns = computed<TableColumn<ProductSalePriceRow & Record<string, unknown>>[]>(() => [
-  {
-    accessorKey: 'version',
-    header: t('app.stock.version'),
-    enableSorting: false,
-    cell: versionCell as never,
-  },
-  {
-    accessorKey: 'batchNo',
-    header: t('app.stock.batchNo'),
-    enableSorting: false,
-    cell: ({ row }) => row.original.batchNo || t('app.stock.priceHistoryAllLots'),
-  },
-  {
-    accessorKey: 'salePrice',
-    header: t('app.stock.priceHistoryUomPrices'),
-    enableSorting: false,
-    cell: priceCell as never,
-  },
-  {
-    accessorKey: 'date',
-    header: t('app.stock.priceHistoryEffectiveDate'),
-    enableSorting: false,
-    meta: { class: { td: 'whitespace-nowrap text-muted', th: '' } },
-    cell: ({ row }) => row.original.date,
-  },
-  {
-    accessorKey: 'isActive',
-    header: t('app.fields.status'),
-    enableSorting: false,
-    cell: activeCell as never,
-  },
-  {
-    accessorKey: '__actions',
-    header: '',
-    enableSorting: false,
-    cell: actionCell as never,
-  },
-])
 
 /** Read-only detail rows of the version in the View Details dialog. */
 const detailItems = computed(() => {
@@ -332,9 +233,9 @@ const detailItems = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-2">
-    <div class="flex items-center justify-between gap-2">
-      <p class="text-sm font-medium">{{ t('app.stock.priceHistory') }}</p>
+  <aside class="flex min-h-0 w-full shrink-0 flex-col rounded-sm border border-default bg-default xl:w-72">
+    <header class="flex items-center justify-between gap-2 border-b border-default px-3 py-2">
+      <p class="truncate text-sm font-medium text-highlighted">{{ t('app.stock.priceHistory') }}</p>
       <UButton
         size="xs"
         color="primary"
@@ -344,17 +245,53 @@ const detailItems = computed(() => {
         :disabled="!product?.id"
         @click="openAdd()"
       />
-    </div>
+    </header>
 
-    <p v-if="loadError" class="text-sm text-error">{{ loadError }}</p>
-    <TableAppListTable
-      v-model:pagination="pagination"
-      :data="rows"
-      :columns="columns"
-      :loading="loading"
-      :empty-title="t('app.stock.priceHistoryEmpty')"
-      @select="onRowSelect"
-    />
+    <div class="min-h-0 flex-1 overflow-y-auto p-2">
+      <p v-if="loadError" class="px-1 py-2 text-xs text-error">{{ loadError }}</p>
+      <div v-else-if="loading" class="flex justify-center py-4">
+        <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin text-muted" />
+      </div>
+      <p v-else-if="!rows.length" class="px-1 py-3 text-xs text-muted">
+        {{ t('app.stock.priceHistoryEmpty') }}
+      </p>
+      <div v-else class="space-y-1">
+        <div
+          v-for="row in rows"
+          :key="row.id"
+          class="group flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 transition-colors"
+          :class="isSelected(row) ? 'bg-primary/10' : 'hover:bg-elevated'"
+          role="button"
+          tabindex="0"
+          @click="selectVersion(row)"
+          @keydown.enter.prevent="selectVersion(row)"
+        >
+          <span
+            class="grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold tabular-nums"
+            :class="row.isActive
+              ? 'bg-primary/15 text-primary'
+              : isSelected(row) ? 'bg-elevated text-highlighted' : 'bg-elevated text-muted'"
+          >
+            v{{ row.version }}
+          </span>
+          <span class="min-w-0 flex-1">
+            <span class="block truncate text-xs font-medium text-highlighted tabular-nums">{{ row.date }}</span>
+            <span v-if="row.batchNo" class="block truncate text-[10px] text-muted">{{ row.batchNo }}</span>
+          </span>
+          <UDropdownMenu :items="menuItems(row)" :content="{ align: 'end' }">
+            <UButton
+              icon="i-lucide-ellipsis"
+              color="neutral"
+              variant="ghost"
+              size="xs"
+              class="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
+              :aria-label="t('app.ui.actions')"
+              @click.stop
+            />
+          </UDropdownMenu>
+        </div>
+      </div>
+    </div>
 
     <!-- Add version dialog -->
     <CommonAppDialog
@@ -491,5 +428,5 @@ const detailItems = computed(() => {
         </div>
       </template>
     </CommonAppDialog>
-  </div>
+  </aside>
 </template>

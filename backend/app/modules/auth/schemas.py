@@ -93,10 +93,6 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
-class ForgotPasswordResponse(BaseModel):
-    message: str
-
-
 class VerifyResetCodeRequest(BaseModel):
     email: EmailStr
     code: str = Field(min_length=4, max_length=12)

@@ -54,9 +54,9 @@ export default defineNuxtConfig({
       authMode: import.meta.env.NUXT_PUBLIC_AUTH_MODE === 'cookie' ? 'cookie' : 'bearer',
       csrfCookieName: import.meta.env.NUXT_PUBLIC_CSRF_COOKIE_NAME || 'XSRF-TOKEN',
       csrfHeaderName: import.meta.env.NUXT_PUBLIC_CSRF_HEADER_NAME || 'X-CSRF-Token',
-      // Mock-first until a real API is wired. Override with NUXT_PUBLIC_USE_MOCK_DATA=false.
-      // Static Vercel builds bake this at build time — do not rely on runtime-only env.
-      useMockData: import.meta.env.NUXT_PUBLIC_USE_MOCK_DATA !== 'false',
+      // Real API by default. Mock data is opt-in for local/dev UI work only:
+      // set NUXT_PUBLIC_USE_MOCK_DATA=true (baked at build time for static builds).
+      useMockData: import.meta.env.NUXT_PUBLIC_USE_MOCK_DATA === 'true',
       appVersion: import.meta.env.NUXT_PUBLIC_APP_VERSION || '0.1.0',
       // Canonical public origin for Open Graph / Twitter image URLs (no trailing slash).
       // Example: https://app.stockpos.example — required for link previews to show images.
