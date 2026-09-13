@@ -250,53 +250,31 @@ class CustomerService:
         await self.session.commit()
         for payment in payments:
             debt = next(d for d in open_debts if d.id == payment.customer_debt_id)
-            self._queue_payment_notify_safe(payment, debt=debt, customer=customer, amount=payment.amount, actor=actor)
+            await self._queue_payment_notify_safe(payment, debt=debt, customer=customer, amount=payment.amount, actor=actor)
         return payments
 
-    def _queue_payment_notify_safe(self, payment, **kwargs) -> None:
+    async def _queue_payment_notify_safe(self, payment, **kwargs) -> None:
         try:
-            self._queue_payment_notify(payment, **kwargs)
+            await self._queue_payment_notify(payment, **kwargs)
         except Exception:
             logger.exception("Telegram payment notify hook failed")
 
     async def _queue_payment_notify(self, payment, *, debt, customer, amount, actor) -> None:
-        """Best-effort Telegram invoice text after a committed debt payment
-        (spec 3.6.2). Never raises after the transaction has committed."""
-        try:
-            from app.modules.administration import get_setting_value
+        """Best-effort Telegram debt-payment text after a committed payment
+        (spec §3.6.2). Never raises after the transaction has committed."""
+        from app.shared.telegram.service import notify_payment_text
 
-            enabled = await get_setting_value(
-                self.session,
-                "telegram",
-                "payment_invoice_notify_enabled",
-                True,
-            )
-            if not enabled:
-                return
-            from datetime import datetime, timezone
-
-            from app.shared.telegram import queue_payment_invoice_notify
-
-            queue_payment_invoice_notify(
-                {
-                    "kind": "DEBT_PAYMENT",
-                    "invoice_no": debt.invoice_no,
-                    "payment_no": payment.payment_no,
-                    "occurred_at": datetime.now(timezone.utc).isoformat(),
-                    "customer": customer.name,
-                    "total": str(debt.original_amount),
-                    "paid": str(amount),
-                    "payment_method": payment.payment_method,
-                    "remaining": str(debt.remaining_amount),
-                    "cashier": actor.full_name,
-                }
-            )
-        except Exception:
-            import logging
-
-            logging.getLogger("stock_pos.customers").warning(
-                "Telegram payment notify hook failed for %s", debt.invoice_no, exc_info=True
-            )
+        await notify_payment_text(
+            self.session,
+            invoice_no=debt.invoice_no,
+            payment_no=payment.payment_no,
+            customer=customer.name,
+            total=debt.original_amount,
+            paid=amount,
+            payment_method=payment.payment_method,
+            remaining=debt.remaining_amount,
+            cashier=actor.full_name,
+        )
 
     async def list_debt_payments(self, customer_id, debt_id) -> list[Payment]:
         """Immutable payment history for one customer debt (deposit + payments)."""

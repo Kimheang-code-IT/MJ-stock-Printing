@@ -105,11 +105,20 @@ describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
     const values = toAdminSettingsValues({
       telegram: { ...base.telegram, passwordResetEnabled: false, paymentInvoiceNotifyEnabled: false, stockInquiryEnabled: false },
     })
+    // The full backend catalog maps from the form model (spec section 3.6):
+    // feature toggles + expiry/sale/purchase/summary notification toggles.
     expect(values).toEqual({
       telegram: {
+        enabled: false,
         enable_password_reset: false,
         payment_invoice_notify_enabled: false,
         stock_inquiry_enabled: false,
+        expiry_alerts_enabled: true,
+        sale_enabled: false,
+        purchase_enabled: false,
+        daily_summary_enabled: false,
+        daily_summary_time: '07:00',
+        notification_language: 'en',
       },
     })
   })

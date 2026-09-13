@@ -174,3 +174,49 @@ async def test_supplier_level_payment_settles_oldest_first(client):
         headers=headers,
     )
     assert over.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_customer_level_payment_notify_hook_is_awaited(client, monkeypatch, db_session):
+    """Regression: the party-payment notify hook used to create coroutines that
+    were never awaited. The hook must actually run (it is a safe no-op without
+    a Telegram token) once per settled debt, without RuntimeWarnings."""
+    from sqlalchemy import delete
+
+    from app.modules.administration.models import SystemSetting
+
+    calls: list[tuple[str, str]] = []
+
+    async def _record(chat_id: str, text: str) -> bool:
+        calls.append((chat_id, text))
+        return True
+
+    async def _recipients(session):
+        return ["12345"]
+
+    monkeypatch.setattr("app.shared.telegram.client.send_message", _record)
+    monkeypatch.setattr("app.shared.telegram.service.recipients", _recipients)
+
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    customer, _debts = await _two_customer_debts(client, headers, tag)
+
+    db_session.add(
+        SystemSetting(group_name="telegram", key="telegram.sale_enabled", value={"v": True})
+    )
+    await db_session.commit()
+
+    response = await client.post(
+        f"/api/v1/customers/{customer['id']}/payments",
+        json={"amount": "30.00", "payment_method": "CASH"},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    # Both open debts settled — the notify hook ran for each payment.
+    assert len(calls) == 2
+    assert all("Debt Payment" in text for _chat, text in calls)
+
+    await db_session.execute(
+        delete(SystemSetting).where(SystemSetting.key == "telegram.sale_enabled")
+    )
+    await db_session.commit()

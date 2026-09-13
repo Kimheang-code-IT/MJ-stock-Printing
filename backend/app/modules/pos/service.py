@@ -6,7 +6,6 @@ movements, balances, invoice sequence, and audit together — or not at all.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -30,35 +29,17 @@ from app.modules.pos.schemas import (
 )
 from app.modules.stock.models import Product
 from app.modules.stock.repository import ProductRepository
-from app.modules.stock.service import allow_negative_stock, apply_stock_movement
+from app.modules.stock.service import (
+    _lock_balance,
+    allow_negative_stock,
+    apply_stock_movement,
+    resolve_outbound_unit_cost,
+)
 from app.shared.audit.service import record_audit
 from app.shared.documents import allocate_document_number
 
 logger = logging.getLogger("stock_pos.pos")
 
-
-def _schedule_invoice_pdf(sale_id: uuid.UUID) -> None:
-    """Best-effort archived-invoice generation after the sale has committed.
-    PDF/Telegram failure never rolls the sale back."""
-
-    async def _run() -> None:
-        from app.core.database import SessionFactory
-
-        try:
-            async with SessionFactory() as session:
-                result = await session.execute(select(Sale).where(Sale.id == sale_id))
-                sale = result.scalar_one_or_none()
-                if sale is None:
-                    return
-                await POSService(session).get_or_generate_invoice_pdf(sale)
-        except Exception:
-            logger.warning("Invoice PDF generation skipped for sale %s", sale_id, exc_info=True)
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(_run())
 
 TWO = Decimal("0.01")
 FOUR = Decimal("0.0001")
@@ -102,6 +83,8 @@ def sale_to_out(
         cashier_id=sale.cashier_id,
         note=sale.note,
         change_amount=change_amount,
+        currency=getattr(sale, "currency", "USD"),
+        exchange_rate=getattr(sale, "exchange_rate", Decimal("1")),
         items=[SaleItemOut.model_validate(item) for item in resolved_items],
     )
 
@@ -121,8 +104,19 @@ class POSService:
             .limit(max(1, min(limit, 50)))
         )
         if q:
-            pattern = f"%{q.strip()}%"
-            stmt = stmt.where(Product.name.ilike(pattern) | Product.sku.ilike(pattern))
+            needle = q.strip()
+            # Barcode is the operational identifier: an exact (indexed) match
+            # wins before name/sku fuzzy search.
+            exact = await self.products.get_by_barcode(needle)
+            if exact is not None and exact.status == "ACTIVE":
+                rows = [exact]
+            else:
+                pattern = f"%{needle}%"
+                stmt = stmt.where(
+                    Product.name.ilike(pattern) | Product.sku.ilike(pattern) | Product.barcode.ilike(pattern)
+                )
+                rows = list((await self.session.execute(stmt)).scalars().all())
+            return [self._product_out(p) for p in rows]
         if category_id is not None:
             stmt = stmt.where(Product.category_id == category_id)
         rows = await self.session.execute(stmt)
@@ -223,6 +217,8 @@ class POSService:
             subtotal=Decimal("0.00"),
             grand_total=Decimal("0.00"),
             payment_status="UNPAID",
+            currency=payload.currency,
+            exchange_rate=payload.exchange_rate,
         )
         self.session.add(sale)
         await self.session.flush()
@@ -274,6 +270,10 @@ class POSService:
                     default_price = Decimal(str(base_row["sale_price"]))
             if uom_id is None:
                 uom_id = product.uom_id
+                # The frontend factor is NEVER authoritative: a line without
+                # an explicit UOM is always the base UOM (factor 1), whatever
+                # factor_to_base the caller sent.
+                factor = Decimal("1")
                 uom_symbol = uom_symbol or (product.uom_ref.symbol if product.uom_ref else None)
                 uom_code = product.uom_ref.code if product.uom_ref else None
             else:
@@ -305,19 +305,13 @@ class POSService:
                     raise ValidationError("Discount cannot exceed the line amount", field_errors={"items": "Invalid discount"})
 
             line_total = gross - discount
-            balance = await apply_stock_movement(
-                self.session,
-                product_id=product.id,
-                movement_type="SALE",
-                quantity_delta=-base_quantity,
-                unit_cost=product.cost_price if product.balance is None else product.balance.average_cost,
-                reference_type="sale",
-                reference_id=sale.id,
-                created_by=actor.id,
-                document_no=invoice_no,
-                allow_negative=negative_ok,
-            )
-            row = SaleItem(
+            # FEFO batch allocation runs BEFORE the movement is appended so
+            # the immutable SALE movement carries the blended cost snapshot
+            # (unit_cost 0 on the ledger would make the Stock Out dialog
+            # meaningless). The customer price is INDEPENDENT of batch cost.
+            from app.modules.stock import batch_service
+
+            provisional = SaleItem(
                 sale_id=sale.id,
                 product_id=product.id,
                 product_name=product.name,
@@ -330,12 +324,49 @@ class POSService:
                 discount_percent=item.discount_percent,
                 quantity=quantity,
                 unit_price=unit_price,
-                unit_cost=balance.average_cost,
+                unit_cost=Decimal("0.00"),
                 discount_amount=discount,
                 line_total=line_total,
             )
+            self.session.add(provisional)
+            await self.session.flush()
+            # Line cost follows the product's costing option (FIFO lots or
+            # weighted average) — the same canonical path as every other
+            # outbound. Batch cost only feeds the SaleItemBatch snapshots.
+            balance = await _lock_balance(self.session, product.id)
+            line_cost = await resolve_outbound_unit_cost(
+                self.session, product, base_quantity, fallback=balance.average_cost
+            )
+            _, consumed_batches = await batch_service.commit_sale_allocations(
+                self.session,
+                sale_item=provisional,
+                product=product,
+                quantity_base=base_quantity,
+                allow_negative=negative_ok,
+            )
+            provisional.unit_cost = line_cost
+            await self.session.flush()
+            # Single-batch lines link the immutable SALE movement to the lot
+            # (batch_no / batch_id / expiry click-through); multi-batch lines
+            # keep the per-lot detail in the sale_item_batches allocations.
+            movement_batch = consumed_batches[0] if len(consumed_batches) == 1 else None
+            balance = await apply_stock_movement(
+                self.session,
+                product_id=product.id,
+                movement_type="SALE",
+                quantity_delta=-base_quantity,
+                unit_cost=line_cost,
+                reference_type="sale",
+                reference_id=sale.id,
+                created_by=actor.id,
+                document_no=invoice_no,
+                batch_no=movement_batch.batch_no if movement_batch else None,
+                batch_id=movement_batch.id if movement_batch else None,
+                expiry_date=movement_batch.expiry_date if movement_batch else None,
+                allow_negative=negative_ok,
+            )
+            row = provisional
             item_rows.append(row)
-            self.session.add(row)
             subtotal += gross
             discount_total += discount
 
@@ -429,6 +460,7 @@ class POSService:
                 remaining_amount=debt_amount,
                 due_date=payload.due_date,
                 status="UNPAID" if paid_for_sale == 0 else "PARTIAL",
+                currency=sale.currency,
             )
             self.session.add(debt)
             await self.session.flush()
@@ -469,8 +501,29 @@ class POSService:
         )
         await self.session.commit()
 
-        await self._queue_payment_notify(sale, customer=customer, request=payload, actor=actor, item_count=len(item_rows))
-        _schedule_invoice_pdf(sale.id)
+        # Telegram sale notification strictly AFTER commit: a notification
+        # failure must never roll back the committed sale. Debt sales notify
+        # through customer debt payments instead (spec §3.6.2).
+        if payload.payment_method in ("CASH", "BANK_QR"):
+            from app.shared.telegram.service import notify_sale
+
+            await notify_sale(
+                self.session,
+                invoice_no=sale.invoice_no,
+                occurred_at=sale.sale_date,
+                customer=customer.name,
+                currency=sale.currency,
+                exchange_rate=sale.exchange_rate,
+                subtotal=sale.subtotal,
+                discount=sale.discount_amount,
+                delivery_price=sale.delivery_price,
+                total=sale.grand_total,
+                paid=sale.paid_amount,
+                payment_method=payload.payment_method,
+                debt=sale.debt_amount,
+                cashier=actor.full_name,
+                item_count=len(item_rows),
+            )
         return sale_to_out(sale, customer_name=customer.name, change_amount=change_amount, items=item_rows)
 
     async def _resolve_customer(self, payload) -> Customer:
@@ -521,51 +574,6 @@ class POSService:
         await self.session.flush()
         return payment
 
-    async def _queue_payment_notify(self, sale, *, customer, request, actor, item_count: int) -> None:
-        """Best-effort Telegram invoice text after commit (spec 3.6.2).
-
-        Only fully-tendered cash / Bank-QR sales notify; debt sales surface
-        through customer debt payments instead. Never raises: a notification
-        problem must not affect the already-committed sale.
-        """
-        if request.payment_method not in ("CASH", "BANK_QR"):
-            return
-        try:
-            from app.modules.administration import get_setting_value
-
-            enabled = await get_setting_value(
-                self.session,
-                "telegram",
-                "payment_invoice_notify_enabled",
-                True,
-            )
-            if not enabled:
-                return
-            from app.shared.telegram import queue_payment_invoice_notify
-
-            queue_payment_invoice_notify(
-                {
-                    "kind": "SALE",
-                    "invoice_no": sale.invoice_no,
-                    "occurred_at": sale.sale_date.isoformat(),
-                    "customer": customer.name,
-                    "item_count": item_count,
-                    "subtotal": str(sale.subtotal),
-                    "discount": str(sale.discount_amount),
-                    "total": str(sale.grand_total),
-                    "paid": str(sale.paid_amount),
-                    "payment_method": request.payment_method,
-                    "remaining": str(sale.debt_amount),
-                    "cashier": actor.full_name,
-                }
-            )
-        except Exception:
-            import logging
-
-            logging.getLogger("stock_pos.pos").warning(
-                "Telegram payment notify hook failed for %s", sale.invoice_no, exc_info=True
-            )
-
     # --------------------------------------------------------------- receipt
 
     async def build_receipt(self, sale: Sale) -> dict:
@@ -584,6 +592,15 @@ class POSService:
             tz = ZoneInfo(str(tz_name) or "UTC")
         except Exception:
             tz = ZoneInfo("UTC")
+        # Invoice presentation settings (paper size, exchange-rate display,
+        # footer fallback) — the frontend reads these to render the paper.
+        paper_size = await get_setting_value(self.session, "invoice", "paper_size", "A4")
+        show_exchange_rate = bool(
+            await get_setting_value(self.session, "invoice", "show_exchange_rate", False)
+        )
+        footer = await get_setting_value(self.session, "invoice", "footer", "")
+        receipt_footer = await get_setting_value(self.session, "pos", "receipt_footer", "")
+        receipt_footer = footer or receipt_footer
         sale_date = sale.sale_date if sale.sale_date.tzinfo else sale.sale_date.replace(tzinfo=timezone.utc)
 
         cashier = None
@@ -593,9 +610,12 @@ class POSService:
         )
         cashier = cashier_result.scalar_one_or_none()
         customer_result = await self.session.execute(
-            select(Customer.name).where(Customer.id == sale.customer_id)
+            select(Customer.name, Customer.phone, Customer.address).where(Customer.id == sale.customer_id)
         )
-        customer_name = customer_result.scalar_one_or_none()
+        customer_row = customer_result.one_or_none()
+        customer_name = customer_row.name if customer_row else None
+        customer_phone = customer_row.phone if customer_row else None
+        customer_address = customer_row.address if customer_row else None
 
         debt_result = await self.session.execute(
             select(func.coalesce(func.sum(CustomerDebt.remaining_amount), 0)).where(
@@ -625,11 +645,27 @@ class POSService:
             "sale_date": sale_date.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S"),
             "cashier": cashier,
             "customer": customer_name,
+            # Customer contact snapshot (only when the customer has one).
+            "customer_phone": customer_phone or None,
+            "customerPhone": customer_phone or None,
+            "customer_address": customer_address or None,
+            "customerAddress": customer_address or None,
+            # Document currency: the whole receipt renders in THIS currency.
+            "currency": sale.currency,
+            "exchange_rate": str(sale.exchange_rate),
+            "exchangeRate": str(sale.exchange_rate),
+            # Presentation settings (backend values are authoritative).
+            "paper_size": paper_size,
+            "paperSize": paper_size,
+            "show_exchange_rate": show_exchange_rate,
+            "showExchangeRate": show_exchange_rate,
+            "footer": receipt_footer or None,
             "items": [
                 {
                     "id": item.id,
                     "name": item.product_name,
                     "sku": item.sku,
+                    "barcode": item.barcode,
                     "uom": item.uom_symbol,
                     "uom_symbol": item.uom_symbol,
                     "quantity": str(item.quantity),
@@ -647,6 +683,9 @@ class POSService:
             "deliveryPrice": str(sale.delivery_price),
             "grand_total": str(sale.grand_total),
             "paid": str(sale.paid_amount),
+            "amount_received": str(sale.paid_amount),
+            "amountReceived": str(sale.paid_amount),
+            "debt": str(sale.debt_amount),
             "change": str(max(Decimal("0"), sale.paid_amount - (sale.grand_total - sale.debt_amount)))
             if sale.debt_amount == 0
             else "0.00",
@@ -656,30 +695,6 @@ class POSService:
             "note": sale.note,
             "receipt_ready_for_print": True,
         }
-
-    # ------------------------------------------------------------- invoice pdf
-
-    async def get_or_generate_invoice_pdf(self, sale: Sale) -> bytes:
-        """Archived invoice PDF: serve the stored object when present, otherwise
-        render it from the receipt payload, archive it, and record the key.
-        Failure must never affect the sale transaction (this runs after commit
-        or on an explicit GET)."""
-        from app.modules.pos.invoice_pdf import load_invoice_pdf
-
-        if sale.invoice_pdf_object_key:
-            stored = load_invoice_pdf(sale.invoice_pdf_object_key)
-            if stored:
-                return stored
-
-        receipt = await self.build_receipt(sale)
-        from app.modules.pos.invoice_pdf import build_invoice_pdf, save_invoice_pdf
-
-        content = build_invoice_pdf(receipt)
-        object_key = f"invoices/{sale.id}.pdf"
-        save_invoice_pdf(object_key, content)
-        sale.invoice_pdf_object_key = object_key
-        await self.session.commit()
-        return content
 
     # ------------------------------------------------------------------ read
 
@@ -763,13 +778,24 @@ class POSService:
             self.session.add(row)
             sale_item.returned_quantity = sale_item.returned_quantity + return_item.quantity
             if return_item.restock:
+                base_return = _q4(Decimal(return_item.quantity) * Decimal(sale_item.factor_to_base))
+                # Restore to the ORIGINAL sold batches (newest allocation
+                # first) when the sale line carries batch allocations;
+                # never an arbitrary batch (spec: sale return).
+                from app.modules.stock import batch_service
+
+                await batch_service.restore_sale_batches(
+                    self.session,
+                    sale_item=sale_item,
+                    quantity_base=base_return,
+                )
                 await apply_stock_movement(
                     self.session,
                     product_id=sale_item.product_id,
                     movement_type="SALE_RETURN",
                     # Stock is always mutated in the base UOM: the sold line
                     # quantity was in the selected Pricing UOM.
-                    quantity_delta=_q4(Decimal(return_item.quantity) * Decimal(sale_item.factor_to_base)),
+                    quantity_delta=base_return,
                     unit_cost=sale_item.unit_cost,
                     reference_type="sale_return",
                     reference_id=sale_return.id,

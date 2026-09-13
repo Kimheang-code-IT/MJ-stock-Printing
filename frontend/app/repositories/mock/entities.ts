@@ -9,6 +9,7 @@ import type {
   FinanceSummary,
   PosCommandRepository,
   PosCompleteSaleInput,
+  ProductBatchRow,
   ProductCostHistoryRow,
   ProductHistoryRow,
   ProductSalePriceRow,
@@ -219,11 +220,100 @@ export function createMockStockQueryRepository(): StockQueryRepository {
             referenceId: isSale ? String(sale?.id ?? row.referenceId ?? '') : String(row.referenceId ?? row.id ?? ''),
             user: String(row.user ?? ''),
             note: String(row.note ?? ''),
+            // Batch traceability (spec: movements expose the lot the change hit).
+            batchNo: (row.batchNo ?? null) as string | null,
+            expiryDate: (row.expiryDate ?? null) as string | null,
             kind: historyKindOf(type) ?? 'stock_in',
           }
         })
         .sort((a, b) => b.date.localeCompare(a.date))
       return mockLatency(paginateScopedRows(rows, query, ['type', 'reference', 'user', 'note']))
+    },
+
+    /**
+     * Batch lots of one product derived from the mock movement ledger
+     * (same rule as the HTTP repository: identity = product + batch_no,
+     * remaining = inbound − outbound, expiry = latest stamped on the lot).
+     */
+    async listProductBatches(productId, query = {}): Promise<EntityListResult<ProductBatchRow>> {
+      const today = new Date().toISOString().slice(0, 10)
+      const lots = new Map<string, {
+        batchNo: string
+        expiryDates: string[]
+        received: number
+        remaining: number
+        unitCost: number | null
+        supplier: string
+        purchaseNo: string
+        createdDate: string
+      }>()
+      for (const row of mockRecords('stockMovements')) {
+        if (String(row.productId ?? '') !== String(productId)) continue
+        const batchNo = String(row.batchNo ?? '').trim()
+        if (!batchNo) continue
+        const qty = Number(row.quantity ?? 0)
+        const date = String(row.date ?? row.createdAt ?? '').slice(0, 10)
+        const key = `${String(productId)}:${batchNo}`
+        let lot = lots.get(key)
+        if (!lot) {
+          lot = { batchNo, expiryDates: [], received: 0, remaining: 0, unitCost: null, supplier: '', purchaseNo: '', createdDate: date }
+          lots.set(key, lot)
+        }
+        if (qty > 0) {
+          lot.received += qty
+          lot.remaining += qty
+          if (row.expiryDate) lot.expiryDates.push(String(row.expiryDate))
+          if (row.unitCost != null && Number(row.unitCost) > 0) lot.unitCost = Number(row.unitCost)
+          if (!lot.purchaseNo) lot.purchaseNo = String(row.documentNo ?? '')
+        }
+        else {
+          lot.remaining += qty
+        }
+        if (date && date > lot.createdDate) lot.createdDate = date
+      }
+      const rows: ProductBatchRow[] = []
+      for (const [key, lot] of lots) {
+        const remaining = roundQty(lot.remaining)
+        const expiry = lot.expiryDates.sort()[0] ?? null
+        // Supplier snapshot: the purchase document that first received the lot.
+        const sourcePurchase = lot.purchaseNo
+          ? mockRecords('stockIns').find(row => String(row.purchaseNo ?? '') === lot.purchaseNo)
+          : undefined
+        rows.push({
+          id: key,
+          productId: String(productId),
+          batchNo: lot.batchNo,
+          expiryDate: expiry,
+          remainingQty: remaining,
+          receivedQty: roundQty(lot.received),
+          unitCost: lot.unitCost ?? 0,
+          supplier: String(sourcePurchase?.supplier ?? lot.supplier ?? ''),
+          purchaseNo: lot.purchaseNo,
+          createdDate: lot.createdDate,
+          status: remaining <= 0
+            ? 'Depleted'
+            : (lot.expiryDates.length && (lot.expiryDates.sort()[0] ?? '') < today)
+              ? 'Expired'
+              : 'Active',
+        })
+      }
+      const filtered = rows
+        .filter((row) => {
+          const status = String(query.status || '').toUpperCase()
+          if (!status || status === 'ALL') return true
+          return row.status.toUpperCase() === status
+        })
+        .sort((a, b) => {
+          const depleted = Number(a.remainingQty <= 0) - Number(b.remainingQty <= 0)
+          if (depleted !== 0) return depleted
+          const expiry = String(a.expiryDate ?? '9999-12-31').localeCompare(String(b.expiryDate ?? '9999-12-31'))
+          if (expiry !== 0) return expiry
+          return a.batchNo.localeCompare(b.batchNo)
+        })
+      return mockLatency({
+        items: filtered,
+        meta: { page: Number(query.page || 1), limit: Number(query.limit || 500), total: filtered.length },
+      })
     },
 
     async listProductCostHistory(productId, query = {}): Promise<EntityListResult<ProductCostHistoryRow>> {
@@ -637,22 +727,37 @@ export function createMockPosRepository(): PosCommandRepository {
     quantity: number,
     reference: string,
     note: string,
-    extra: { uom?: string, unitCost?: number } = {},
+    extra: { uom?: string, unitCost?: number, batchNo?: string, expiryDate?: string, documentNo?: string } = {},
   ) {
     const db = useMockDb()
+    // Running balance display columns (ledger math stays in the base UOM).
+    const balanceBefore = roundQty(db.collections.stockMovements
+      .filter(row => String(row.productId ?? '') === String(productId))
+      .reduce((sum, row) => sum + Number(row.quantity ?? 0), 0))
+    const product = db.collections.products.find(row => String(row.id) === String(productId))
     db.collections.stockMovements.unshift({
       id: createId('mv'),
       createdAt: nowIso(),
       date: nowIso().slice(0, 10),
       productId,
       product: productName,
+      barcode: String(product?.barcode ?? ''),
       type,
       quantity,
       reference,
+      documentNo: extra.documentNo ?? reference,
       user: 'Sokha Chan',
       note,
-      ...(extra.uom ? { uom: extra.uom } : {}),
+      unit: extra.uom ?? String(product?.uomSymbol ?? ''),
+      uomSymbol: extra.uom ?? String(product?.uomSymbol ?? ''),
+      uom: extra.uom ?? String(product?.uomSymbol ?? ''),
+      qtyIn: quantity > 0 ? quantity : 0,
+      qtyOut: quantity < 0 ? Math.abs(quantity) : 0,
+      balanceBefore,
+      balanceAfter: roundQty(balanceBefore + quantity),
       ...(extra.unitCost != null ? { unitCost: extra.unitCost } : {}),
+      ...(extra.batchNo ? { batchNo: extra.batchNo } : {}),
+      ...(extra.expiryDate ? { expiryDate: extra.expiryDate } : {}),
     } as AppRecord)
   }
 
@@ -720,6 +825,10 @@ export function createMockPosRepository(): PosCommandRepository {
           factorToBase: factor,
           quantity,
           baseQuantity: baseQty,
+          // Batch allocation traceability (spec 12, internal only - FEFO
+          // handled invisibly by the backend; snapshot for Sale detail).
+          batchNo: 'FEFO',
+          expiryDate: null,
           price,
           discountPercent,
           discount: lineDiscount,
@@ -860,12 +969,21 @@ export function createMockPosRepository(): PosCommandRepository {
       if (!meta) throw new Error(`Unsupported stock operation: ${input.type}`)
       const reference = sequenceNext(meta.docType, meta.prefix, 5)
       const signed = meta.sign < 0 ? -Math.abs(baseQty) : Math.abs(baseQty)
+      // Movement label matches the approved movement-type filter values.
+      const movementLabel = input.type === 'adjustment'
+        ? (signed >= 0 ? 'Adjustment Increase' : 'Adjustment Decrease')
+        : meta.label
       product.quantity = roundQty(Number(product.quantity) + signed)
       if (Number(product.quantity) <= 10) product.status = 'Low Stock'
       else if (String(product.status) === 'Low Stock') product.status = 'Active'
-      applyMovement(String(product.id), String(product.name), meta.label, signed, reference, input.note ?? '', {
+      applyMovement(String(product.id), String(product.name), movementLabel, signed, reference, input.note ?? '', {
         uom: lineUomSymbol,
         ...(baseUnitCost != null ? { unitCost: baseUnitCost } : {}),
+        // Batch traceability: stock-in receives into the named lot; damage /
+        // expiry drain that same lot (identity = product + batch_no).
+        ...(input.batchNo ? { batchNo: String(input.batchNo) } : {}),
+        ...(input.type === 'stock_in' && input.expiryDate ? { expiryDate: String(input.expiryDate) } : {}),
+        ...(input.type === 'expiry' && input.expiryDate ? { expiryDate: String(input.expiryDate) } : {}),
       })
       addAudit('STOCK', input.type, 'Product', String(product.code), reference)
       return mockLatency({
@@ -873,7 +991,7 @@ export function createMockPosRepository(): PosCommandRepository {
         reference,
         productId: String(product.id),
         product: String(product.name),
-        type: meta.label,
+        type: movementLabel,
         quantity: signed,
         uom: lineUomSymbol,
         factorToBase: factor,
@@ -911,6 +1029,9 @@ export function createMockPosRepository(): PosCommandRepository {
         applyMovement(String(product.id), String(product.name), 'Stock In', baseQty, reference, input.note ?? '', {
           uom: lineUomSymbol,
           ...(baseUnitCost != null ? { unitCost: baseUnitCost } : {}),
+          // Batch traceability: the line receives into its named lot.
+          ...(line.batchNo ? { batchNo: String(line.batchNo) } : {}),
+          ...(line.expiryDate ? { expiryDate: String(line.expiryDate) } : {}),
         })
         total = round2(total + round2(quantity * (lineUnitCost ?? 0)))
         productNames.push(String(product.name))
@@ -951,6 +1072,18 @@ export function createMockPosRepository(): PosCommandRepository {
         documentNo: reference,
         type: 'Stock In',
         products: productNames,
+        // Batch traceability (spec 17): items carry their lot + expiry.
+        items: input.lines.map((line, i) => ({
+          id: createId('pline'),
+          productId: String(line.productId),
+          name: productNames[i] ?? '',
+          batchNo: line.batchNo ?? null,
+          expiryDate: line.expiryDate ?? null,
+          uom: '',
+          quantity: Number(line.quantity || 0),
+          price: Number(line.unitCost ?? 0),
+          total: round2(Number(line.quantity || 0) * Number(line.unitCost ?? 0)),
+        })),
         quantity: input.lines.reduce((sum, line) => sum + Number(line.quantity || 0), 0),
         total,
         paidAmount: paid,

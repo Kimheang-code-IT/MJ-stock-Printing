@@ -98,7 +98,8 @@ const exportFields = computed(() => {
               && field.type !== 'line-table'
               && field.type !== 'uom-conversions'
               && field.type !== 'related-records'
-              && field.type !== 'permission-matrix',
+              && field.type !== 'permission-matrix'
+              && field.type !== 'batches',
             )
         .map(field => ({
           label: field.label || t(field.labelKey),

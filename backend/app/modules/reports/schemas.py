@@ -16,7 +16,8 @@ class SalesReportRow(BaseModel):
     invoice_no: str
     customer_name: str | None
     product_name: str
-    sku: str
+    # Legacy internal code: nullable since 0021 (barcode is operational).
+    sku: str | None = None
     quantity: Decimal
     returned_quantity: Decimal = Decimal("0")
     returnable_quantity: Decimal = Decimal("0")
@@ -31,6 +32,9 @@ class SalesReportRow(BaseModel):
     debt_amount: Decimal = Decimal("0")
     cashier_name: str | None
     payment_method: str
+    # Document currency snapshot (reprints / grouped rows keep the stored rate).
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
 
 
 class PurchaseReportRow(BaseModel):
@@ -41,7 +45,8 @@ class PurchaseReportRow(BaseModel):
     transaction_date: datetime
     supplier_name: str | None
     product_name: str
-    sku: str
+    # Legacy internal code: nullable since 0021 (barcode is operational).
+    sku: str | None = None
     quantity: Decimal
     returned_quantity: Decimal = Decimal("0")
     returnable_quantity: Decimal = Decimal("0")
@@ -65,6 +70,8 @@ class CustomerDebtReportRow(BaseModel):
     remaining_amount: Decimal
     due_date: date | None
     status: str
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     created_at: datetime
 
 
@@ -80,6 +87,8 @@ class SupplierDebtReportRow(BaseModel):
     remaining_amount: Decimal
     due_date: date | None
     status: str
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     created_at: datetime
 
 
@@ -138,6 +147,14 @@ class ExpenseCreate(BaseModel):
         default=None,
         validation_alias=AliasChoices("payment_method", "paymentMethod"),
     )
+    # Document currency: amount is in THIS currency. exchange_rate = KHR per
+    # 1 USD (1 for USD documents); the Finance summary normalizes via it.
+    currency: str = Field(default="USD", pattern="^(USD|KHR)$")
+    exchange_rate: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        validation_alias=AliasChoices("exchange_rate", "exchangeRate"),
+    )
 
 
 class ExpenseOut(BaseModel):
@@ -149,6 +166,8 @@ class ExpenseOut(BaseModel):
     description: str | None
     amount: Decimal
     payment_method: str | None
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     created_by: UUID | None = None
     created_by_name: str | None = None
     created_at: datetime
@@ -170,6 +189,41 @@ class FinanceEntryRow(BaseModel):
     amount: Decimal
     payment_method: str | None = None
     paymentMethod: str | None = None
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     created_by_name: str | None = None
     user: str | None = None
     created_at: datetime
+
+
+class SaleReturnRow(BaseModel):
+    """One customer-return document (sale_returns) for the returns history."""
+
+    return_id: UUID
+    return_no: str
+    sale_id: UUID
+    sale_no: str
+    return_date: datetime
+    customer_name: str | None
+    item_count: int
+    refund_amount: Decimal
+    restocked_quantity: Decimal = Decimal("0")
+    reason: str
+    user_name: str | None
+
+
+class PurchaseReturnRow(BaseModel):
+    """One supplier-return document (purchase_returns) for the returns history."""
+
+    return_id: UUID
+    return_no: str
+    stock_transaction_id: UUID
+    document_no: str
+    return_date: datetime
+    supplier_name: str | None
+    item_count: int
+    refund_amount: Decimal
+    debt_reduction: Decimal = Decimal("0")
+    credit_amount: Decimal = Decimal("0")
+    reason: str
+    user_name: str | None

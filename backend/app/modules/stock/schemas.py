@@ -12,8 +12,13 @@ def _utcnow() -> datetime:
 class ProductCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    sku: str = Field(min_length=1, max_length=100)
-    barcode: str | None = Field(default=None, max_length=100)
+    # Legacy internal code: optional. Barcode is the operational identifier.
+    sku: str | None = Field(default=None, max_length=100)
+    barcode: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Operational product identifier. Auto-issued when omitted.",
+    )
     name: str = Field(min_length=1, max_length=200)
     category_id: UUID
     uom_id: UUID
@@ -30,6 +35,11 @@ class ProductCreate(BaseModel):
     )
     minimum_stock: Decimal = Field(default=Decimal("0"), ge=0)
     expiry_tracking: bool = False
+    # Batch/lot tracking (spec: batch management): Stock In lines MUST carry
+    # a batch_no when enabled.
+    track_batch: bool = False
+    # FIFO costing option (see Product.fifo).
+    fifo: bool = False
     image_object_key: str | None = Field(default=None, max_length=500)
     status: str = Field(default="ACTIVE", pattern="^(ACTIVE|INACTIVE)$")
     note: str | None = None
@@ -43,7 +53,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    sku: str | None = Field(default=None, min_length=1, max_length=100)
+    sku: str | None = Field(default=None, max_length=100)
     barcode: str | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     category_id: UUID | None = None
@@ -62,6 +72,8 @@ class ProductUpdate(BaseModel):
     )
     minimum_stock: Decimal | None = Field(default=None, ge=0)
     expiry_tracking: bool | None = None
+    track_batch: bool | None = None
+    fifo: bool | None = None
     image_object_key: str | None = Field(default=None, max_length=500)
     status: str | None = Field(default=None, pattern="^(ACTIVE|INACTIVE)$")
     note: str | None = None
@@ -76,8 +88,8 @@ class ProductOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    sku: str
-    barcode: str | None
+    sku: str | None
+    barcode: str
     name: str
     category_id: UUID | None
     category_name: str | None = None
@@ -91,6 +103,8 @@ class ProductOut(BaseModel):
     selling_price: Decimal
     minimum_stock: Decimal
     expiry_tracking: bool
+    track_batch: bool = False
+    fifo: bool = False
     image_object_key: str | None
     image_url: str | None = None
     status: str
@@ -151,6 +165,26 @@ class StockInRequest(BaseModel):
         default=Decimal("0"), ge=0, validation_alias=AliasChoices("paid_amount", "paidAmount")
     )
     payment_method: str = Field(default="CASH", validation_alias=AliasChoices("payment_method", "paymentMethod"))
+    # Document-level adjustments (purchase form footer): discount is
+    # subtracted from the line subtotal, tax is added afterwards.
+    discount_amount: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        validation_alias=AliasChoices("discount_amount", "discountAmount"),
+    )
+    tax_amount: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        validation_alias=AliasChoices("tax_amount", "taxAmount"),
+    )
+    # Document currency: every amount (lines, discount, tax, paid, debt) is
+    # in THIS currency. exchange_rate = KHR per 1 USD (1 for USD documents).
+    currency: str = Field(default="USD", pattern="^(USD|KHR)$")
+    exchange_rate: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        validation_alias=AliasChoices("exchange_rate", "exchangeRate"),
+    )
     items: list[StockInItem] = Field(min_length=1, validation_alias=AliasChoices("items", "lines"))
 
 
@@ -170,12 +204,26 @@ class StockAdjustmentRequest(BaseModel):
 
 
 class DamageItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     product_id: UUID
+    # Entered quantity per the selected UOM (base qty = qty × factor_to_base).
     quantity: Decimal = Field(gt=0)
     unit_cost: Decimal | None = Field(default=None, ge=0)
     reason: str = Field(min_length=1, max_length=500)
     batch_no: str | None = Field(default=None, max_length=100)
     note: str | None = None
+    # Damage accepts an alternate Pricing UOM: entered qty converts to base
+    # server-side (the frontend factor is validated, never trusted).
+    uom_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("uom_id", "uomId")
+    )
+    uom_symbol: str | None = Field(
+        default=None, max_length=20, validation_alias=AliasChoices("uom_symbol", "uomSymbol")
+    )
+    factor_to_base: Decimal | None = Field(
+        default=None, gt=0, validation_alias=AliasChoices("factor_to_base", "factorToBase")
+    )
 
 
 class StockDamageRequest(BaseModel):
@@ -186,12 +234,26 @@ class StockDamageRequest(BaseModel):
 
 
 class ExpireItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     product_id: UUID
+    # Entered quantity per the selected UOM (base qty = qty × factor_to_base).
     quantity: Decimal = Field(gt=0)
     unit_cost: Decimal | None = Field(default=None, ge=0)
     batch_no: str | None = Field(default=None, max_length=100)
     expiry_date: date | None = None
     note: str | None = None
+    # Expiry accepts an alternate Pricing UOM: entered qty converts to base
+    # server-side and is validated against the batch remaining quantity.
+    uom_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("uom_id", "uomId")
+    )
+    uom_symbol: str | None = Field(
+        default=None, max_length=20, validation_alias=AliasChoices("uom_symbol", "uomSymbol")
+    )
+    factor_to_base: Decimal | None = Field(
+        default=None, gt=0, validation_alias=AliasChoices("factor_to_base", "factorToBase")
+    )
 
 
 class StockExpireRequest(BaseModel):
@@ -263,6 +325,11 @@ class OperationItemOut(BaseModel):
     expiry_date: date | None
     reason: str | None
     line_total: Decimal
+    # Entered-UOM traceability of the operator on outbound lines (Damage /
+    # Expiry / Purchase Return): entered_quantity = base quantity ÷ factor.
+    entered_quantity: Decimal | None = None
+    entered_uom_symbol: str | None = None
+    entered_factor_to_base: Decimal | None = None
 
 
 class StockOperationOut(BaseModel):
@@ -276,6 +343,10 @@ class StockOperationOut(BaseModel):
     status: str
     total_amount: Decimal
     paid_amount: Decimal
+    discount_amount: Decimal = Decimal("0.00")
+    tax_amount: Decimal = Decimal("0.00")
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     debt_created: bool = False
     debt_id: UUID | None = None
     items: list[OperationItemOut]
@@ -316,22 +387,41 @@ class QuickStockOperationRequest(BaseModel):
 
 
 class MovementOut(BaseModel):
+    """GET /stock/movements row (Stock Movements page).
+
+    Quantities stay in the product base UOM (like the ledger); ``uom_symbol``
+    is the line snapshot when present, else the product's base UOM symbol.
+    ``qty_in``/``qty_out`` are unsigned convenience projections of the signed
+    ``quantity_delta``; ``balance_before``/``balance_after`` are derived from
+    the immutable movement ledger (never persisted).
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     product_id: UUID
     product_name: str | None = None
+    barcode: str | None = None
     movement_type: str
     quantity_delta: Decimal
+    qty_in: Decimal = Decimal("0")
+    qty_out: Decimal = Decimal("0")
+    balance_before: Decimal = Decimal("0")
+    balance_after: Decimal = Decimal("0")
     unit_cost: Decimal
     reference_type: str
     reference_id: UUID
     document_no: str | None
+    source_reference: str | None = None
     batch_no: str | None
     expiry_date: date | None
-    # Line UOM symbol snapshot (display only).
+    # Batch lot link (single-batch movements; multi-batch outflows stay NULL).
+    batch_id: UUID | None = None
+    # Line UOM symbol snapshot (display only; falls back to the base UOM).
     uom_symbol: str | None = None
     note: str | None
+    user: str | None = None
+    created_by: UUID | None = None
     created_at: datetime
 
 
@@ -343,8 +433,18 @@ class ProductHistoryRow(BaseModel):
     type: str
     kind: str
     qty: Decimal
+    # Product name and line-unit snapshot for the Stock In / Stock Out dialogs.
+    product: str = ""
+    unit: str | None = None
+    unit_price: Decimal
     reference: str | None = None
     reference_type: str
+    # Sale linkage for the Stock Out dialog click-through to the invoice.
+    reference_id: UUID | None = None
+    # Batch traceability (batch lots the row received / consumed).
+    batch_no: str | None = None
+    batch_id: UUID | None = None
+    expiry_date: date | None = None
     user: str | None = None
     note: str | None = None
 

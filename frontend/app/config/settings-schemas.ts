@@ -210,6 +210,18 @@ export const appConfigTabs: DocumentTabSchema[] = [
         ],
       },
       {
+        id: 'telegram-notifications',
+        titleKey: 'core.settings.telegramNotificationsTitle',
+        fields: [
+          { key: 'telegram.expiryAlertsEnabled', labelKey: 'core.settings.expiryNotifications', type: 'boolean' },
+          { key: 'telegram.saleNotificationsEnabled', labelKey: 'core.settings.saleNotifications', type: 'boolean' },
+          { key: 'telegram.purchaseNotificationsEnabled', labelKey: 'core.settings.purchaseNotifications', type: 'boolean' },
+          { key: 'telegram.dailySummaryEnabled', labelKey: 'core.settings.dailySummary', type: 'boolean' },
+          { key: 'telegram.dailySummaryTime', labelKey: 'core.settings.dailySummaryTime', type: 'text' },
+          { key: 'telegram.notificationLanguage', labelKey: 'core.settings.notificationLanguage', type: 'select', options: [{ label: 'English', value: 'en' }, { label: 'ខ្មែរ', value: 'km' }] },
+        ],
+      },
+      {
         id: 'telegram-features',
         titleKey: 'core.settings.telegramFeaturesTitle',
         fields: [

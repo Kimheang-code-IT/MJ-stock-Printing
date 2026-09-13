@@ -68,7 +68,7 @@ async def test_deliverable_items_and_partial_delivery(client):
     )
     assert created.status_code == 201, created.text
     note = created.json()["data"]
-    assert note["status"] == "DRAFT"
+    assert note["status"] == "PENDING"
     assert note["delivery_no"].startswith("DN-")
     assert note["invoice_nos"] == [sale["invoice_no"]]
     assert note["sales"][0]["sale_id"] == sale["id"]
@@ -259,7 +259,7 @@ async def test_draft_edit_rules_and_status_workflow(client):
 
     confirmed = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
     assert confirmed.status_code == 200
-    assert confirmed.json()["data"]["status"] == "CONFIRMED"
+    assert confirmed.json()["data"]["status"] == "PREPARING"
 
     # Draft-only editing: confirmed notes are locked.
     locked = await client.patch(
@@ -321,7 +321,7 @@ async def test_phone_and_location_required_before_confirm(client):
             headers=headers,
         )
     ).json()["data"]
-    assert note["status"] == "DRAFT"
+    assert note["status"] == "PENDING"
 
     # Confirm without phone/location is rejected.
     missing = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
@@ -359,7 +359,7 @@ async def test_cancel_releases_remaining_qty(client):
         f"/api/v1/delivery-notes/{note['id']}/cancel", json={"reason": "customer away"}, headers=headers
     )
     assert cancelled.status_code == 200
-    assert cancelled.json()["data"]["status"] == "CANCELLED"
+    assert cancelled.json()["data"]["status"] == "RETURNED"
     assert cancelled.json()["data"]["cancel_reason"] == "customer away"
 
     deliverable = (await client.get(f"/api/v1/sales/{sale['id']}/deliverable-items", headers=headers)).json()["data"]

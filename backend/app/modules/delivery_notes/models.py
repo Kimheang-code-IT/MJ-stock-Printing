@@ -3,14 +3,16 @@
 Delivery Notes NEVER mutate stock: stock was already reduced when the POS sale
 completed. They track delivery status only. One note may cover MANY invoices
 of the SAME customer (delivery_note_sales); phone + location on the header are
-the only delivery-destination fields (no driver/vehicle/schedule form).
+the delivery-destination fields, plus driver/vehicle/fee/receiver fulfillment
+metadata. Invoice delivery status is DERIVED from delivered quantities
+(Not Delivered / Partially Delivered / Fully Delivered) — never stored.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import Date, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,11 +27,13 @@ class DeliveryNote(Base):
         Index("ix_delivery_notes_created_at", "created_at"),
     )
 
-    STATUS_DRAFT = "DRAFT"
-    STATUS_CONFIRMED = "CONFIRMED"
+    STATUS_DRAFT = "PENDING"
+    STATUS_CONFIRMED = "PREPARING"
     STATUS_OUT_FOR_DELIVERY = "OUT_FOR_DELIVERY"
     STATUS_DELIVERED = "DELIVERED"
-    STATUS_CANCELLED = "CANCELLED"
+    STATUS_PARTIALLY_DELIVERED = "PARTIALLY_DELIVERED"
+    STATUS_FAILED = "FAILED"
+    STATUS_CANCELLED = "RETURNED"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     delivery_no: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -40,6 +44,18 @@ class DeliveryNote(Base):
     # service falls back to the customer snapshot when the caller omits it.
     delivery_phone: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     delivery_location: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    driver_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Currency of the note (USD|KHR): all linked invoices must share it, so
+    # the note never mixes raw KHR and USD invoices.
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    # Fulfillment header fields (spec §2.1.9 extended): scheduled/actual
+    # delivery date, vehicle/plate, delivery fee and the receiver snapshot.
+    delivery_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    vehicle_no: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    delivery_fee: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=Decimal("0")
+    )
+    received_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default=STATUS_DRAFT)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -113,5 +129,6 @@ class DeliveryNoteItem(Base):
     qty_ordered: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     qty_to_deliver: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     qty_delivered: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     delivery_note_ref: Mapped[DeliveryNote] = relationship(back_populates="items")

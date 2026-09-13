@@ -71,6 +71,9 @@ export type FieldType =
   | 'line-table'
   | 'related-records'
   | 'uom-conversions'
+  | 'batches'
+  | 'product-movements'
+  | 'sale-price-history'
 
 export interface FieldOption {
   label?: string

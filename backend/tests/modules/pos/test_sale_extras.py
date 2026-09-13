@@ -254,3 +254,110 @@ async def test_receipt_payload_is_print_ready(client):
     assert Decimal(data["delivery_price"]) == Decimal("2.00")
     assert Decimal(data["grand_total"]) == Decimal("20.00")
     assert Decimal(data["paid"]) == Decimal("20.00")
+
+@pytest.mark.asyncio
+async def test_receipt_payload_full_invoice_contract(client):
+    """Receipt payload carries every field the existing invoice needs:
+    currency, exchange rate, customer contact, payment, delivery, settings."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await make_stocked_product(client, headers, sku=f"POSR2-{tag}", name=f"POSR2 Widget {tag}")
+    customer = await make_customer(client, headers, code=f"POSR2-C-{tag}", name="Receipt Customer")
+    # Give the customer an address too (make_customer seeds the phone).
+    patched = await client.patch(
+        f"/api/v1/customers/{customer['id']}",
+        json={"address": "Street 12"},
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+
+    sale = (
+        await client.post(
+            "/api/v1/pos/sales",
+            json={
+                "payment_method": "CASH",
+                "amount_received": "50.00",
+                "customer_id": customer["id"],
+                "delivery_price": "1.50",
+                "items": [{"product_id": product["id"], "quantity": "2"}],
+            },
+            headers=headers,
+        )
+    ).json()["data"]
+
+    receipt = await client.get(f"/api/v1/pos/sales/{sale['id']}/receipt", headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    data = receipt.json()["data"]
+
+    # Invoice identity + timing + actors
+    assert data["invoice_no"] == sale["invoice_no"]
+    assert data["sale_date"]
+    assert data["cashier"]
+    assert data["customer"] == "Receipt Customer"
+
+    # Customer contact snapshot (only present when available)
+    assert data["customer_phone"] == "0123456789"
+    assert data["customer_address"] == "Street 12"
+
+    # Document currency + exchange rate (KHR per 1 USD; 1 for USD docs)
+    assert data["currency"] == "USD"
+    assert Decimal(data["exchange_rate"]) == Decimal("1")
+
+    # Items: UOM, quantity, unit price, discount, line amount
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    for key in ("name", "barcode", "uom_symbol", "quantity", "unit_price", "discount", "line_total"):
+        assert key in item
+    assert Decimal(item["line_total"]) == Decimal("20.00")
+
+    # Totals: subtotal/discount/delivery fee/grand total/paid/debt/change
+    assert Decimal(data["subtotal"]) == Decimal("20.00")
+    assert Decimal(data["discount"]) == Decimal("0.00")
+    assert Decimal(data["delivery_price"]) == Decimal("1.50")
+    assert Decimal(data["grand_total"]) == Decimal("21.50")
+    # `paid` is the amount applied to the sale (over-tender is returned as
+    # change at the POS and not persisted on the document).
+    assert Decimal(data["paid"]) == Decimal("21.50")
+    assert Decimal(data["debt"]) == Decimal("0.00")
+    assert Decimal(data["change"]) == Decimal("0.00")
+
+    # Payment method + status
+    assert data["payment_method"] == "CASH"
+    assert data["payment_status"] == "PAID"
+
+    # Shop/settings information + presentation values
+    assert data["shop"]["name"]
+    assert "paper_size" in data and data["paper_size"] in ("A4", "A5")
+    assert "show_exchange_rate" in data
+    assert "footer" in data
+
+
+@pytest.mark.asyncio
+async def test_receipt_payload_preserves_khr_sale_exchange_rate(client):
+    """A historical KHR sale keeps the exchange rate used at sale time."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await make_stocked_product(client, headers, sku=f"POSRK-{tag}", name=f"POSRK Widget {tag}")
+
+    sale = (
+        await client.post(
+            "/api/v1/pos/sales",
+            json={
+                "payment_method": "CASH",
+                "amount_received": "100000",
+                "currency": "KHR",
+                "exchange_rate": "4150.50",
+                "items": [{"product_id": product["id"], "quantity": "1"}],
+            },
+            headers=headers,
+        )
+    ).json()["data"]
+    assert sale["currency"] == "KHR"
+
+    receipt = await client.get(f"/api/v1/pos/sales/{sale['id']}/receipt", headers=headers)
+    data = receipt.json()["data"]
+    assert data["currency"] == "KHR"
+    assert Decimal(data["exchange_rate"]) == Decimal("4150.50")
+    # KHR amounts stay in KHR (selling_price in USD is converted at sale time
+    # by the POS contract; here the stored grand_total preserves the KHR value).
+    assert Decimal(data["grand_total"]) > 0

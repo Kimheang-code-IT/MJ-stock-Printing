@@ -39,14 +39,25 @@ SETTING_GROUPS: dict[str, dict[str, object]] = {
     },
     "telegram": {
         "bot_token": "",
+        "enabled": True,
         "enable_password_reset": True,
         "verification_code_expiry": 300,
         "max_verification_attempts": 5,
         "stock_inquiry_enabled": True,
-        "payment_invoice_notify_enabled": True,
         "expiry_alerts_enabled": True,
+        "sale_enabled": False,
+        "purchase_enabled": False,
+        "daily_summary_enabled": False,
+        "daily_summary_time": "07:00",
+        "notification_language": "en",
     },
-    "invoice": {"logo": "", "footer": "", "paper_size": "A4", "auto_print": False},
+    "invoice": {
+        "logo": "",
+        "footer": "",
+        "paper_size": "A4",
+        "auto_print": False,
+        "show_exchange_rate": False,
+    },
     "system": {"language": "en", "date_format": "YYYY-MM-DD", "timezone": "UTC"},
 }
 

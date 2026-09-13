@@ -72,6 +72,13 @@ function fieldValue(key: string): unknown {
     return raw == null || raw === '' ? undefined : String(raw)
   }
 
+  // The notifications tab's language selector maps onto the shared
+  // telegram message language (backend `notification_language`).
+  if (key === 'telegram.notificationLanguage') {
+    const raw = model.value.telegram.messageLanguage
+    return raw == null ? undefined : String(raw)
+  }
+
   if (key === 'localization.firstDayOfWeek') {
     const raw = getByPath(model.value, key)
     return raw == null || raw === '' ? undefined : String(raw)
@@ -104,6 +111,11 @@ async function setFieldValue(key: string, value: unknown) {
   if (key === 'general.defaultPageSize' || key === 'system.paginationDefault') {
     const n = Number(value)
     setByPath(model.value, key, Number.isFinite(n) ? n : 20)
+    return
+  }
+
+  if (key === 'telegram.notificationLanguage') {
+    setByPath(model.value, 'telegram.messageLanguage', value === 'km' ? 'km' : 'en')
     return
   }
 

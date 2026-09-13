@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import DateTime, String, cast, func, literal, select
+from sqlalchemy import DateTime, String, case, cast, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ValidationError
@@ -20,6 +20,8 @@ from app.modules.reports.models import Expense
 from app.modules.reports.schemas import ExpenseCreate
 from app.modules.stock.models import (
     Product,
+    PurchaseReturn,
+    PurchaseReturnItem,
     StockMovement,
     StockTransaction,
     StockTransactionItem,
@@ -31,6 +33,13 @@ from app.shared.pagination.params import parse_date_range
 
 Q2 = Decimal("0.01")
 Q4 = Decimal("0.0001")
+
+
+def _usd(expression, currency_col, rate_col):
+    """Normalize a money expression recorded in a document currency to USD
+    (KHR rows divide by the exchange rate applied on the document; USD rows
+    pass through). Multi-currency aggregates must never mix raw amounts."""
+    return case((currency_col == "KHR", expression / rate_col), else_=expression)
 
 
 def _day_start(value: date) -> datetime:
@@ -78,6 +87,10 @@ class ReportsService:
                 SaleItem.unit_cost,
                 User.full_name.label("cashier_name"),
                 Sale.debt_amount,
+                # Document currency of the sale — reprints and grouped report
+                # rows must use the stored rate, never the shop's current one.
+                Sale.currency,
+                Sale.exchange_rate,
             )
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
@@ -118,6 +131,9 @@ class ReportsService:
             "debt_amount": Decimal(row.debt_amount or 0),
             "cashier_name": row.cashier_name,
             "payment_method": payment_method,
+            # Document currency snapshot for grouped rows / invoice reprints.
+            "currency": row.currency,
+            "exchange_rate": row.exchange_rate,
         }
 
     async def _payment_methods(self, sale_ids: list) -> dict:
@@ -383,6 +399,8 @@ class ReportsService:
                 "remaining_amount": debt.remaining_amount,
                 "due_date": debt.due_date,
                 "status": debt.status,
+                "currency": debt.currency,
+                "exchange_rate": debt.exchange_rate,
                 "created_at": debt.created_at,
             }
             for debt, name, code, sale_date in rows.all()
@@ -460,6 +478,8 @@ class ReportsService:
                 "remaining_amount": debt.remaining_amount,
                 "due_date": debt.due_date,
                 "status": debt.status,
+                "currency": debt.currency,
+                "exchange_rate": debt.exchange_rate,
                 "created_at": debt.created_at,
             }
             for debt, name, code, transaction_date in rows.all()
@@ -474,17 +494,20 @@ class ReportsService:
         period_end = end_at.date() - timedelta(days=1)
 
         sales_total = await self.session.execute(
-            select(func.coalesce(func.sum(Sale.grand_total), 0)).where(
+            select(func.coalesce(func.sum(_usd(Sale.grand_total, Sale.currency, Sale.exchange_rate)), 0)).where(
                 Sale.sale_date >= start_at, Sale.sale_date < end_at
             )
         )
         refunds = await self.session.execute(
-            select(func.coalesce(func.sum(SaleReturn.refund_amount), 0)).where(
+            select(func.coalesce(func.sum(_usd(SaleReturn.refund_amount, Sale.currency, Sale.exchange_rate)), 0))
+            .select_from(SaleReturn)
+            .join(Sale, Sale.id == SaleReturn.sale_id)
+            .where(
                 SaleReturn.return_date >= start_at, SaleReturn.return_date < end_at
             )
         )
         purchase_total = await self.session.execute(
-            select(func.coalesce(func.sum(StockTransactionItem.line_total), 0))
+            select(func.coalesce(func.sum(_usd(StockTransactionItem.line_total, StockTransaction.currency, StockTransaction.exchange_rate)), 0))
             .select_from(StockTransactionItem)
             .join(StockTransaction, StockTransaction.id == StockTransactionItem.stock_transaction_id)
             .where(
@@ -494,18 +517,21 @@ class ReportsService:
             )
         )
         customer_debt = await self.session.execute(
-            select(func.coalesce(func.sum(CustomerDebt.remaining_amount), 0))
+            select(func.coalesce(func.sum(_usd(CustomerDebt.remaining_amount, CustomerDebt.currency, CustomerDebt.exchange_rate)), 0))
         )
         supplier_debt = await self.session.execute(
-            select(func.coalesce(func.sum(SupplierDebt.remaining_amount), 0))
+            select(func.coalesce(func.sum(_usd(SupplierDebt.remaining_amount, SupplierDebt.currency, SupplierDebt.exchange_rate)), 0))
         )
         operating_expense = await self.session.execute(
-            select(func.coalesce(func.sum(Expense.amount), 0)).where(
+            select(func.coalesce(func.sum(_usd(Expense.amount, Expense.currency, Expense.exchange_rate)), 0)).where(
                 Expense.expense_date >= start_at.date(),
                 Expense.expense_date < end_at.date(),
             )
         )
 
+        # Damage/expiry losses come from the movement cost ledger, which is
+        # recorded per movement (base-unit cost at mutation time) and has no
+        # document currency — those sums stay as recorded.
         async def loss(movement_type: str) -> Decimal:
             result = await self.session.execute(
                 select(
@@ -523,14 +549,17 @@ class ReportsService:
         expiry_loss = await loss("EXPIRE")
 
         sold = await self.session.execute(
-            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity), 0))
+            select(func.coalesce(func.sum(_usd(SaleItem.unit_cost * SaleItem.quantity, Sale.currency, Sale.exchange_rate)), 0))
+            .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
         )
         restocked = await self.session.execute(
-            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost), 0))
+            select(func.coalesce(func.sum(_usd(SaleReturnItem.quantity * SaleItem.unit_cost, Sale.currency, Sale.exchange_rate)), 0))
+            .select_from(SaleReturnItem)
             .join(SaleItem, SaleItem.id == SaleReturnItem.sale_item_id)
             .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
+            .join(Sale, Sale.id == SaleItem.sale_id)
             .where(
                 SaleReturnItem.restock.is_(True),
                 SaleReturn.return_date >= start_at,
@@ -582,6 +611,8 @@ class ReportsService:
                 literal("Sales", type_=String).label("category"),
                 func.coalesce(Customer.name, literal("")).label("description"),
                 Sale.grand_total.label("amount"),
+                Sale.currency.label("currency"),
+                Sale.exchange_rate.label("exchange_rate"),
                 func.coalesce(latest_method, literal("UNPAID")).label("payment_method"),
                 func.coalesce(User.full_name, literal("")).label("created_by_name"),
                 Sale.created_at.label("created_at"),
@@ -602,6 +633,8 @@ class ReportsService:
                 Expense.category.label("category"),
                 Expense.description.label("description"),
                 Expense.amount.label("amount"),
+                Expense.currency.label("currency"),
+                Expense.exchange_rate.label("exchange_rate"),
                 func.coalesce(Expense.payment_method, literal("")).label("payment_method"),
                 func.coalesce(User.full_name, literal("")).label("created_by_name"),
                 Expense.created_at.label("created_at"),
@@ -653,6 +686,8 @@ class ReportsService:
                 "category": row.category,
                 "description": row.description,
                 "amount": Decimal(row.amount),
+                "currency": row.currency,
+                "exchange_rate": row.exchange_rate,
                 "payment_method": row.payment_method or None,
                 "paymentMethod": row.payment_method or None,
                 "created_by_name": row.created_by_name,
@@ -677,6 +712,8 @@ class ReportsService:
             reference=(payload.reference or "").strip() or None,
             amount=amount,
             payment_method=payload.payment_method,
+            currency=payload.currency,
+            exchange_rate=payload.exchange_rate,
             created_by=actor.id,
         )
         self.session.add(expense)
@@ -698,3 +735,204 @@ class ReportsService:
         )
         await self.session.commit()
         return expense
+
+    # ------------------------------------------------------- returns history
+
+    @staticmethod
+    def _sale_return_items_agg():
+        """Per-return item count + restocked quantity (restock=True lines)."""
+        return (
+            select(
+                SaleReturnItem.sale_return_id.label("return_id"),
+                func.count().label("item_count"),
+                func.coalesce(
+                    func.sum(
+                        case((SaleReturnItem.restock.is_(True), SaleReturnItem.quantity), else_=literal(0))
+                    ),
+                    0,
+                ).label("restocked_quantity"),
+            )
+            .group_by(SaleReturnItem.sale_return_id)
+            .subquery()
+        )
+
+    async def sale_returns_report(
+        self,
+        *,
+        q: str | None,
+        start: date | None,
+        end: date | None,
+        page: int,
+        limit: int,
+    ) -> tuple[list[dict], int]:
+        """Customer-return history: one row per immutable sale_returns doc."""
+        start_at, end_at = _range(start, end)
+        items_agg = self._sale_return_items_agg()
+
+        def apply_filters(target):
+            target = target.where(SaleReturn.return_date >= start_at, SaleReturn.return_date < end_at)
+            if q:
+                term = f"%{q.strip()}%"
+                target = target.where(
+                    or_(
+                        SaleReturn.return_no.ilike(term),
+                        Sale.invoice_no.ilike(term),
+                        Customer.name.ilike(term),
+                        SaleReturn.reason.ilike(term),
+                    )
+                )
+            return target
+
+        def base_query():
+            return (
+                select(
+                    SaleReturn.id,
+                    SaleReturn.return_no,
+                    SaleReturn.sale_id,
+                    SaleReturn.return_date,
+                    SaleReturn.refund_amount,
+                    SaleReturn.reason,
+                    Sale.invoice_no.label("sale_no"),
+                    Customer.name.label("customer_name"),
+                    User.full_name.label("user_name"),
+                    items_agg.c.item_count,
+                    items_agg.c.restocked_quantity,
+                )
+                .select_from(SaleReturn)
+                .join(Sale, Sale.id == SaleReturn.sale_id)
+                .join(Customer, Customer.id == Sale.customer_id, isouter=True)
+                .join(User, User.id == SaleReturn.created_by, isouter=True)
+                .join(items_agg, items_agg.c.return_id == SaleReturn.id, isouter=True)
+            )
+
+        stmt = apply_filters(base_query())
+        count_stmt = apply_filters(
+            select(func.count())
+            .select_from(SaleReturn)
+            .join(Sale, Sale.id == SaleReturn.sale_id)
+            # Filters reference Customer.name — join it (outer) to avoid a
+            # cartesian product in the count.
+            .join(Customer, Customer.id == Sale.customer_id, isouter=True)
+        )
+        total = (await self.session.execute(count_stmt)).scalar_one()
+        rows = await self.session.execute(
+            stmt.order_by(SaleReturn.return_date.desc(), SaleReturn.return_no)
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+        data = [
+            {
+                "return_id": row.id,
+                "return_no": row.return_no,
+                "sale_id": row.sale_id,
+                "sale_no": row.sale_no,
+                "return_date": row.return_date,
+                "customer_name": row.customer_name,
+                "item_count": int(row.item_count or 0),
+                "refund_amount": Decimal(row.refund_amount),
+                "restocked_quantity": Decimal(row.restocked_quantity or 0),
+                "reason": row.reason,
+                "user_name": row.user_name,
+            }
+            for row in rows.all()
+        ]
+        return data, total
+
+    @staticmethod
+    def _purchase_return_items_agg():
+        """Per-return item count for supplier-return history."""
+        return (
+            select(
+                PurchaseReturnItem.purchase_return_id.label("return_id"),
+                func.count().label("item_count"),
+            )
+            .group_by(PurchaseReturnItem.purchase_return_id)
+            .subquery()
+        )
+
+    async def purchase_returns_report(
+        self,
+        *,
+        q: str | None,
+        start: date | None,
+        end: date | None,
+        page: int,
+        limit: int,
+    ) -> tuple[list[dict], int]:
+        """Supplier-return history: one row per immutable purchase_returns doc."""
+        start_at, end_at = _range(start, end)
+        items_agg = self._purchase_return_items_agg()
+
+        def apply_filters(target):
+            target = target.where(PurchaseReturn.return_date >= start_at, PurchaseReturn.return_date < end_at)
+            if q:
+                term = f"%{q.strip()}%"
+                target = target.where(
+                    or_(
+                        PurchaseReturn.return_no.ilike(term),
+                        StockTransaction.document_no.ilike(term),
+                        Supplier.name.ilike(term),
+                        PurchaseReturn.reason.ilike(term),
+                    )
+                )
+            return target
+
+        def base_query():
+            return (
+                select(
+                    PurchaseReturn.id,
+                    PurchaseReturn.return_no,
+                    PurchaseReturn.stock_transaction_id,
+                    PurchaseReturn.return_date,
+                    PurchaseReturn.refund_amount,
+                    PurchaseReturn.debt_reduction,
+                    PurchaseReturn.credit_amount,
+                    PurchaseReturn.reason,
+                    StockTransaction.document_no,
+                    Supplier.name.label("supplier_name"),
+                    User.full_name.label("user_name"),
+                    items_agg.c.item_count,
+                )
+                .select_from(PurchaseReturn)
+                .join(
+                    StockTransaction,
+                    StockTransaction.id == PurchaseReturn.stock_transaction_id,
+                )
+                .join(Supplier, Supplier.id == PurchaseReturn.supplier_id, isouter=True)
+                .join(User, User.id == PurchaseReturn.created_by, isouter=True)
+                .join(items_agg, items_agg.c.return_id == PurchaseReturn.id, isouter=True)
+            )
+
+        stmt = apply_filters(base_query())
+        count_stmt = apply_filters(
+            select(func.count())
+            .select_from(PurchaseReturn)
+            .join(StockTransaction, StockTransaction.id == PurchaseReturn.stock_transaction_id)
+            # Filters reference Supplier.name — join it (outer) to avoid a
+            # cartesian product in the count.
+            .join(Supplier, Supplier.id == PurchaseReturn.supplier_id, isouter=True)
+        )
+        total = (await self.session.execute(count_stmt)).scalar_one()
+        rows = await self.session.execute(
+            stmt.order_by(PurchaseReturn.return_date.desc(), PurchaseReturn.return_no)
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+        data = [
+            {
+                "return_id": row.id,
+                "return_no": row.return_no,
+                "stock_transaction_id": row.stock_transaction_id,
+                "document_no": row.document_no,
+                "return_date": row.return_date,
+                "supplier_name": row.supplier_name,
+                "item_count": int(row.item_count or 0),
+                "refund_amount": Decimal(row.refund_amount),
+                "debt_reduction": Decimal(row.debt_reduction),
+                "credit_amount": Decimal(row.credit_amount),
+                "reason": row.reason,
+                "user_name": row.user_name,
+            }
+            for row in rows.all()
+        ]
+        return data, total

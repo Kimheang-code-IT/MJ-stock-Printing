@@ -226,6 +226,9 @@ const isAlert = computed(() => props.field.type === 'alert')
 const isLineTable = computed(() => props.field.type === 'line-table')
 const isRelatedRecords = computed(() => props.field.type === 'related-records')
 const isUomConversions = computed(() => props.field.type === 'uom-conversions')
+const isBatches = computed(() => props.field.type === 'batches')
+const isProductMovements = computed(() => props.field.type === 'product-movements')
+const isSalePriceHistory = computed(() => props.field.type === 'sale-price-history')
 const isFile = computed(() => props.field.type === 'file')
 
 const lineAction = inject(moduleDocumentLineActionKey, undefined)
@@ -457,6 +460,28 @@ watch(() => props.field.key, () => {
     :model-value="modelValue"
     :disabled="disabled || field.readOnly"
     @update:model-value="emit('update:modelValue', $event)"
+  />
+
+  <!-- Read-only batch lots of this product (product detail Batches tab). -->
+  <StockBatchListPanel
+    v-else-if="isBatches"
+    class="md:col-span-2"
+    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
+  />
+
+  <!-- Read-only batch-traceable movements of this product (Movements tab). -->
+  <StockProductMovementsPanel
+    v-else-if="isProductMovements"
+    class="md:col-span-2"
+    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
+  />
+
+  <!-- Sale-price version history (Pricing tab; Product + UOM price). -->
+  <StockSalePriceHistoryPanel
+    v-else-if="isSalePriceHistory"
+    class="md:col-span-2"
+    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
+    @changed="recordAccess?.set?.('__reload', Date.now())"
   />
 
   <UAlert

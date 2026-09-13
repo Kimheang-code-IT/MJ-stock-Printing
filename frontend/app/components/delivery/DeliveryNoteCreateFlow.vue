@@ -3,6 +3,7 @@ import type { AppRecord } from '~/config/admin-seed'
 import type { ModuleTable } from '~/config/modules'
 import type { DocumentTabSchema } from '~/types/stock-pos/common'
 import { useDeliveryCommands } from '~/repositories/index'
+import { collectionOptionsEndpoint } from '~/utils/module/document-tabs'
 import {
   normalizeDeliverableInvoice,
   type DeliverableInvoice,
@@ -62,13 +63,19 @@ type DeliveryRow = Record<string, unknown> & {
   product: string
   uomSymbol: string
   qtyOrdered: number
+  qtyPreviouslyDelivered: number
   qtyRemaining: number
   qtyToDeliver: number
 }
 
 const model = reactive<Record<string, unknown>>({
+  customerId: '',
   deliveryPhone: '',
   deliveryLocation: '',
+  driverName: '',
+  vehicleNo: '',
+  deliveryDate: new Date().toISOString().slice(0, 10),
+  status: 'Draft',
   note: '',
   lines: [] as Array<Record<string, unknown>>,
 })
@@ -97,7 +104,10 @@ onMounted(async () => {
     const preselect = String(props.autoSelectSaleId || '')
     if (preselect) {
       const invoice = invoiceById.value.get(preselect)
-      if (invoice) model.lines = invoice.items.map(item => rowOf(preselect, item))
+      if (invoice) {
+        model.customerId = invoice.customerId
+        model.lines = invoice.items.map(item => rowOf(preselect, item))
+      }
       else toast.add({ title: t('app.delivery.noDeliverableSales'), color: 'warning' })
     }
   }
@@ -110,10 +120,15 @@ const invoiceById = computed(() =>
   new Map(invoices.value.map(invoice => [invoice.saleId, invoice])))
 
 function invoiceOptionsFor(): Array<{ label: string, value: string }> {
-  return invoices.value.map(invoice => ({
-    label: `${invoice.invoiceNo} · ${invoice.customer || t('app.pos.walkIn')}`,
-    value: invoice.saleId,
-  }))
+  // Only the selected customer's invoices with remaining undelivered qty
+  // (same-customer rule, spec §2.1.9).
+  const customerId = String(model.customerId || '')
+  return invoices.value
+    .filter(invoice => !customerId || invoice.customerId === customerId)
+    .map(invoice => ({
+      label: `${invoice.invoiceNo} — ${invoice.customer || t('app.pos.walkIn')}`,
+      value: invoice.saleId,
+    }))
 }
 
 /** Product lines of the row's invoice (deliverable remainder only). */
@@ -133,6 +148,7 @@ function rowOf(saleId: string, item: DeliverableInvoiceItem): DeliveryRow {
     product: item.product,
     uomSymbol: item.uomSymbol,
     qtyOrdered: item.qtyOrdered,
+    qtyPreviouslyDelivered: Math.max(0, item.qtyOrdered - item.qtyRemaining),
     qtyRemaining: item.qtyRemaining,
     qtyToDeliver: item.qtyRemaining,
   }
@@ -159,8 +175,9 @@ const linesTable = computed<ModuleTable>(() => ({
     },
     { key: 'uomSymbol', label: t('app.pos.uom'), type: 'text', computed: true },
     { key: 'qtyOrdered', label: t('app.delivery.qtyOrdered'), type: 'number', computed: true },
+    { key: 'qtyPreviouslyDelivered', label: t('app.delivery.previouslyDelivered'), type: 'number', computed: true },
     { key: 'qtyRemaining', label: t('app.delivery.qtyRemaining'), type: 'number', computed: true },
-    { key: 'qtyToDeliver', label: t('app.delivery.qtyToDeliver'), type: 'number', required: true },
+    { key: 'qtyToDeliver', label: t('app.delivery.deliverNow'), type: 'number', required: true },
   ],
 }))
 
@@ -173,8 +190,21 @@ const tabs = computed<DocumentTabSchema[]>(() => [{
       id: 'delivery-info',
       titleKey: 'app.delivery.infoSection',
       fields: [
+        // Customer first — only this customer's deliverable invoices are
+        // offered in the line table (same-customer rule).
+        {
+          key: 'customerId',
+          labelKey: 'app.pos.customer',
+          type: 'select',
+          required: true,
+          optionsEndpoint: collectionOptionsEndpoint('customers'),
+        },
         { key: 'deliveryPhone', labelKey: 'app.delivery.deliveryPhone', type: 'text', required: true },
         { key: 'deliveryLocation', labelKey: 'app.delivery.deliveryAddress', type: 'text', required: true },
+        { key: 'driverName', labelKey: 'app.delivery.driverName', type: 'text' },
+        { key: 'vehicleNo', labelKey: 'app.delivery.vehicleNo', type: 'text' },
+        { key: 'deliveryDate', labelKey: 'app.fields.date', type: 'date' },
+        { key: 'status', labelKey: 'app.fields.status', type: 'text', readOnly: true },
         { key: 'note', labelKey: 'app.fields.note', type: 'textarea', colSpan: 2 },
       ],
     },
@@ -193,6 +223,18 @@ const tabs = computed<DocumentTabSchema[]>(() => [{
     },
   ],
 }])
+
+// Customer changed → drop lines that belong to another customer.
+watch(() => model.customerId, (customerId) => {
+  const selected = String(customerId || '')
+  if (!selected) return
+  const rows = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
+  const kept = rows.filter((row) => {
+    const invoice = invoiceById.value.get(String(row.saleId || ''))
+    return !invoice || invoice.customerId === selected
+  })
+  if (kept.length !== rows.length) model.lines = kept
+})
 
 /**
  * Keep rows coherent: resolve the invoice's customer (same-customer rule),
@@ -262,6 +304,7 @@ const submitRows = computed(() => deliveryRows.value.filter(row =>
 
 const canSubmit = computed(() => Boolean(
   submitRows.value.length > 0
+  && String(model.customerId || '').trim()
   && String(model.deliveryPhone || '').trim()
   && String(model.deliveryLocation || '').trim()))
 
@@ -272,9 +315,12 @@ async function save(confirm: boolean) {
   try {
     const first = invoiceById.value.get(submitRows.value[0]!.saleId)
     const record = await deliveryCommands.createDeliveryNote({
-      customerId: first?.customerId || null,
+      customerId: String(model.customerId || '').trim() || first?.customerId || null,
       deliveryPhone: String(model.deliveryPhone || '').trim() || null,
       deliveryLocation: String(model.deliveryLocation || '').trim() || null,
+      driverName: String(model.driverName || '').trim() || null,
+      vehicleNo: String(model.vehicleNo || '').trim() || null,
+      deliveryDate: String(model.deliveryDate || '').trim() || null,
       note: String(model.note || '').trim() || null,
       confirm,
       lines: submitRows.value.map(row => ({

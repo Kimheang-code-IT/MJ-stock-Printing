@@ -251,6 +251,7 @@ async def create_supplier_debt_for_stock_in(
     document_no: str,
     original_amount,
     paid_amount,
+    currency: str = "USD",
 ) -> SupplierDebt:
     """Public interface: stock-in transactions create supplier debts in their own
     transaction when the purchase is not fully paid."""
@@ -274,6 +275,7 @@ async def create_supplier_debt_for_stock_in(
         paid_amount=paid,
         remaining_amount=remaining,
         status="UNPAID" if paid == 0 else "PARTIAL",
+        currency=currency,
     )
     session.add(debt)
     await session.flush()

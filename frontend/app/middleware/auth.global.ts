@@ -6,7 +6,7 @@ const PERMITTED_LANDING_ROUTES = [
   ['/setup/categories', 'categories.view'],
   ['/setup/uoms', 'uom.view'],
   ['/setup/brands', 'brand.view'],
-  ['/stock', 'products.view'],
+  ['/stock/products', 'products.view'],
   ['/setup/suppliers', 'suppliers.view'],
   ['/pos', 'pos.view'],
   ['/setup/customers', 'customers.view'],

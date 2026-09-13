@@ -36,7 +36,8 @@ export function useMenu() {
 
   const ROUTE_PERMISSION: Record<string, string> = {
     '/': 'dashboard.view',
-    '/stock': 'products.view',
+    '/stock/products': 'products.view',
+    '/stock/movements': 'products.view',
     '/pos': 'pos.view',
     '/delivery-notes': 'delivery.view',
     '/setup/categories': 'categories.view',
@@ -87,7 +88,10 @@ export function useMenu() {
   const links = computed<NavigationMenuItem[][]>(() => {
     const tree: NavigationMenuItem[] = [
       { label: t('app.nav.dashboard'), icon: 'i-lucide-layout-dashboard', to: '/', exact: true, class: 'text-sm gap-2', onSelect: close },
-      { label: t('app.nav.stock'), icon: 'i-lucide-package', to: '/stock', class: 'text-sm gap-2', onSelect: close },
+      group('stock', t('app.nav.stock'), 'i-lucide-package', [
+        pageLink(t('app.stock.tabProducts'), '/stock/products'),
+        pageLink(t('app.stock.tabMovements'), '/stock/movements'),
+      ]),
       { label: t('app.nav.pos'), icon: 'i-lucide-store', to: '/pos', class: 'text-sm gap-2', onSelect: close },
       { label: t('app.nav.deliveryNotes'), icon: 'i-lucide-package-check', to: '/delivery-notes', class: 'text-sm gap-2', onSelect: close },
       group('setup', t('app.nav.setup'), 'i-lucide-settings-2', [

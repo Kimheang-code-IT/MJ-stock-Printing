@@ -60,6 +60,8 @@ class SupplierDebtOut(BaseModel):
     remaining_amount: Decimal
     due_date: date | None
     status: str
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     created_at: datetime
 
 

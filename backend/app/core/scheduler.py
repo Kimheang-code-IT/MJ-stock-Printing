@@ -41,6 +41,16 @@ async def run_expiry_scan_once() -> dict:
         return await ExpiryAlertService(session).scan_and_send()
 
 
+async def run_daily_summary_once() -> dict:
+    """Telegram daily summary at the configured local time (after the expiry
+    scan slot). Never raises into the loop."""
+    from app.core.database import SessionFactory
+    from app.shared.telegram.service import send_daily_summary
+
+    async with SessionFactory() as session:
+        return await send_daily_summary(session)
+
+
 async def _acquired_scan_lock() -> bool:
     try:
         from app.core.redis import get_redis
@@ -74,6 +84,15 @@ async def scheduler_loop(stop: asyncio.Event) -> None:
             logger.info("Expiry alert sweep: %s", summary)
         except Exception:
             logger.exception("Expiry alert sweep failed")
+
+        # Daily summary piggybacks on the same daily wake-up slot (after the
+        # expiry sweep), gated by its own Settings toggle.
+        try:
+            summary_result = await run_daily_summary_once()
+            if summary_result.get("enabled"):
+                logger.info("Telegram daily summary: sent=%s", summary_result.get("sent"))
+        except Exception:
+            logger.exception("Telegram daily summary failed")
 
 
 def start_backend_scheduler() -> tuple[asyncio.Event, asyncio.Task[None]]:

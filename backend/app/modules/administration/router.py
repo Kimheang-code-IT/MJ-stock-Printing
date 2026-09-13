@@ -207,3 +207,18 @@ async def update_settings(
     service = AdministrationService(db)
     groups = await service.update_settings(payload.values, actor=actor)
     return envelope(SettingsOut(groups=groups))
+
+
+@router.post("/settings/telegram-test")
+async def send_telegram_test(
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("settings.manage")),
+) -> dict:
+    """Send a test Telegram notification to every verified recipient.
+
+    Delivery failures never raise — the response reports what was sent so
+    the Settings UI can show a soft warning."""
+    from app.shared.telegram.service import send_test_notification
+
+    result = await send_test_notification(db)
+    return envelope(result)

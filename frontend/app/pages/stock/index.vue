@@ -1,7 +1,13 @@
 <script setup lang="ts">
-definePageMeta({ titleKey: 'app.nav.stock', permission: 'products.view' })
+// The Stock module now lives at /stock/products; keep the legacy path
+// working as a redirect (bookmarks, cached links).
+definePageMeta({
+  middleware: [
+    () => navigateTo('/stock/products', { replace: true }),
+  ],
+})
 </script>
 
 <template>
-  <ModuleWorkspaceView />
+  <div />
 </template>

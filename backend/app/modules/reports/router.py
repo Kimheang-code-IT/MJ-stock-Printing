@@ -18,7 +18,9 @@ from app.modules.reports.schemas import (
     FinanceEntryRow,
     FinanceReportOut,
     PurchaseReportRow,
+    PurchaseReturnRow,
     SalesReportRow,
+    SaleReturnRow,
     SupplierDebtReportRow,
 )
 from app.modules.reports.service import ReportsService
@@ -216,6 +218,48 @@ def _csv_response(filename: str, header: list[str], rows: list[list]) -> Streami
         iter([buffer.getvalue()]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/sale-returns")
+async def sale_returns_report(
+    params: ListParams = Depends(list_params),
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("report.sales")),
+) -> dict:
+    """Customer-return history (immutable sale_returns documents)."""
+    service = ReportsService(db)
+    rows, total = await service.sale_returns_report(
+        q=params.q,
+        start=params.start_date,
+        end=params.end_date,
+        page=params.page,
+        limit=params.limit,
+    )
+    return envelope(
+        [SaleReturnRow.model_validate(row) for row in rows],
+        {"page": params.page, "limit": params.limit, "total": total},
+    )
+
+
+@router.get("/purchase-returns")
+async def purchase_returns_report(
+    params: ListParams = Depends(list_params),
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("report.purchase")),
+) -> dict:
+    """Supplier-return history (immutable purchase_returns documents)."""
+    service = ReportsService(db)
+    rows, total = await service.purchase_returns_report(
+        q=params.q,
+        start=params.start_date,
+        end=params.end_date,
+        page=params.page,
+        limit=params.limit,
+    )
+    return envelope(
+        [PurchaseReturnRow.model_validate(row) for row in rows],
+        {"page": params.page, "limit": params.limit, "total": total},
     )
 
 

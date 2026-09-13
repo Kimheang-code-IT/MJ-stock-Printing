@@ -97,7 +97,7 @@ async def _seed_sample_master_data(session) -> None:
 
     from app.modules.auth.models import User
     from app.modules.brands.models import Brand
-    from app.modules.delivery_notes.models import DeliveryNote, DeliveryNoteItem
+    from app.modules.delivery_notes.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
     from app.modules.pos.models import Sale
 
     for code, name in (("GEN", "Generic"), ("PREM", "Premium")):
@@ -124,18 +124,24 @@ async def _seed_sample_master_data(session) -> None:
 
     note = DeliveryNote(
         delivery_no=await _allocate(session, "DELIVERY_NOTE"),
-        sale_id=sale.id,
-        invoice_no=sale.invoice_no,
         customer_id=sale.customer_id,
         status=DeliveryNote.STATUS_DRAFT,
         created_by=admin.id,
     )
     session.add(note)
     await session.flush()
+    session.add(
+        DeliveryNoteSale(
+            delivery_note_id=note.id,
+            sale_id=sale.id,
+            invoice_no=sale.invoice_no,
+        )
+    )
     for item in sale.items:
         session.add(
             DeliveryNoteItem(
                 delivery_note_id=note.id,
+                sale_id=sale.id,
                 sale_item_id=item.id,
                 product_id=item.product_id,
                 product_name=item.product_name,

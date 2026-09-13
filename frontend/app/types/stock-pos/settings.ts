@@ -88,6 +88,16 @@ export interface TelegramConfig {
   paymentInvoiceNotifyEnabled: boolean
   /** Enable the view-only stock inquiry bot (no mutations via Telegram). */
   stockInquiryEnabled: boolean
+  /** Deliver expiry alerts through Telegram (uses the two lead times). */
+  expiryAlertsEnabled: boolean
+  /** Notify after a sale is completed. */
+  saleNotificationsEnabled: boolean
+  /** Notify after a purchase is completed. */
+  purchaseNotificationsEnabled: boolean
+  /** Send the daily summary message. */
+  dailySummaryEnabled: boolean
+  /** Daily summary time (HH:mm, application timezone). */
+  dailySummaryTime: string
   connectionStatus: ConnectionStatus
   lastTestedAt?: string
   lastTestMessage?: string

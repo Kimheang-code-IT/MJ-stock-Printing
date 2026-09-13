@@ -1,5 +1,6 @@
 """POS sale completion: atomicity, payments, discounts, oversell (spec 2.1.7)."""
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -20,6 +21,59 @@ async def _cash_sale(client, headers, product_id, *, quantity="3", amount="100.0
         **extra,
     }
     return await client.post("/api/v1/pos/sales", json=payload, headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_khr_sale_records_document_currency_and_debt(client):
+    """A KHR checkout stores every amount in KHR with the applied exchange
+    rate; a customer debt from that sale inherits the KHR currency."""
+    headers = await admin_headers(client)
+    product = await make_stocked_product(client, headers, sku="POS-KHR", name="KHR Sale Widget")
+    customer = await make_customer(client, headers, code="KHR-C", name="KHR Buyer")
+
+    # Product prices are USD-based; the cashier sells in KHR at 41000, so the
+    # 10.00 USD price is sent as 410000 KHR and 2 units fully paid.
+    response = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "820000",
+            "customer_id": customer["id"],
+            "currency": "KHR",
+            "exchange_rate": "41000",
+            # Yesterday — keeps today's Finance aggregates untouched.
+            "sale_date": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "items": [{"product_id": product["id"], "quantity": "2", "unit_price": "410000"}],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    sale = response.json()["data"]
+    assert sale["currency"] == "KHR"
+    assert Decimal(sale["exchange_rate"]) == Decimal("41000")
+    assert Decimal(sale["subtotal"]) == Decimal("820000.00")
+    assert sale["payment_status"] == "PAID"
+
+    # Partial KHR sale creates a KHR customer debt.
+    partial = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "amount_received": "400000",
+            "customer_id": customer["id"],
+            "currency": "KHR",
+            "exchange_rate": "41000",
+            "sale_date": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "items": [{"product_id": product["id"], "quantity": "2", "unit_price": "410000"}],
+        },
+        headers=headers,
+    )
+    assert partial.status_code == 201, partial.text
+    debts = await client.get(f"/api/v1/customers/{customer['id']}/debts", headers=headers)
+    assert debts.status_code == 200, debts.text
+    debt = debts.json()["data"][0]
+    assert debt["currency"] == "KHR"
+    assert Decimal(debt["remaining_amount"]) > 0
 
 
 @pytest.mark.asyncio

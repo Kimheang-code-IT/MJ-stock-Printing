@@ -3,7 +3,7 @@ import type { AppRecord } from '~/config/admin-seed'
 
 const CANONICAL_COLLECTION_PATHS: Record<string, string> = {
   categories: '/setup/categories',
-  products: '/stock',
+  products: '/stock/products',
   suppliers: '/setup/suppliers',
   customers: '/setup/customers',
   sales: '/reports/sales',

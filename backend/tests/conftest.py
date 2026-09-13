@@ -9,6 +9,9 @@ os.environ.setdefault("RATE_LIMIT_RESET_PER_HOUR", "1000")
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("DEBUG", "true")
 os.environ.setdefault("SCHEDULER_ENABLED", "false")
+# Telegram stays disabled in tests unless a test monkeypatches the token:
+# an operator .env with a real bot token must not flip notification gates.
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "")
 os.environ.setdefault(
     "LOCAL_STORAGE_DIR",
     tempfile.mkdtemp(prefix="stock-pos-media-"),
@@ -66,6 +69,16 @@ def _prepare_database() -> None:
         engine = create_async_engine(TEST_DATABASE_URL)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
+            # drop_all misses tables outside the current metadata (e.g. tables
+            # left by a legacy schema in a reused test DB); drop those too so
+            # create_all never hits foreign keys into the fresh schema.
+            leftovers = await conn.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+            )
+            known = {t.lower() for t in Base.metadata.tables}
+            stale = [row[0] for row in leftovers if row[0].lower() not in known]
+            for table in stale:
+                await conn.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
             await conn.run_sync(Base.metadata.create_all)
 
         temp_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

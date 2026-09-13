@@ -62,10 +62,10 @@ async def test_status_transitions_follow_the_allowed_table(client):
     assert jump.status_code == 409
 
     confirm = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "CONFIRMED"}, headers=headers
+        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert confirm.status_code == 200, confirm.text
-    assert confirm.json()["data"]["status"] == "CONFIRMED"
+    assert confirm.json()["data"]["status"] == "PREPARING"
 
     # Confirmed → Delivered is legal (Delivery OK shortcut).
     early_deliver = await client.post(
@@ -80,7 +80,7 @@ async def test_status_transitions_follow_the_allowed_table(client):
     # Delivered is terminal — no further transitions.
     late_cancel = await client.post(
         f"/api/v1/delivery-notes/{note_id}/status",
-        json={"status": "CANCELLED", "cancel_reason": "wrong address"},
+        json={"status": "RETURNED", "cancel_reason": "wrong address"},
         headers=headers,
     )
     assert late_cancel.status_code == 409
@@ -104,7 +104,7 @@ async def test_status_out_for_delivery_path_and_audit(client, db_session):
     note_id = created.json()["data"]["id"]
 
     confirmed = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "CONFIRMED"}, headers=headers
+        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert confirmed.status_code == 200
 
@@ -146,27 +146,27 @@ async def test_status_cancel_requires_reason(client):
     note_id = created.json()["data"]["id"]
 
     missing_reason = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "CANCELLED"}, headers=headers
+        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "RETURNED"}, headers=headers
     )
     assert missing_reason.status_code == 422
 
     confirmed = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "CONFIRMED"}, headers=headers
+        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert confirmed.status_code == 200
 
     cancelled = await client.post(
         f"/api/v1/delivery-notes/{note_id}/status",
-        json={"status": "CANCELLED", "cancel_reason": "customer moved"},
+        json={"status": "RETURNED", "cancel_reason": "customer moved"},
         headers=headers,
     )
     assert cancelled.status_code == 200
-    assert cancelled.json()["data"]["status"] == "CANCELLED"
+    assert cancelled.json()["data"]["status"] == "RETURNED"
     assert cancelled.json()["data"]["cancel_reason"] == "customer moved"
 
     # Cancelled is terminal.
     reopen = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "CONFIRMED"}, headers=headers
+        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert reopen.status_code == 409
 
@@ -209,7 +209,7 @@ async def test_status_legacy_action_aliases_and_permissions(client, db_session):
         f"/api/v1/delivery-notes/{note_id}/status", json={"action": "confirm"}, headers=headers
     )
     assert confirm.status_code == 200, confirm.text
-    assert confirm.json()["data"]["status"] == "CONFIRMED"
+    assert confirm.json()["data"]["status"] == "PREPARING"
 
     # Confirming an already-confirmed note is an illegal transition.
     again = await client.post(

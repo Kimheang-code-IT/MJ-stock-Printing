@@ -37,6 +37,12 @@ class Expense(Base):
     # (falls back to the category when empty).
     reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    # Document currency: every amount on this document is in THIS currency
+    # (never mixed). exchange_rate = KHR per 1 USD (1 for USD documents).
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="USD", server_default="USD")
+    exchange_rate: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=Decimal("1"), server_default="1"
+    )
     payment_method: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

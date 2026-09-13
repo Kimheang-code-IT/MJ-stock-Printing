@@ -94,6 +94,12 @@ export interface DeliveryNoteCreateInput {
   customerId?: string | null
   deliveryPhone?: string | null
   deliveryLocation?: string | null
+  /** Delivery person / driver name (fulfillment header). */
+  driverName?: string | null
+  /** Vehicle / plate number (fulfillment header). */
+  vehicleNo?: string | null
+  /** Planned delivery date (fulfillment header). */
+  deliveryDate?: string | null
   note?: string | null
   lines: DeliveryNoteLineInput[]
   /** Save directly as Confirmed instead of Draft. */
@@ -126,6 +132,10 @@ export interface ProductHistoryRow {
   user: string
   note: string
   kind: StockHistoryKind
+  /** Batch lot the change hit (null for unbatched products). */
+  batchNo?: string | null
+  /** Expiry stamped on the lot (display only). */
+  expiryDate?: string | null
 }
 
 /** One Stock In cost lot of a product (UI camelCase; GET /stock/products/{id}/cost-history). */
@@ -163,12 +173,39 @@ export interface ProductScopedQuery {
   limit?: number
 }
 
+/** Batch status dialect (UI): Active | Expired | Depleted. */
+export type BatchStatus = 'Active' | 'Expired' | 'Depleted'
+
+/** One batch lot of a product, derived from the immutable movement ledger
+ *  (GET /stock/movements?productId=… grouped by batch_no). Read-only. */
+export interface ProductBatchRow {
+  /** Batch identity = product + batch_no (the ledger's batch key). */
+  id: string
+  productId: string
+  batchNo: string
+  /** Nearest expiry stamped on the lot's movements; null when none. */
+  expiryDate: string | null
+  /** Remaining base-UOM quantity: inbound lots − outflows from the ledger. */
+  remainingQty: number
+  /** Received base-UOM quantity: remaining + everything that left the lot. */
+  receivedQty: number
+  /** Unit cost per base UOM from the latest Stock In movement of the lot. */
+  unitCost: number
+  supplier: string
+  /** Opening purchase document no (PIN-…). */
+  purchaseNo: string
+  createdDate: string
+  status: BatchStatus
+}
+
 /** Read-only product-scoped queries used by the Stock list dialogs. */
 export interface StockQueryRepository {
   /** Movement history of one product; `type` filters by dialog kind. */
   listProductHistory(productId: string, query?: ProductScopedQuery & { type?: StockHistoryKind }): Promise<EntityListResult<ProductHistoryRow>>
   /** Stock In cost lots of one product (versions assigned oldest → newest). */
   listProductCostHistory(productId: string, query?: ProductScopedQuery): Promise<EntityListResult<ProductCostHistoryRow>>
+  /** Batch lots of one product, derived from the movement ledger. */
+  listProductBatches(productId: string, query?: ProductScopedQuery & { status?: string }): Promise<EntityListResult<ProductBatchRow>>
   /** Sale-price versions of one product (newest first). */
   listSalePrices(productId: string, query?: ProductScopedQuery): Promise<EntityListResult<ProductSalePriceRow>>
   /** Invoice detail behind one SALE movement (Stock Out dialog click-through); null when not a sale. */
@@ -204,6 +241,10 @@ export interface SaleReceipt {
   total: number
   paidAmount: number
   remaining: number
+  /** Currency snapshot of the sale (defaults to USD). */
+  currency?: string
+  /** Exchange rate snapshot as 1 USD = X KHR (when recorded). */
+  exchangeRate?: number
 }
 
 /** One product line of a complete Purchase (Stock In) basket. */
@@ -218,6 +259,11 @@ export interface PurchaseLineInput {
   factorToBase?: number
   /** Unit cost per the selected UOM. */
   unitCost?: number
+  /** Batch no of the lot this line is received into (required when the
+   *  product tracks batches; identity = product + batch_no). */
+  batchNo?: string | null
+  /** Recorded expiry date of the lot (when the product tracks expiry). */
+  expiryDate?: string | null
 }
 
 /**
@@ -262,6 +308,11 @@ export interface PosCommandRepository {
     factorToBase?: number
     /** Unit cost per the selected UOM (Stock In). */
     unitCost?: number
+    /** Batch no of the target lot (Damage / Expiry on a batch-tracked
+     *  product; Stock In receives into this lot). */
+    batchNo?: string | null
+    /** Recorded expiry date of the lot (Stock In / Expiry). */
+    expiryDate?: string | null
     /** Stock In = purchase: supplier for the purchase / debt (optional). */
     supplierId?: string | null
     /** Amount paid now (0…line total; unpaid balance becomes supplier debt). */

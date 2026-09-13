@@ -4,7 +4,7 @@ import type { PaginationState } from '@tanstack/vue-table'
 import { h } from 'vue'
 import type { AppRecord } from '~/config/admin-seed'
 import { STOCK_OPERATION_META } from '~/config/pos-options'
-import type { ProductHistoryRow, SaleReceipt, StockHistoryKind } from '~/repositories/contracts/entities'
+import type { ProductBatchRow, ProductHistoryRow, SaleReceipt, StockHistoryKind } from '~/repositories/contracts/entities'
 import { usePosCommands, useStockQueries } from '~/repositories/index'
 import { formatMoney } from '~/utils/format/format-service'
 import { conversionForUom, convertToBase, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
@@ -83,6 +83,80 @@ const addQuantity = ref<number | undefined>()
 const addNote = ref('')
 const addUomId = ref('')
 const addUnitCost = ref<number | undefined>()
+// Batch selection (spec §13/§14): batch-tracked products drain a named lot;
+// expiry defaults to the nearest-expiry batch. Never offered for unbatched
+// products and never for depleted lots.
+const addBatchNo = ref('')
+const addExpiryDate = ref('')
+const batchRows = ref<ProductBatchRow[]>([])
+const batchLoading = ref(false)
+
+/** Batch-tracked product (spec §5.9 Stock Costing toggles). */
+const tracksBatch = computed(() =>
+  productRecord.value?.trackBatch === true
+  || (productRecord.value?.trackBatch == null && (productRecord.value?.expiryTracking === true || productRecord.value?.expiryTracking === 'true')))
+
+const tracksExpiry = computed(() =>
+  productRecord.value?.trackExpiry === true || productRecord.value?.expiryTracking === true)
+
+/** Selectable lots: Active (with stock) first — depleted lots are rejected
+ *  server-side, expired lots are allowed for Damage but pre-warned. */
+const batchOptions = computed(() => batchRows.value
+  .filter(row => Number(row.remainingQty) > 0)
+  .map(row => ({
+    label: `${row.batchNo} — ${t('app.stock.expiryDateCol')} ${row.expiryDate || '—'} — ${row.remainingQty} ${baseUomSymbol.value}`,
+    value: row.batchNo,
+  })))
+
+const selectedBatch = computed(() =>
+  batchRows.value.find(row => row.batchNo === addBatchNo.value) || null)
+
+const selectedBatchExpired = computed(() => selectedBatch.value?.status === 'Expired')
+
+const selectedBatchDepleted = computed(() =>
+  selectedBatch.value != null && Number(selectedBatch.value.remainingQty) <= 0)
+
+/** Over-batch guard: entered qty (converted to base) vs the lot remaining. */
+const batchQtyExceeded = computed(() => {
+  const batch = selectedBatch.value
+  if (!batch || addKind.value === 'stock_in' || !addQuantity.value) return false
+  const baseQty = multiplyDecimalSafe(Number(addQuantity.value), addFactor.value)
+  return baseQty > Number(batch.remainingQty)
+})
+
+const addCanSubmit = computed(() => Boolean(
+  addQuantity.value
+  && (!tracksBatch.value || (addBatchNo.value.trim() && !selectedBatchDepleted.value && !batchQtyExceeded.value))
+  && (!tracksExpiry.value || addKind.value !== 'stock_in' || addExpiryDate.value)))
+
+async function loadBatches() {
+  if (!productRecord.value || !tracksBatch.value) {
+    batchRows.value = []
+    return
+  }
+  batchLoading.value = true
+  try {
+    const result = await stockQueries.listProductBatches(String(productRecord.value.id), { limit: 500 })
+    batchRows.value = result.items
+    // Default: the nearest-expiry lot with stock (spec §13/§14).
+    if (!addBatchNo.value) {
+      addBatchNo.value = batchRows.value.find(row => Number(row.remainingQty) > 0)?.batchNo ?? ''
+    }
+  }
+  catch {
+    batchRows.value = []
+  }
+  finally {
+    batchLoading.value = false
+  }
+}
+
+watch(addOpen, (open) => {
+  if (open && (addKind.value === 'damage' || addKind.value === 'stock_in') && tracksBatch.value) {
+    addBatchNo.value = ''
+    void loadBatches()
+  }
+})
 
 /** Live product row (UOM / cost) — prefer store cache, fall back to prop. */
 const productRecord = computed(() => {
@@ -189,6 +263,13 @@ watch(addUomId, (uomId) => {
 
 async function submitAdd() {
   if (!productRecord.value || !addKind.value || !addQuantity.value) return
+  if (!addCanSubmit.value) {
+    if (selectedBatchDepleted.value) toast.add({ title: t('app.stock.batchDepletedError'), color: 'error' })
+    else if (batchQtyExceeded.value) toast.add({ title: t('app.stock.batchQtyExceeds'), color: 'error' })
+    else if (tracksBatch.value && !addBatchNo.value.trim()) toast.add({ title: t('app.stock.batchRequired'), color: 'error' })
+    else if (addKind.value === 'stock_in' && tracksExpiry.value && !addExpiryDate.value) toast.add({ title: t('app.stock.expiryRequired'), color: 'error' })
+    return
+  }
   addBusy.value = true
   try {
     const record = await posCommands.createStockOperation({
@@ -196,6 +277,12 @@ async function submitAdd() {
       productId: String(productRecord.value.id),
       quantity: Number(addQuantity.value),
       note: addNote.value || null,
+      // Batch traceability (spec §13/§14): damage/expiry drain the named lot;
+      // stock-in receives into it (stamping the lot's expiry).
+      ...((tracksBatch.value && addBatchNo.value.trim()) ? { batchNo: addBatchNo.value.trim() } : {}),
+      ...((addKind.value === 'stock_in') && addExpiryDate.value
+        ? { expiryDate: addExpiryDate.value }
+        : {}),
       ...(addKind.value === 'stock_in'
         ? {
             uomId: addUomId.value || undefined,
@@ -633,6 +720,35 @@ const nestedDialogUi = {
         :disabled="true"
         class="w-full"
       />
+      <!-- Batch selector: Active lots only, nearest expiry first (spec §13).
+           Never shown for unbatched products; depleted lots are rejected. -->
+      <CommonAppSelectMenuField
+        v-if="tracksBatch && (addKind === 'stock_in' || addKind === 'damage')"
+        v-model="addBatchNo"
+        :items="batchOptions"
+        :label="t('app.stock.batch')"
+        :required="true"
+        :loading="batchLoading"
+        class="w-full"
+      />
+      <p
+        v-if="tracksBatch && selectedBatchExpired && addKind === 'damage'"
+        class="text-xs text-warning"
+      >
+        {{ t('app.stock.batchExpiredError') }}
+      </p>
+      <p
+        v-if="tracksBatch && selectedBatchDepleted"
+        class="text-xs text-error"
+      >
+        {{ t('app.stock.batchDepletedError') }}
+      </p>
+      <p
+        v-if="tracksBatch && batchQtyExceeded"
+        class="text-xs text-error"
+      >
+        {{ t('app.stock.batchQtyExceeds') }}
+      </p>
       <CommonAppSelectMenuField
         v-if="addKind === 'stock_in'"
         v-model="addUomId"
@@ -654,6 +770,14 @@ const nestedDialogUi = {
       >
         {{ stockInConvertHint }}
       </p>
+      <CommonAppInputDate
+        v-if="addKind === 'stock_in' && tracksExpiry"
+        v-model="addExpiryDate"
+        :label="t('app.stock.expiryDateCol')"
+        :required="true"
+        size="md"
+        class="w-full"
+      />
       <CommonAppMoneyField
         v-if="addKind === 'stock_in'"
         v-model="addUnitCost"
@@ -689,7 +813,7 @@ const nestedDialogUi = {
           :color="addMeta?.color"
           :icon="addMeta?.icon"
           :loading="addBusy"
-          :disabled="!addQuantity"
+          :disabled="!addCanSubmit"
           :label="addLabel"
           @click="submitAdd"
         />

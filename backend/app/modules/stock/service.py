@@ -43,16 +43,26 @@ from app.shared.documents import allocate_document_number
 
 
 class ProductService:
-    """Product master data. Stock quantities are never edited here â€” only the
+    """Product master data. Stock quantities are never edited here — only the
     canonical stock mutation service may change balances."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = ProductRepository(session)
 
-    async def list(self, *, q, category_id, status, page, limit) -> tuple[list[dict], int]:
+    async def _next_barcode(self) -> str:
+        """Auto-issue a unique barcode (BAR-<hex>) for products created
+        without one. Collision-checked against existing rows."""
+        candidate = f"BAR-{uuid.uuid4().hex[:12].upper()}"
+        while await self.repo.get_by_barcode(candidate):
+            candidate = f"BAR-{uuid.uuid4().hex[:12].upper()}"
+        return candidate
+
+    async def list(
+        self, *, q, category_id, brand_id=None, status, page, limit, sort=None
+    ) -> tuple[list[dict], int]:
         products, total = await self.repo.list(
-            q=q, category_id=category_id, status=status, page=page, limit=limit
+            q=q, category_id=category_id, brand_id=brand_id, status=status, page=page, limit=limit, sort=sort
         )
         grouped = await self.repo.aggregate_movements([p.id for p in products])
         return [product_to_out(p, grouped=grouped) for p in products], total
@@ -65,9 +75,12 @@ class ProductService:
         return product_to_out(product, grouped=grouped)
 
     async def create(self, payload) -> dict:
-        if await self.repo.get_by_sku(payload.sku):
+        if payload.sku and await self.repo.get_by_sku(payload.sku):
             raise ConflictError("A product with this SKU already exists")
-        if payload.barcode and await self.repo.get_by_barcode(payload.barcode):
+        # Barcode is the operational identifier: unique, auto-issued when the
+        # caller omits it (uuid-derived, collision-checked).
+        barcode = payload.barcode or None
+        if barcode and await self.repo.get_by_barcode(barcode):
             raise ConflictError("A product with this barcode already exists")
         await self._validate_category(payload.category_id)
         await self._validate_uom(payload.uom_id)
@@ -87,6 +100,7 @@ class ProductService:
             data["uom_conversions"] = conversions
 
         product = Product(**data)
+        product.barcode = barcode or await self._next_barcode()
         self.session.add(product)
         await self.session.flush()
         await self.repo.ensure_balance(product.id)
@@ -120,7 +134,7 @@ class ProductService:
             )
             await sale_price_service.validate_conversion_uoms(self.session, conversions)
             changes["uom_conversions"] = conversions
-        if "sku" in changes and changes["sku"] != product.sku:
+        if "sku" in changes and changes["sku"] and changes["sku"] != product.sku:
             if await self.repo.get_by_sku(changes["sku"]):
                 raise ConflictError("A product with this SKU already exists")
         if "barcode" in changes and changes["barcode"] and changes["barcode"] != product.barcode:
@@ -277,6 +291,84 @@ async def allow_negative_stock(session: AsyncSession) -> bool:
     return bool(await get_setting_value(session, "pos", "allow_negative_stock", False))
 
 
+async def fifo_outbound_unit_cost(
+    session: AsyncSession, product_id, quantity, *, fallback: Decimal
+) -> Decimal:
+    """Blended FIFO cost for `quantity` units of a product (product.fifo=True).
+
+    Remaining lots are rebuilt from the immutable stock_movements ledger:
+    inbound movements open lots, outbound movements consume them first-in-
+    first-out. The returned cost is the quantity-weighted average of the lots
+    this outbound consumes. Any shortfall (only possible when negative stock
+    is allowed) is priced at the last consumed lot's cost, or `fallback` when
+    no lot has ever been recorded. Must run inside the caller's transaction;
+    pending movements of the session are flushed by the ledger query so FIFO
+    chains correctly across repeated outbounds of the same document.
+    """
+    quantity = _q4(quantity)
+    if quantity <= 0:
+        return Decimal(fallback).quantize(TWO, rounding=ROUND_HALF_UP)
+
+    rows = await session.execute(
+        select(
+            StockMovement.quantity_delta,
+            StockMovement.unit_cost,
+        )
+        .where(StockMovement.product_id == product_id)
+        .order_by(StockMovement.created_at.asc(), StockMovement.id.asc())
+    )
+    lots: list[list[Decimal]] = []  # mutable [remaining_qty, unit_cost] heads
+    for delta, cost in rows:
+        delta = Decimal(delta)
+        if delta > 0:
+            lots.append([delta, Decimal(cost)])
+            continue
+        remaining = -delta
+        while remaining > 0 and lots:
+            head = lots[0]
+            if head[0] <= remaining:
+                remaining -= head[0]
+                lots.pop(0)
+            else:
+                head[0] -= remaining
+                remaining = Decimal("0")
+
+    needed = quantity
+    weighted = Decimal("0")
+    taken = Decimal("0")
+    last_cost = Decimal(fallback)
+    for lot in lots:
+        if needed <= 0:
+            break
+        take = min(lot[0], needed)
+        weighted += take * lot[1]
+        taken += take
+        needed -= take
+        last_cost = lot[1]
+    if needed > 0:
+        # Negative-stock shortfall: price the remainder at the last consumed
+        # lot's cost (or the fallback when nothing was consumed).
+        weighted += needed * last_cost
+        taken += needed
+    if taken == 0:
+        return Decimal(fallback).quantize(TWO, rounding=ROUND_HALF_UP)
+    return (weighted / taken).quantize(TWO, rounding=ROUND_HALF_UP)
+
+
+async def resolve_outbound_unit_cost(
+    session: AsyncSession,
+    product: Product,
+    quantity,
+    *,
+    fallback: Decimal,
+) -> Decimal:
+    """Unit cost for an outbound movement: FIFO lots when the product has the
+    FIFO option enabled, otherwise the weighted average cost (fallback)."""
+    if product.fifo:
+        return await fifo_outbound_unit_cost(session, product.id, quantity, fallback=fallback)
+    return Decimal(fallback).quantize(TWO, rounding=ROUND_HALF_UP)
+
+
 async def apply_stock_movement(
     session: AsyncSession,
     *,
@@ -289,6 +381,7 @@ async def apply_stock_movement(
     created_by,
     document_no: str | None = None,
     batch_no: str | None = None,
+    batch_id=None,
     expiry_date=None,
     note: str | None = None,
     allow_negative: bool | None = None,
@@ -326,6 +419,7 @@ async def apply_stock_movement(
         reference_id=reference_id,
         document_no=document_no,
         batch_no=batch_no,
+        batch_id=batch_id,
         expiry_date=expiry_date,
         uom_symbol=uom_symbol,
         note=note,
@@ -368,6 +462,15 @@ class StockOperationService:
         )
         if getattr(payload, "supplier_id", None):
             transaction.supplier_id = payload.supplier_id
+        # Document currency (Stock In only; other payloads lack the fields).
+        if hasattr(payload, "currency"):
+            transaction.currency = payload.currency
+            transaction.exchange_rate = payload.exchange_rate
+        # Document-level purchase adjustments (Stock In only; other operation
+        # payloads do not carry these fields).
+        if hasattr(payload, "discount_amount"):
+            transaction.discount_amount = _q2(payload.discount_amount or 0)
+            transaction.tax_amount = _q2(payload.tax_amount or 0)
         self.session.add(transaction)
         await self.session.flush()
         return transaction
@@ -396,6 +499,21 @@ class StockOperationService:
         item_rows: list[StockTransactionItem] = []
         for item in payload.items:
             product = products[item.product_id]
+
+            # Batch-tracked products (spec: batch/lot management): incoming
+            # stock MUST be assigned a batch_no, and an expiry date when the
+            # product tracks expiry. Unbatched products keep the legacy path.
+            if product.track_batch:
+                if not (item.batch_no or "").strip():
+                    raise ValidationError(
+                        "Batch number is required for batch-tracked products",
+                        field_errors={"items": "Batch number is required"},
+                    )
+                if product.expiry_tracking and item.expiry_date is None:
+                    raise ValidationError(
+                        "Expiry date is required for expiry-tracked products",
+                        field_errors={"items": "Expiry date is required"},
+                    )
 
             # ---- line UOM resolution (stock is always mutated in base UOM) ----
             # qty/unit_cost are per the SELECTED Pricing UOM; factor_to_base
@@ -460,6 +578,21 @@ class StockOperationService:
             )
             item_rows.append(row)
             self.session.add(row)
+            # Batch ledger: the lot carries the traceable purchase (cost per
+            # base unit, supplier, purchase document). Unbatched stock still
+            # lands in a synthetic lot keyed on "".
+            from app.modules.stock import batch_service
+
+            await batch_service.batch_in(
+                self.session,
+                product_id=item.product_id,
+                batch_no=item.batch_no,
+                expiry_date=item.expiry_date,
+                quantity_base=base_quantity,
+                unit_cost_per_base=base_unit_cost,
+                supplier_id=transaction.supplier_id,
+                document_no=document_no,
+            )
             await apply_stock_movement(
                 self.session,
                 product_id=item.product_id,
@@ -476,7 +609,15 @@ class StockOperationService:
                 uom_symbol=line_uom_symbol,
             )
             total += line_total
-        total = total.quantize(TWO, rounding=ROUND_HALF_UP)
+        subtotal = total.quantize(TWO, rounding=ROUND_HALF_UP)
+        discount = _q2(payload.discount_amount or 0)
+        tax = _q2(payload.tax_amount or 0)
+        if discount > subtotal:
+            raise ValidationError(
+                "Discount cannot exceed the line subtotal",
+                field_errors={"discount_amount": "Discount exceeds subtotal"},
+            )
+        total = (subtotal - discount + tax).quantize(TWO, rounding=ROUND_HALF_UP)
 
         paid = min(Decimal(payload.paid_amount), total)
         if paid < Decimal("0"):
@@ -497,6 +638,7 @@ class StockOperationService:
                 document_no=document_no,
                 original_amount=total,
                 paid_amount=paid,
+                currency=transaction.currency,
             )
 
         # paid_amount > 0 → immutable payment record (spec 2.1.x Stock In).
@@ -527,9 +669,43 @@ class StockOperationService:
             user_id=actor.id,
             entity_type="stock_transaction",
             entity_id=transaction.id,
-            new_values={"document_no": document_no, "total": str(total), "paid": str(paid)},
+            new_values={
+                "document_no": document_no,
+                "subtotal": str(subtotal),
+                "discount": str(discount),
+                "tax": str(tax),
+                "total": str(total),
+                "paid": str(paid),
+            },
         )
         await self.session.commit()
+
+        # Telegram purchase notification strictly AFTER commit: a delivery
+        # failure must never roll back the Stock In.
+        supplier_name = None
+        if transaction.supplier_id:
+            from app.modules.suppliers.models import Supplier
+
+            supplier = await self.session.get(Supplier, transaction.supplier_id)
+            supplier_name = supplier.name if supplier else None
+        from app.shared.telegram.service import notify_purchase
+
+        await notify_purchase(
+            self.session,
+            document_no=document_no,
+            occurred_at=transaction.transaction_date,
+            supplier=supplier_name,
+            currency=transaction.currency,
+            exchange_rate=transaction.exchange_rate,
+            subtotal=subtotal,
+            discount=discount,
+            tax=tax,
+            total=total,
+            paid=paid,
+            debt=(total - paid) if total > paid else Decimal("0.00"),
+            user=actor.full_name,
+            item_count=len(item_rows),
+        )
         return self._operation_out(transaction, items=item_rows, total_amount=total, paid_amount=paid, debt=debt)
 
     async def purchase_return(self, stock_transaction_id: uuid.UUID, payload, *, actor: User):
@@ -598,6 +774,32 @@ class StockOperationService:
             out_rows.append(row)
             self.session.add(row)
             item.returned_quantity = _q4(Decimal(item.returned_quantity) + Decimal(line.quantity))
+            # Purchase return deducts the ORIGINAL batch lot the line was
+            # received into (batch identity = product + batch_no); it never
+            # invents an arbitrary batch. Unbatched lines drain FEFO (writing
+            # down expired lots is allowed for disposals).
+            from app.modules.stock import batch_service
+
+            movement_batch_id = None
+            movement_expiry = None
+            if item.batch_no:
+                batch = await batch_service.deduct_from_batch(
+                    self.session,
+                    product_id=item.product_id,
+                    batch_no=item.batch_no,
+                    quantity_base=Decimal(line.quantity),
+                )
+                movement_batch_id = batch.id
+                movement_expiry = batch.expiry_date
+            else:
+                allocations = await batch_service.allocate_fefo(
+                    self.session,
+                    product=item.product_ref,
+                    quantity_base=Decimal(line.quantity),
+                    allow_negative=negative_ok,
+                    include_expired=True,
+                )
+                await batch_service.deduct_allocations(self.session, allocations)
             await apply_stock_movement(
                 self.session,
                 product_id=item.product_id,
@@ -608,6 +810,9 @@ class StockOperationService:
                 reference_id=purchase_return.id,
                 created_by=actor.id,
                 document_no=return_no,
+                batch_no=item.batch_no,
+                batch_id=movement_batch_id,
+                expiry_date=movement_expiry,
                 note=payload.reason,
                 allow_negative=negative_ok,
                 uom_symbol=item.uom_symbol,
@@ -727,6 +932,10 @@ class StockOperationService:
             difference = item.actual_quantity - system_quantity
             product = products[item.product_id]
             unit_cost = balance.average_cost
+            if difference < 0:
+                unit_cost = await resolve_outbound_unit_cost(
+                    self.session, product, -difference, fallback=balance.average_cost
+                )
 
             line_total = (abs(difference) * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             row = StockTransactionItem(
@@ -795,19 +1004,83 @@ class StockOperationService:
         total = Decimal("0.00")
         item_rows: list[StockTransactionItem] = []
         for item in payload.items:
-            balance = await _lock_balance(self.session, item.product_id)
-            unit_cost = item.unit_cost if item.unit_cost is not None else balance.average_cost
-            line_total = (item.quantity * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             product = products[item.product_id]
+            # ---- entered UOM → base quantity (server-resolved factor) ----
+            from app.modules.stock import batch_service
+
+            factor = batch_service.factor_for_uom(product, item.uom_id)
+            if (
+                item.factor_to_base is not None
+                and Decimal(str(item.factor_to_base)) != factor
+            ):
+                raise ValidationError(
+                    "factor_to_base does not match the product's Pricing row",
+                    field_errors={"factor_to_base": "Invalid factor"},
+                )
+            base_quantity = _q4(Decimal(item.quantity) * factor)
+            if base_quantity <= 0:
+                raise ValidationError(
+                    "Line quantity must be greater than zero",
+                    field_errors={"quantity": "Invalid quantity"},
+                )
+            entered_uom_id = item.uom_id if item.uom_id is not None else product.uom_id
+            entered_uom_symbol = item.uom_symbol or (
+                product.uom_ref.symbol if product.uom_ref else None
+            )
+            entered_qty = _q4(item.quantity)
+            balance = await _lock_balance(self.session, item.product_id)
+            if item.unit_cost is not None:
+                # Entered cost is per the selected UOM → convert to per-base.
+                unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
+            else:
+                unit_cost = await resolve_outbound_unit_cost(
+                    self.session,
+                    product,
+                    base_quantity,
+                    fallback=balance.average_cost,
+                )
+            line_total = (base_quantity * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             reason = getattr(item, "reason", None)
+            # Batch-tracked products (spec): Damage/Expiry must operate on a
+            # specific batch — never an arbitrary drain of the product total.
+            if product.track_batch and not (item.batch_no or "").strip():
+                raise ValidationError(
+                    "Batch number is required for batch-tracked products",
+                    field_errors={"items": "Batch number is required"},
+                )
+            # Validate + deduct the named batch lot (when the caller names
+            # one). Unbatched damage/expiry drains FEFO (disposals may write
+            # down expired lots; sales never can).
+            movement_batch_id = None
+            if item.batch_no:
+                batch = await batch_service.deduct_from_batch(
+                    self.session,
+                    product_id=item.product_id,
+                    batch_no=item.batch_no,
+                    quantity_base=base_quantity,
+                )
+                movement_batch_id = batch.id
+            else:
+                allocations = await batch_service.allocate_fefo(
+                    self.session,
+                    product=product,
+                    quantity_base=base_quantity,
+                    allow_negative=negative_ok,
+                    include_expired=True,
+                )
+                await batch_service.deduct_allocations(self.session, allocations)
             row = StockTransactionItem(
                     stock_transaction_id=transaction.id,
                     product_id=item.product_id,
                 product_ref=product,
-                quantity=item.quantity,
+                quantity=base_quantity,
                 unit_cost=unit_cost,
                 batch_no=item.batch_no,
                 expiry_date=getattr(item, "expiry_date", None),
+                entered_uom_id=entered_uom_id,
+                entered_uom_symbol=entered_uom_symbol,
+                entered_factor_to_base=factor,
+                entered_quantity=entered_qty,
                 reason=reason,
                 line_total=line_total,
             )
@@ -817,16 +1090,18 @@ class StockOperationService:
                 self.session,
                 product_id=item.product_id,
                 movement_type=kind,
-                quantity_delta=-item.quantity,
+                quantity_delta=-base_quantity,
                 unit_cost=unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,
                 document_no=document_no,
                 batch_no=item.batch_no,
+                batch_id=movement_batch_id,
                 expiry_date=getattr(item, "expiry_date", None),
                 note=reason,
                 allow_negative=negative_ok,
+                uom_symbol=entered_uom_symbol,
             )
             total += line_total
 
@@ -850,9 +1125,20 @@ class StockOperationService:
         Reuses the canonical transactional operations; never writes balances."""
         operation_type = (payload.type or "stock_in").strip().lower()
         product = await self._get_product(payload.product_id)
-        factor = Decimal(str(payload.factor_to_base or 1))
-        if factor <= 0:
-            raise ValidationError("factor_to_base must be greater than zero")
+        # Server-side factor resolution (spec: never trust a frontend
+        # factor). A line without a UOM is the base UOM; an explicit factor
+        # must match the product's Pricing row.
+        from app.modules.stock import batch_service
+
+        factor = batch_service.factor_for_uom(product, payload.uom_id)
+        if (
+            payload.factor_to_base is not None
+            and Decimal(str(payload.factor_to_base)) != factor
+        ):
+            raise ValidationError(
+                "factor_to_base does not match the product's Pricing row",
+                field_errors={"factor_to_base": "Invalid factor"},
+            )
         base_quantity = (Decimal(payload.quantity) * factor).quantize(Decimal("0.0001"))
 
         if operation_type == "stock_in":
@@ -1032,6 +1318,10 @@ class StockOperationService:
             status=transaction.status,
             total_amount=total_amount,
             paid_amount=paid_amount,
+            discount_amount=transaction.discount_amount,
+            tax_amount=transaction.tax_amount,
+            currency=transaction.currency,
+            exchange_rate=transaction.exchange_rate,
             debt_created=debt is not None,
             debt_id=debt.id if debt is not None else None,
             items=[
@@ -1049,6 +1339,9 @@ class StockOperationService:
                     expiry_date=item.expiry_date,
                     reason=item.reason,
                     line_total=item.line_total,
+                    entered_quantity=item.entered_quantity,
+                    entered_uom_symbol=item.entered_uom_symbol,
+                    entered_factor_to_base=item.entered_factor_to_base,
                 )
                 for item in items
             ],
@@ -1056,52 +1349,143 @@ class StockOperationService:
 
     # ------------------------------------------------------------------ reads
 
-    async def list_movements(self, *, q, product_id, movement_type, start, end, page, limit):
+    async def list_movements(self, *, q, product_id, movement_type, start, end, page, limit, sort=None):
+        """Read-only movement ledger listing (Stock Movements page).
+
+        Filters: q (document no / note), product, movement type, date range.
+        Sort: `field` / `-field` on createdAt | quantity_delta; newest first
+        by default. Balance before/after is derived from the immutable ledger
+        with a window function — never persisted, never editable.
+        """
         from app.shared.pagination.params import parse_date_range
 
-        stmt = select(StockMovement)
+        if movement_type:
+            normalized = movement_type.strip().upper()
+            if normalized not in MOVEMENT_TYPES:
+                raise ValidationError(
+                    f"Unknown movement type '{movement_type}'",
+                    field_errors={"movement_type": "Unknown movement type"},
+                )
+            movement_type = normalized
+
+        stmt = select(StockMovement, User.full_name).join(
+            User, User.id == StockMovement.created_by, isouter=True
+        )
         count_stmt = select(func.count()).select_from(StockMovement)
+        conditions = []
         if q:
             pattern = f"%{q.strip()}%"
-            stmt = stmt.where(StockMovement.document_no.ilike(pattern))
-            count_stmt = count_stmt.where(StockMovement.document_no.ilike(pattern))
+            conditions.append(StockMovement.document_no.ilike(pattern) | StockMovement.note.ilike(pattern))
         if product_id is not None:
-            stmt = stmt.where(StockMovement.product_id == product_id)
-            count_stmt = count_stmt.where(StockMovement.product_id == product_id)
+            conditions.append(StockMovement.product_id == product_id)
         if movement_type:
-            stmt = stmt.where(StockMovement.movement_type == movement_type)
-            count_stmt = count_stmt.where(StockMovement.movement_type == movement_type)
+            conditions.append(StockMovement.movement_type == movement_type)
         start_at, end_at = parse_date_range(start, end)
         if start_at is not None:
-            stmt = stmt.where(StockMovement.created_at >= start_at)
-            count_stmt = count_stmt.where(StockMovement.created_at >= start_at)
+            conditions.append(StockMovement.created_at >= start_at)
         if end_at is not None:
-            stmt = stmt.where(StockMovement.created_at <= end_at)
-            count_stmt = count_stmt.where(StockMovement.created_at <= end_at)
+            conditions.append(StockMovement.created_at <= end_at)
+        if conditions:
+            stmt = stmt.where(*conditions)
+            count_stmt = count_stmt.where(*conditions)
+
         total = (await self.session.execute(count_stmt)).scalar_one()
         rows = await self.session.execute(
-            stmt.order_by(StockMovement.created_at.desc())
+            stmt.order_by(*_movement_order_by(sort))
             .offset((page - 1) * limit)
             .limit(limit)
         )
-        return list(rows.scalars().all()), int(total)
+        movements = [(movement, user_name) for movement, user_name in rows.all()]
+        balances = await _movement_balances(self.session, [movement for movement, _ in movements])
+        return [movement_to_out(m, user_name=u, balances=balances) for m, u in movements], int(total)
 
 
-def movement_to_out(movement: StockMovement) -> MovementOut:
+def _movement_order_by(sort: str | None) -> tuple:
+    """Movement-list sort. `sort` is `field` or `-field` (descending).
+    Unknown fields fall back to the ledger default: newest first, id as tiebreak."""
+    columns = {
+        "createdAt": StockMovement.created_at,
+        "created_at": StockMovement.created_at,
+        "date": StockMovement.created_at,
+        "quantity": StockMovement.quantity_delta,
+        "quantity_delta": StockMovement.quantity_delta,
+    }
+    if sort:
+        column = columns.get(sort.lstrip("+-").strip())
+        if column is not None:
+            if sort.lstrip().startswith("-"):
+                return (column.desc(), StockMovement.id.desc())
+            return (column.asc(), StockMovement.id.asc())
+    return (StockMovement.created_at.desc(), StockMovement.id.desc())
+
+
+async def _movement_balances(session: AsyncSession, movements: list[StockMovement]) -> dict:
+    """Running balance before/after for each movement, derived from the
+    immutable ledger: window sum of quantity_delta per product in ledger order
+    (created_at, id ascending), so the cumulative value includes the row
+    itself. One query per page; never writes anything."""
+    if not movements:
+        return {}
+    ledger = (
+        select(
+            StockMovement.id.label("id"),
+            func.sum(StockMovement.quantity_delta)
+            .over(
+                partition_by=StockMovement.product_id,
+                order_by=(StockMovement.created_at.asc(), StockMovement.id.asc()),
+            )
+            .label("cumulative"),
+        )
+        .where(StockMovement.product_id.in_(list({m.product_id for m in movements})))
+        .subquery()
+    )
+    rows = await session.execute(
+        select(ledger.c.id, ledger.c.cumulative).where(ledger.c.id.in_([m.id for m in movements]))
+    )
+    running = {row.id: row.cumulative for row in rows}
+    balances = {}
+    for movement in movements:
+        after = Decimal(running.get(movement.id) or 0)
+        balances[movement.id] = (after - Decimal(movement.quantity_delta), after)
+    return balances
+
+
+def movement_to_out(
+    movement: StockMovement,
+    *,
+    user_name: str | None = None,
+    balances: dict | None = None,
+) -> MovementOut:
+    """Ledger row → MovementOut (Stock Movements page + history consumers)."""
+    delta = movement.quantity_delta
+    balance_before, balance_after = (balances or {}).get(movement.id, (Decimal("0"), Decimal("0")))
+    product = movement.product_ref
+    before = Decimal(balance_before).quantize(FOUR)
+    after = Decimal(balance_after).quantize(FOUR)
     return MovementOut(
         id=movement.id,
         product_id=movement.product_id,
-        product_name=movement.product_ref.name if movement.product_ref else None,
+        product_name=product.name if product else None,
+        barcode=product.barcode if product else None,
         movement_type=movement.movement_type,
-        quantity_delta=movement.quantity_delta,
+        quantity_delta=delta,
+        qty_in=delta if delta > 0 else Decimal("0.0000"),
+        qty_out=-delta if delta < 0 else Decimal("0.0000"),
+        balance_before=before,
+        balance_after=after,
         unit_cost=movement.unit_cost,
         reference_type=movement.reference_type,
         reference_id=movement.reference_id,
         document_no=movement.document_no,
+        source_reference=movement.document_no,
         batch_no=movement.batch_no,
+        batch_id=movement.batch_id,
         expiry_date=movement.expiry_date,
-        uom_symbol=movement.uom_symbol,
+        uom_symbol=movement.uom_symbol
+        or (product.uom_ref.symbol if product and product.uom_ref else None),
         note=movement.note,
+        user=user_name,
+        created_by=movement.created_by,
         created_at=movement.created_at,
     )
 

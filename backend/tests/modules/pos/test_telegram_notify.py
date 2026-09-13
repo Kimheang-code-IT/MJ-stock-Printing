@@ -1,6 +1,13 @@
-"""Telegram payment/invoice text notifications — spec sections 3.6 + 3.6.2."""
+"""Canonical Telegram notifications — sale, purchase, payment, daily summary.
 
+The canonical service lives in `app.shared.telegram.service`. Every send is
+settings-gated, post-commit, best-effort (never rolls back the business
+transaction) and text-only — no invoice files/PDFs are ever sent.
+"""
+
+import uuid
 from decimal import Decimal
+from datetime import date
 
 import pytest
 
@@ -10,25 +17,46 @@ from tests.utils import admin_headers
 ADMIN_NAME = "System Administrator"
 
 
-@pytest.fixture
-def captured_notify(monkeypatch):
-    payloads: list[dict] = []
+@pytest.fixture(autouse=True)
+async def _reset_telegram_settings(db_session):
+    """Remove telegram toggles before/after each test so they never leak."""
+    from sqlalchemy import delete
 
-    def fake_queue(payload: dict) -> bool:
-        payloads.append(payload)
+    from app.modules.administration.models import SystemSetting
+
+    yield
+    await db_session.execute(
+        delete(SystemSetting).where(SystemSetting.group_name == "telegram")
+    )
+    await db_session.commit()
+
+
+@pytest.fixture
+def captured_sends(monkeypatch):
+    """Capture every Telegram broadcast at the client boundary."""
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send(chat_id: str, text: str) -> bool:
+        sent.append((chat_id, text))
         return True
 
-    monkeypatch.setattr("app.shared.telegram.queue_payment_invoice_notify", fake_queue)
-    return payloads
+    monkeypatch.setattr("app.shared.telegram.client.send_message", fake_send)
+    # One verified recipient so broadcasts actually reach the sender.
+    async def fake_recipients(session):
+        return ["12345"]
+
+    monkeypatch.setattr("app.shared.telegram.service.recipients", fake_recipients)
+    return sent
 
 
-@pytest.fixture
-def raising_notify(monkeypatch):
-    def broken_queue(payload: dict) -> bool:
-        raise RuntimeError("broker down")
+async def _enable(session, key: str, value=True) -> None:
+    from sqlalchemy import delete
 
-    monkeypatch.setattr("app.shared.telegram.queue_payment_invoice_notify", broken_queue)
-    return broken_queue
+    from app.modules.administration.models import SystemSetting
+
+    await session.execute(delete(SystemSetting).where(SystemSetting.key == f"telegram.{key}"))
+    session.add(SystemSetting(group_name="telegram", key=f"telegram.{key}", value={"v": value}))
+    await session.commit()
 
 
 async def _cash_sale(client, headers, product_id, *, method="CASH"):
@@ -46,42 +74,76 @@ async def _cash_sale(client, headers, product_id, *, method="CASH"):
 
 
 @pytest.mark.asyncio
-async def test_cash_sale_enqueues_invoice_notify(client, captured_notify):
+async def test_sale_notification_sent_after_commit(client, captured_sends, db_session):
     headers = await admin_headers(client)
     product = await make_stocked_product(client, headers, sku="TG-1", name="Notify Widget")
+    await _enable(db_session, "sale_enabled")
 
     sale = await _cash_sale(client, headers, product["id"], method="CASH")
 
-    assert len(captured_notify) == 1
-    payload = captured_notify[0]
-    assert payload["kind"] == "SALE"
-    assert payload["invoice_no"] == sale["invoice_no"]
-    assert Decimal(payload["total"]) == Decimal("20.00")
-    assert Decimal(payload["paid"]) == Decimal("20.00")
-    assert Decimal(payload["remaining"]) == Decimal("0.00")
-    assert payload["payment_method"] == "CASH"
-    assert payload["item_count"] == 1
-    assert payload["cashier"] == ADMIN_NAME
-    assert "occurred_at" in payload
+    assert len(captured_sends) == 1
+    chat_id, text = captured_sends[0]
+    assert chat_id == "12345"
+    assert sale["invoice_no"] in text
+    assert "New Sale" in text
+    assert "Currency: USD" in text
+    # No invoice files/PDFs — plain text only.
+    assert ".pdf" not in text.lower()
 
 
 @pytest.mark.asyncio
-async def test_bank_qr_sale_enqueues_notify(client, captured_notify):
+async def test_sale_notification_disabled_by_default(client, captured_sends):
     headers = await admin_headers(client)
-    product = await make_stocked_product(client, headers, sku="TG-2", name="QR Notify Widget")
+    product = await make_stocked_product(client, headers, sku="TG-2", name="Quiet Widget")
 
-    await _cash_sale(client, headers, product["id"], method="BANK_QR")
+    await _cash_sale(client, headers, product["id"], method="CASH")
 
-    assert len(captured_notify) == 1
-    assert captured_notify[0]["payment_method"] == "BANK_QR"
+    assert captured_sends == []
 
 
 @pytest.mark.asyncio
-async def test_debt_sale_does_not_notify(client, captured_notify):
-    """Debt sales notify through customer debt payments instead (spec 3.6.2)."""
+async def test_sale_notification_toggle_respected(client, captured_sends, db_session):
     headers = await admin_headers(client)
-    product = await make_stocked_product(client, headers, sku="TG-3", name="Debt Notify Widget")
+    product = await make_stocked_product(client, headers, sku="TG-3", name="Toggled Widget")
+    await _enable(db_session, "sale_enabled", False)
+
+    await _cash_sale(client, headers, product["id"])
+    assert captured_sends == []
+
+
+@pytest.mark.asyncio
+async def test_khr_sale_notification_keeps_currency(client, captured_sends, db_session):
+    """KHR sale notification shows the currency + rate, never mixed with USD."""
+    headers = await admin_headers(client)
+    product = await make_stocked_product(client, headers, sku="TG-K", name="KHR Widget")
+    await _enable(db_session, "sale_enabled")
+
+    response = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "100000",
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "items": [{"product_id": product["id"], "quantity": "1"}],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+
+    assert len(captured_sends) == 1
+    _, text = captured_sends[0]
+    assert "Currency: KHR" in text
+    assert "4100" in text
+
+
+@pytest.mark.asyncio
+async def test_debt_sale_does_not_notify(client, captured_sends, db_session):
+    """Debt sales notify through customer debt payments instead (spec §3.6.2)."""
+    headers = await admin_headers(client)
+    product = await make_stocked_product(client, headers, sku="TG-4", name="Debt Notify Widget")
     customer = await make_customer(client, headers, code="TG-C-1", name="TG Customer")
+    await _enable(db_session, "sale_enabled")
 
     response = await client.post(
         "/api/v1/pos/sales",
@@ -94,43 +156,47 @@ async def test_debt_sale_does_not_notify(client, captured_notify):
         headers=headers,
     )
     assert response.status_code == 201, response.text
-    assert captured_notify == []
+    assert captured_sends == []
 
 
 @pytest.mark.asyncio
-async def test_notify_skipped_when_disabled(client, captured_notify, db_session):
+async def test_purchase_notification_sent(client, captured_sends, db_session):
+    """Stock In notification is settings-gated and post-commit."""
     headers = await admin_headers(client)
-    from sqlalchemy import delete
+    product = await make_stocked_product(client, headers, sku="TG-5", name="Purchase Widget")
+    await _enable(db_session, "purchase_enabled")
+    captured_sends.clear()  # make_stocked_product itself performs a stock-in
 
-    from app.modules.administration.models import SystemSetting
-
-    db_session.add(
-        SystemSetting(
-            group_name="telegram",
-            key="telegram.payment_invoice_notify_enabled",
-            value={"v": False},
-        )
+    response = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "items": [
+                {
+                    "product_id": product["id"],
+                    "quantity": "5",
+                    "unit_cost": "2.00",
+                    "line_total": "10.00",
+                }
+            ],
+            "paid_amount": "10.00",
+        },
+        headers=headers,
     )
-    await db_session.commit()
-    product = await make_stocked_product(client, headers, sku="TG-4", name="Disabled Notify Widget")
+    assert response.status_code == 201, response.text
+    document_no = response.json()["data"]["document_no"]
 
-    await _cash_sale(client, headers, product["id"])
-    assert captured_notify == []
-
-    # Restore the default so later tests in this session see the enabled default.
-    await db_session.execute(
-        delete(SystemSetting).where(
-            SystemSetting.key == "telegram.payment_invoice_notify_enabled"
-        )
-    )
-    await db_session.commit()
+    assert len(captured_sends) == 1
+    _, text = captured_sends[0]
+    assert "Stock In" in text
+    assert document_no in text
 
 
 @pytest.mark.asyncio
-async def test_debt_payment_enqueues_notify(client, captured_notify):
+async def test_debt_payment_notification_sent(client, captured_sends, db_session):
     headers = await admin_headers(client)
-    product = await make_stocked_product(client, headers, sku="TG-5", name="Debt Pay Notify Widget")
+    product = await make_stocked_product(client, headers, sku="TG-6", name="Debt Pay Widget")
     customer = await make_customer(client, headers, code="TG-C-2", name="TG Payer")
+    await _enable(db_session, "sale_enabled")
 
     sale = await client.post(
         "/api/v1/pos/sales",
@@ -143,7 +209,7 @@ async def test_debt_payment_enqueues_notify(client, captured_notify):
         headers=headers,
     )
     assert sale.status_code == 201, sale.text
-    assert captured_notify == []  # sale itself: no notify (debt sale)
+    assert captured_sends == []  # sale itself: no notify (debt sale)
     debt_sale = sale.json()["data"]
 
     debts = await client.get(f"/api/v1/customers/{customer['id']}/debts", headers=headers)
@@ -156,91 +222,216 @@ async def test_debt_payment_enqueues_notify(client, captured_notify):
     )
     assert payment.status_code == 201, payment.text
 
-    assert len(captured_notify) == 1
-    payload = captured_notify[0]
-    assert payload["kind"] == "DEBT_PAYMENT"
-    assert payload["invoice_no"] == debt_sale["invoice_no"]
-    assert payload["payment_no"].startswith("CDP-")
-    assert Decimal(payload["paid"]) == Decimal("7.00")
-    assert Decimal(payload["remaining"]) == Decimal("8.00")
-    assert payload["payment_method"] == "BANK_QR"
-    assert payload["cashier"] == ADMIN_NAME
+    assert len(captured_sends) == 1
+    _, text = captured_sends[0]
+    assert debt_sale["invoice_no"] in text
+    assert "Debt Payment" in text
+    assert "CDP-" in text
 
 
 @pytest.mark.asyncio
-async def test_sale_commits_even_when_notify_enqueue_fails(client, raising_notify):
+async def test_sale_commits_even_when_telegram_down(client, monkeypatch, db_session):
+    """Telegram failure NEVER rolls back the committed sale."""
     headers = await admin_headers(client)
-    product = await make_stocked_product(client, headers, sku="TG-6", name="Resilient Widget")
+    product = await make_stocked_product(client, headers, sku="TG-7", name="Resilient Widget")
+    await _enable(db_session, "sale_enabled")
+
+    async def broken_send(chat_id: str, text: str) -> bool:
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr("app.shared.telegram.client.send_message", broken_send)
 
     sale = await _cash_sale(client, headers, product["id"], method="CASH")
 
-    # The sale is committed and fully retrievable despite the enqueue failure.
     detail = await client.get(f"/api/v1/pos/sales/{sale['id']}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["data"]["payment_status"] == "PAID"
 
 
-# ----------------------------------------------------------------- formatter
+# ------------------------------------------------------------------ summaries
 
 
-def test_formatter_renders_sale_fields_in_app_timezone():
-    from app.shared.telegram.notify import format_payment_invoice_text
+@pytest.mark.asyncio
+async def test_daily_summary_totals_never_mix_currencies(client, captured_sends, db_session):
+    headers = await admin_headers(client)
+    product = await make_stocked_product(client, headers, sku="TG-S1", name="Summary Widget")
+    customer = await make_customer(client, headers, code="TG-S-C", name="Summary Customer")
 
-    text = format_payment_invoice_text(
+    # One USD cash sale and one KHR debt sale on "today".
+    usd = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "30.00",
+            "items": [{"product_id": product["id"], "quantity": "3"}],
+        },
+        headers=headers,
+    )
+    assert usd.status_code == 201, usd.text
+    khr = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": customer["id"],
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "amount_received": "0",
+            "items": [{"product_id": product["id"], "quantity": "1"}],
+        },
+        headers=headers,
+    )
+    assert khr.status_code == 201, khr.text
+
+    from app.core.database import SessionFactory
+    from app.shared.telegram.service import daily_summary_totals
+
+    async with SessionFactory() as session:
+        summary = await daily_summary_totals(session, day=date.today())
+
+    assert summary["sales"]["USD"]["count"] >= 1
+    assert Decimal(summary["sales"]["USD"]["total"]) >= Decimal("15.00")
+    assert summary["sales"]["KHR"]["count"] >= 1
+    assert summary["customer_debt_total"]  # KHR debt recorded separately
+    # The summary dict keeps per-currency buckets; no combined USD+KHR field exists.
+    assert "total" not in summary["sales"]
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_format_separates_currencies():
+    from app.shared.telegram.service import format_daily_summary_text
+
+    text = format_daily_summary_text(
         {
-            "kind": "SALE",
+            "day": "2026-09-10",
+            "sales": {
+                "USD": {"count": 3, "total": "45.00"},
+                "KHR": {"count": 2, "total": "82000.00"},
+            },
+            "purchases": {"USD": {"count": 1, "total": "100.00"}},
+            "customer_debt_total": "12.00",
+            "supplier_debt_total": "0.00",
+            "delivered_count": 4,
+            "pending_delivery_count": 2,
+            "out_of_stock_count": 1,
+        }
+    )
+    assert "Sales: 5" in text
+    assert "USD sales: 45.00" in text
+    assert "KHR sales: 82000.00" in text
+    assert "Purchases: 1" in text
+    assert "USD purchases: 100.00" in text
+    assert "Customer debt outstanding: 12.00" in text
+    assert "Pending deliveries: 2" in text
+    assert "Out-of-stock products: 1" in text
+    # Never a blind USD+KHR sum.
+    assert "82045" not in text
+
+
+@pytest.mark.asyncio
+async def test_daily_summary_send_gated_and_delivered(client, captured_sends, db_session, monkeypatch):
+    from app.core.config import settings as app_settings
+
+    from app.core.database import SessionFactory
+    from app.shared.telegram.service import send_daily_summary
+
+    monkeypatch.setattr(app_settings, "telegram_bot_token", "test-token")
+    monkeypatch.setattr(app_settings, "telegram_enabled", True)
+
+    async with SessionFactory() as session:
+        result = await send_daily_summary(session, day=date.today())
+    assert result == {"enabled": False, "sent": 0}
+
+    await _enable(db_session, "daily_summary_enabled")
+    async with SessionFactory() as session:
+        result = await send_daily_summary(session, day=date.today())
+    assert result["enabled"] is True
+    assert result["sent"] == 1
+    assert "Daily Summary" in captured_sends[0][1]
+
+
+@pytest.mark.asyncio
+async def test_test_notification_endpoint(client, captured_sends, db_session, monkeypatch):
+    headers = await admin_headers(client)
+
+    # Disabled by default → soft "enabled: False" result, nothing sent.
+    response = await client.post("/api/v1/admin/settings/telegram-test", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["enabled"] is False
+    assert captured_sends == []
+
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "telegram_bot_token", "test-token")
+    monkeypatch.setattr(app_settings, "telegram_enabled", True)
+
+    await _enable(db_session, "enabled")
+    response = await client.post("/api/v1/admin/settings/telegram-test", headers=headers)
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["enabled"] is True
+    assert data["sent"] == 1
+    assert "test notification" in captured_sends[0][1]
+
+
+# ------------------------------------------------------------------ formatters
+
+
+def test_sale_formatter_renders_fields_in_app_timezone():
+    from app.shared.telegram.service import format_sale_text
+
+    text = format_sale_text(
+        {
             "invoice_no": "INV-000001",
             "occurred_at": "2026-09-04T12:00:00+00:00",
             "customer": "Dara",
+            "currency": "USD",
+            "exchange_rate": "1",
             "item_count": 3,
             "subtotal": "30.00",
             "discount": "1.00",
+            "delivery_price": "0.00",
             "total": "29.00",
             "paid": "29.00",
             "payment_method": "CASH",
-            "remaining": "0.00",
+            "debt": "0.00",
             "cashier": "Sok",
         },
-        shop_name="My Shop",
         timezone_name="Asia/Phnom_Penh",
     )
-    assert text.splitlines()[0] == "My Shop"
     assert "Invoice: INV-000001" in text
     assert "Date: 2026-09-04 19:00:00" in text  # UTC+07 conversion
     assert "Customer: Dara" in text
     assert "Items: 3" in text
-    assert "Subtotal: 30.00" in text
-    assert "Discount: 1.00" in text
     assert "Total: 29.00" in text
     assert "Paid: 29.00" in text
     assert "Method: CASH" in text
-    assert "Remaining debt: 0.00" in text
     assert "Cashier: Sok" in text
 
 
-def test_formatter_renders_debt_payment_and_falls_back_to_utc():
-    from app.shared.telegram.notify import format_payment_invoice_text
+def test_purchase_formatter_renders_fields():
+    from app.shared.telegram.service import format_purchase_text
 
-    text = format_payment_invoice_text(
+    text = format_purchase_text(
         {
-            "kind": "DEBT_PAYMENT",
-            "invoice_no": "INV-000002",
-            "payment_no": "CDP-000001",
-            "occurred_at": "not-a-date",
-            "customer": "TG Payer",
-            "total": "20.00",
-            "paid": "7.00",
-            "payment_method": "BANK_QR",
-            "remaining": "13.00",
-            "cashier": "Sok",
-            "bot_token": "SECRET-TOKEN",  # unknown/secret keys must be ignored
+            "document_no": "STI-000001",
+            "occurred_at": "2026-09-04T03:00:00+00:00",
+            "supplier": "Angkor Wholesale",
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "item_count": 4,
+            "subtotal": "410000.00",
+            "discount": "10000.00",
+            "tax": "0.00",
+            "total": "400000.00",
+            "paid": "400000.00",
+            "debt": "0.00",
+            "user": "Sok",
         },
-        shop_name="My Shop",
-        timezone_name="Not/AZone",
+        timezone_name="Asia/Phnom_Penh",
     )
-    assert "Payment: CDP-000001" in text
-    assert "Total: 20.00" in text
-    assert "Paid: 7.00" in text
-    assert "Remaining debt: 13.00" in text
-    assert "SECRET-TOKEN" not in text
-    assert "Items:" not in text  # not part of a debt payment payload
+    assert "Document: STI-000001" in text
+    assert "Supplier: Angkor Wholesale" in text
+    assert "Currency: KHR" in text
+    assert "Items: 4" in text
+    assert "Total: 400000.00" in text
+    assert "Recorded by: Sok" in text

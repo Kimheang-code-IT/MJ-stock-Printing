@@ -46,9 +46,10 @@ async def test_pos_alias_prefills_note_from_one_sale(client):
     note = response.json()["data"]
 
     assert note["delivery_no"].startswith("DN-")
-    assert note["status"] == "DRAFT"
+    assert note["status"] == "PENDING"
     assert note["customer_id"] == customer["id"]
-    assert note["sales"] == [{"sale_id": sale["id"], "invoice_no": sale["invoice_no"]}]
+    assert note["sales"][0]["sale_id"] == sale["id"]
+    assert note["sales"][0]["invoice_no"] == sale["invoice_no"]
     assert note["delivery_phone"] == "012345678"
     assert note["delivery_location"] == "Street 1, Phnom Penh"
     assert len(note["items"]) == 1

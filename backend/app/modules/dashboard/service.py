@@ -44,6 +44,14 @@ def _day_start(value: date) -> datetime:
     return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
 
 
+def _usd(expression, currency_col, rate_col):
+    """Normalize a money expression recorded in a document currency to USD
+    (KHR rows divide by the exchange rate applied on the document; USD rows
+    pass through). Same rule as the Finance Report — aggregates must never
+    mix raw amounts across currencies."""
+    return case((currency_col == "KHR", expression / rate_col), else_=expression)
+
+
 def _today() -> date:
     return datetime.now(timezone.utc).date()
 
@@ -75,7 +83,10 @@ class DashboardService:
         Income is net of sale-return refunds so Dashboard and Finance Report
         agree on the same period (spec 2.1.10 income statement)."""
         result = await self.session.execute(
-            select(func.coalesce(func.sum(Sale.grand_total), 0), func.count(Sale.id)).where(
+            select(
+                func.coalesce(func.sum(_usd(Sale.grand_total, Sale.currency, Sale.exchange_rate)), 0),
+                func.count(Sale.id),
+            ).where(
                 Sale.sale_date >= start_at, Sale.sale_date < end_at
             )
         )
@@ -109,7 +120,7 @@ class DashboardService:
         The Expense KPI/chart intentionally EXCLUDES Stock In purchase cost so
         Dashboard and Finance Report agree (spec 2.1.10)."""
         result = await self.session.execute(
-            select(func.coalesce(func.sum(Expense.amount), 0)).where(
+            select(func.coalesce(func.sum(_usd(Expense.amount, Expense.currency, Expense.exchange_rate)), 0)).where(
                 Expense.expense_date >= start_at.date(),
                 Expense.expense_date < end_at.date(),
             )
@@ -118,10 +129,10 @@ class DashboardService:
 
     async def _debt_totals(self) -> tuple[Decimal, Decimal]:
         customer = await self.session.execute(
-            select(func.coalesce(func.sum(CustomerDebt.remaining_amount), 0))
+            select(func.coalesce(func.sum(_usd(CustomerDebt.remaining_amount, CustomerDebt.currency, CustomerDebt.exchange_rate)), 0))
         )
         supplier = await self.session.execute(
-            select(func.coalesce(func.sum(SupplierDebt.remaining_amount), 0))
+            select(func.coalesce(func.sum(_usd(SupplierDebt.remaining_amount, SupplierDebt.currency, SupplierDebt.exchange_rate)), 0))
         )
         return Decimal(customer.scalar_one()), Decimal(supplier.scalar_one())
 
@@ -138,7 +149,14 @@ class DashboardService:
 
     async def _return_refunds(self, start_at: datetime, end_at: datetime) -> Decimal:
         result = await self.session.execute(
-            select(func.coalesce(func.sum(SaleReturn.refund_amount), 0)).where(
+            select(
+                func.coalesce(
+                    func.sum(_usd(SaleReturn.refund_amount, Sale.currency, Sale.exchange_rate)), 0
+                )
+            )
+            .select_from(SaleReturn)
+            .join(Sale, Sale.id == SaleReturn.sale_id)
+            .where(
                 SaleReturn.return_date >= start_at, SaleReturn.return_date < end_at
             )
         )
@@ -147,14 +165,17 @@ class DashboardService:
     async def _cogs(self, start_at: datetime, end_at: datetime) -> Decimal:
         """Sold cost for sales in the period, minus cost of restocked returns."""
         sold = await self.session.execute(
-            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity), 0))
+            select(func.coalesce(func.sum(_usd(SaleItem.unit_cost * SaleItem.quantity, Sale.currency, Sale.exchange_rate)), 0))
+            .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
         )
         restocked = await self.session.execute(
-            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost), 0))
+            select(func.coalesce(func.sum(_usd(SaleReturnItem.quantity * SaleItem.unit_cost, Sale.currency, Sale.exchange_rate)), 0))
+            .select_from(SaleReturnItem)
             .join(SaleItem, SaleItem.id == SaleReturnItem.sale_item_id)
             .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
+            .join(Sale, Sale.id == SaleItem.sale_id)
             .where(
                 SaleReturnItem.restock.is_(True),
                 SaleReturn.return_date >= start_at,
@@ -170,7 +191,7 @@ class DashboardService:
         income_rows = await self.session.execute(
             select(
                 func.date(Sale.sale_date).label("day"),
-                func.coalesce(func.sum(Sale.grand_total), 0),
+                func.coalesce(func.sum(_usd(Sale.grand_total, Sale.currency, Sale.exchange_rate)), 0),
                 func.count(Sale.id),
             )
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
@@ -179,15 +200,17 @@ class DashboardService:
         refund_rows = await self.session.execute(
             select(
                 func.date(SaleReturn.return_date).label("day"),
-                func.coalesce(func.sum(SaleReturn.refund_amount), 0),
+                func.coalesce(func.sum(_usd(SaleReturn.refund_amount, Sale.currency, Sale.exchange_rate)), 0),
             )
+            .select_from(SaleReturn)
+            .join(Sale, Sale.id == SaleReturn.sale_id)
             .where(SaleReturn.return_date >= start_at, SaleReturn.return_date < end_at)
             .group_by(func.date(SaleReturn.return_date))
         )
         expense_rows = await self.session.execute(
             select(
                 Expense.expense_date.label("day"),
-                func.coalesce(func.sum(Expense.amount), 0),
+                func.coalesce(func.sum(_usd(Expense.amount, Expense.currency, Expense.exchange_rate)), 0),
             )
             .where(
                 Expense.expense_date >= start_at.date(),

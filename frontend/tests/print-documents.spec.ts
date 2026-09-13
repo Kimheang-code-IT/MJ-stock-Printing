@@ -151,9 +151,9 @@ describe('print documents', () => {
     }
     const html = buildSaleInvoiceHtml(input)
     // Line amount: 2 × $3.15 = $6.30 → ៛25,830 (whole riel, no decimals)
-    expect(normalize(html)).toContain('KHR 25,830')
+    expect(normalize(html)).toContain('25,830៛')
     // Outstanding: $6.30 → ៛25,830
-    expect(normalize(html)).toContain('KHR 25,830')
+    expect(normalize(html)).toContain('25,830៛')
     // Rate stated in the meta block
     expect(html).toContain('អត្រាប្តូរប្រាក់ Exchange rate')
     expect(normalize(html)).toContain('1 USD = 4,100 KHR')

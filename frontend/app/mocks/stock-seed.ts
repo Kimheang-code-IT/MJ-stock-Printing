@@ -102,6 +102,22 @@ const UOM_CONVERSIONS_BY_PRODUCT: Record<string, Array<Record<string, unknown>>>
     pricingRow('uom4', 'btl', 'uom4', 'btl', 1, 0.3, 0.6, true),
     pricingRow('uom2', 'box', 'uom4', 'btl', 6, null, 3.6, false),
   ],
+  prd5: [
+    pricingRow('uom1', 'pcs', 'uom1', 'pcs', 1, 0.45, 0.75, true),
+    pricingRow('uom2', 'box', 'uom1', 'pcs', 30, null, 21.9, false),
+  ],
+  prd11: [
+    pricingRow('uom1', 'pcs', 'uom1', 'pcs', 1, 0.55, 0.95, true),
+    pricingRow('uom2', 'box', 'uom1', 'pcs', 24, null, 21.6, false),
+  ],
+  prd12: [
+    pricingRow('uom4', 'btl', 'uom4', 'btl', 1, 1.8, 2.9, true),
+    pricingRow('uom2', 'box', 'uom4', 'btl', 12, null, 33.6, false),
+  ],
+  prd14: [
+    pricingRow('uom4', 'btl', 'uom4', 'btl', 1, 1.3, 1.9, true),
+    pricingRow('uom2', 'box', 'uom4', 'btl', 12, null, 21.6, false),
+  ],
   prd17: [
     pricingRow('uom1', 'pcs', 'uom1', 'pcs', 1, 0.2, 0.4, true),
     pricingRow('uom2', 'box', 'uom1', 'pcs', 50, null, 20, false),
@@ -155,7 +171,10 @@ export const products: AppRecord[] = productSeeds.map((seed, i) => {
     // their base UOM (the UI materializes a base=base row on save).
     uomConversions: UOM_CONVERSIONS_BY_PRODUCT[id] ?? [],
     expiryTracking: Boolean(seed.expiryDate),
-    // FIFO costing option (off by default — weighted average cost).
+    // Batch/expiry toggles (spec §5.9 Stock Costing): expiry implies batch.
+    trackBatch: Boolean(seed.expiryDate),
+    trackExpiry: Boolean(seed.expiryDate),
+    // FIFO costing option (off by default - weighted average cost).
     fifo: false,
     // Nearest lot expiry for the Stock list column (blank when not tracked).
     expiryDate: seed.expiryDate ?? null,
@@ -208,17 +227,50 @@ export const productSalePrices: AppRecord[] = products.flatMap((product, i) => {
 
 const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Payment'] as const
 
+/** Pack UOM choice for a sale line (deterministic): every third line of a
+ *  multi-UOM product sells one pack so POS UOM selection has visible data. */
+function saleUomChoice(product: AppRecord, seedIndex: number) {
+  const conversions = Array.isArray(product.uomConversions)
+    ? product.uomConversions as Array<Record<string, unknown>>
+    : []
+  const pack = conversions.find(row => Number(row.factorToBase ?? 1) > 1)
+  if (pack && seedIndex % 3 === 2) {
+    return {
+      uomId: String(pack.uomId ?? ''),
+      uomSymbol: String(pack.uomSymbol ?? ''),
+      factorToBase: Number(pack.factorToBase ?? 1),
+      price: Number(pack.salePrice ?? 0),
+      quantity: 1,
+    }
+  }
+  return {
+    uomId: String(product.uomId ?? ''),
+    uomSymbol: String(product.uomSymbol ?? ''),
+    factorToBase: 1,
+    price: Number(product.salePrice ?? 0),
+    quantity: ((seedIndex % 4) + 1),
+  }
+}
+
 function saleItems(seedIndex: number, lineCount: number): AppRecord[] {
   return Array.from({ length: lineCount }, (_, i) => {
     const product = pick(products, seedIndex + i * 3)
-    const quantity = ((seedIndex + i) % 4) + 1
-    const price = Number(product.salePrice)
+    const uom = saleUomChoice(product, seedIndex + i)
+    const quantity = uom.quantity
+    const price = uom.price
     return {
       id: createId('line'),
       productId: String(product.id),
       name: String(product.name),
+      // UOM snapshot (spec §2.1.x): the line is entered in the selected UOM;
+      // ledger math converts to base (qty × factorToBase).
+      uomId: uom.uomId,
+      uom: uom.uomSymbol,
+      uomSymbol: uom.uomSymbol,
+      factorToBase: uom.factorToBase,
       quantity,
       price,
+      discountPercent: 0,
       total: Math.round(price * quantity * 100) / 100,
     }
   })
@@ -287,10 +339,33 @@ export const saleReturns: AppRecord[] = sales.slice(0, 4).map((sale, i) => {
 
 export const stockIns: AppRecord[] = Array.from({ length: 14 }, (_, i) => {
   const supplier = suppliers[i % 3]!
-  const items: AppRecord[] = saleItems(i * 5 + 2, ((i % 2) + 1) + 1).map(item => ({
-    ...item,
-    price: Number(productById(String(item.productId))?.costPrice ?? item.price),
-  }))
+  const items: AppRecord[] = saleItems(i * 5 + 2, ((i % 2) + 1) + 1).map((item, lineIdx) => {
+    const product = productById(String(item.productId))
+    const purchaseNo = `PIN-${String(80 + i).padStart(5, '0')}`
+    // Purchase volume looks real: roughly half the product's stock level per
+    // document, so 30 days of POS sales never drive the balance negative.
+    const baseQty = Math.max(40, Math.ceil(Number(product?.quantity ?? 0) * 0.5))
+    return {
+      ...item,
+      // Purchases are costed at the product cost price (per base UOM).
+      price: Number(product?.costPrice ?? item.price),
+      // Purchases receive stock in the product BASE UOM (spec: stock/batch
+      // quantities live in the base UOM; the line UOM converts on entry).
+      uomId: String(product?.uomId ?? ''),
+      uom: String(product?.uomSymbol ?? ''),
+      uomSymbol: String(product?.uomSymbol ?? ''),
+      factorToBase: 1,
+      quantity: baseQty,
+      // Batch traceability (spec §17): purchase lines carry the lot they
+      // receive into — same identity the movement ledger stamps.
+      ...(product?.trackBatch === true
+        ? {
+            batchNo: `B-${purchaseNo.replace(/\D/g, '')}-${lineIdx + 1}`,
+            expiryDate: String(product?.expiryDate || ''),
+          }
+        : {}),
+    }
+  })
   const total = Math.round(items.reduce((sum, item) => sum + Number(item.price) * Number(item.quantity), 0) * 100) / 100
   const unpaid = i % 4 === 1
   const paidAmount = unpaid ? Math.round(total * 0.4 * 100) / 100 : total
@@ -332,48 +407,198 @@ export const purchaseReturns: AppRecord[] = stockIns.slice(0, 3).map((purchase, 
   }
 })
 
-export const stockMovements: AppRecord[] = [
-  ...sales.flatMap(sale => (sale.items as AppRecord[]).map((item, i) => ({
-    id: createId('mv'),
-    createdAt: sale.createdAt,
-    date: sale.date,
-    productId: item.productId,
-    product: item.name,
-    type: 'Sale',
-    quantity: -Number(item.quantity),
-    unitPrice: Number(item.price ?? 0),
-    unit: String(productById(String(item.productId))?.uomSymbol || ''),
-    reference: String(sale.saleNo),
-    user: String(sale.cashier || '—'),
-    note: i === 0 ? 'POS sale' : '',
-  }))),
-  ...stockIns.flatMap(purchase => (purchase.items as AppRecord[]).map(item => ({
-    id: createId('mv'),
-    createdAt: purchase.createdAt,
-    date: purchase.date,
-    productId: item.productId,
-    product: item.name,
-    type: 'Stock In',
-    quantity: Number(item.quantity),
-    unitPrice: Number(item.price ?? 0),
-    unit: String(productById(String(item.productId))?.uomSymbol || ''),
-    reference: String(purchase.purchaseNo),
-    user: String(purchase.user || '—'),
-    note: '',
-  }))),
-  {
-    id: 'mv_adj1', createdAt: daysAgo(2), date: dateOnly(2), productId: 'prd15', product: 'Yogurt Cup 100g',
-    type: 'Damage', quantity: -6, reference: 'ADJ-00015', user: 'Dara Kim', note: 'Broken during transport',
-  },
-  {
-    id: 'mv_adj2', createdAt: daysAgo(5), date: dateOnly(5), productId: 'prd14', product: 'Fresh Milk 1L',
-    type: 'Expiry', quantity: -10, reference: 'ADJ-00014', user: 'Sokha Chan', note: 'Expired stock removal',
-  },
-  {
-    id: 'mv_adj3', createdAt: daysAgo(9), date: dateOnly(9), productId: 'prd1', product: 'Coca-Cola 350ml',
-    type: 'Adjustment', quantity: 4, reference: 'ADJ-00013', user: 'Dara Kim', note: 'Stock count correction',
-  },
-].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+/**
+ * Immutable movement ledger (spec: every change creates one movement row per
+ * touched batch). Built chronologically so per-product running balances and
+ * FEFO lot allocation stay deterministic:
+ * - Stock In receives into named lots (batch-tracked products).
+ * - Sale lines allocate earliest-expiry lots first (FEFO, backend mirror) —
+ *   one movement row per consumed lot.
+ * - Damage / Expiry drain the named lot; returns and adjustments complete
+ *   the ledger.
+ */
+function buildStockMovements(): AppRecord[] {
+  interface Lot { batchNo: string, expiryDate: string, remaining: number }
+  const lotsByProduct = new Map<string, Lot[]>()
+
+  const movementRow = (row: Omit<AppRecord, 'id'>): AppRecord => ({ id: createId('mv'), ...row })
+
+  const baseRow = (productId: string, date: string, createdAt: string) => {
+    const product = productById(productId)
+    return {
+      createdAt,
+      date,
+      productId,
+      product: String(product?.name ?? ''),
+      barcode: String(product?.barcode ?? ''),
+      unit: String(product?.uomSymbol ?? ''),
+      uomSymbol: String(product?.uomSymbol ?? ''),
+    }
+  }
+
+  // 1) Stock In — receive into named lots (chronological, oldest first).
+  const rows: AppRecord[] = []
+  for (const purchase of stockIns) {
+    (purchase.items as AppRecord[]).forEach((item, i) => {
+      const row = movementRow({
+        ...baseRow(String(item.productId), String(purchase.date), String(purchase.createdAt)),
+        type: 'Stock In',
+        quantity: Number(item.quantity),
+        unitPrice: Number(item.price ?? 0),
+        reference: String(purchase.purchaseNo),
+        documentNo: String(purchase.purchaseNo),
+        user: String(purchase.user || '—'),
+        note: '',
+      })
+      const lotNo = String(item.batchNo ?? '')
+      if (lotNo) {
+        row.batchNo = lotNo
+        row.expiryDate = String(item.expiryDate ?? '')
+        const lots = lotsByProduct.get(String(item.productId)) ?? []
+        lots.push({ batchNo: lotNo, expiryDate: String(item.expiryDate ?? ''), remaining: Number(item.quantity) })
+        lotsByProduct.set(String(item.productId), lots)
+      }
+      rows.push(row)
+    })
+  }
+
+  // FEFO allocation: earliest expiry first (ties → first received).
+  function allocate(productId: string, qty: number): Array<{ lot: Lot, take: number }> {
+    const lots = [...(lotsByProduct.get(productId) ?? [])]
+      .filter(lot => lot.remaining > 0)
+      .sort((a, b) => a.expiryDate.localeCompare(b.expiryDate))
+    const taken: Array<{ lot: Lot, take: number }> = []
+    let need = qty
+    for (const lot of lots) {
+      if (need <= 0) break
+      const take = Math.min(lot.remaining, need)
+      lot.remaining -= take
+      need -= take
+      taken.push({ lot, take })
+    }
+    return taken
+  }
+
+  // 2) Sales — FEFO out of the lots; one movement row per consumed lot.
+  for (const sale of sales) {
+    for (const item of (sale.items as AppRecord[])) {
+      const factor = Math.max(1, Number(item.factorToBase ?? 1))
+      const baseQty = Math.round(Number(item.quantity) * factor * 100) / 100
+      const unitPriceBase = Math.round(Number(item.price ?? 0) / factor * 100) / 100
+      const common = {
+        ...baseRow(String(item.productId), String(sale.date), String(sale.createdAt)),
+        type: 'Sale',
+        unitPrice: unitPriceBase,
+        reference: String(sale.saleNo),
+        documentNo: String(sale.saleNo),
+        user: String(sale.cashier || '—'),
+        note: 'POS sale',
+      }
+      if (productById(String(item.productId))?.trackBatch === true) {
+        const taken = allocate(String(item.productId), baseQty)
+        let residual = baseQty
+        for (const { lot, take } of taken) {
+          residual -= take
+          rows.push(movementRow({ ...common, quantity: -take, batchNo: lot.batchNo, expiryDate: lot.expiryDate }))
+        }
+        if (residual > 0) rows.push(movementRow({ ...common, quantity: -residual }))
+      }
+      else {
+        rows.push(movementRow({ ...common, quantity: -baseQty }))
+      }
+    }
+  }
+
+  // 3) Damage / Expiry — drain the earliest lot with stock (spec §13/§14).
+  const stockOps: Array<{ productId: string, type: 'Damage' | 'Expiry' | 'Adjustment', qty: number, reference: string, user: string, note: string, daysAgo: number }> = [
+    { productId: 'prd15', type: 'Damage', qty: 6, reference: 'ADJ-00015', user: 'Dara Kim', note: 'Broken during transport', daysAgo: 2 },
+    { productId: 'prd14', type: 'Expiry', qty: 10, reference: 'ADJ-00014', user: 'Sokha Chan', note: 'Expired stock removal', daysAgo: 5 },
+    { productId: 'prd4', type: 'Damage', qty: 5, reference: 'ADJ-00016', user: 'Dara Kim', note: 'Dented cans removed', daysAgo: 7 },
+    { productId: 'prd16', type: 'Expiry', qty: 4, reference: 'ADJ-00017', user: 'Sokha Chan', note: 'Past expiry date', daysAgo: 3 },
+    { productId: 'prd1', type: 'Adjustment', qty: 4, reference: 'ADJ-00013', user: 'Dara Kim', note: 'Stock count correction', daysAgo: 9 },
+    { productId: 'prd2', type: 'Adjustment', qty: -3, reference: 'ADJ-00012', user: 'Sokha Chan', note: 'Stock count correction', daysAgo: 11 },
+  ]
+  for (const op of stockOps) {
+    const product = productById(op.productId)!
+    const when = daysAgo(op.daysAgo)
+    const signed = op.type === 'Adjustment' ? op.qty : -op.qty
+    const label = op.type === 'Adjustment'
+      ? (signed >= 0 ? 'Adjustment Increase' : 'Adjustment Decrease')
+      : op.type
+    const common = {
+      ...baseRow(op.productId, dateOnly(op.daysAgo), when),
+      type: label,
+      quantity: signed,
+      unitPrice: Number(product.costPrice ?? 0),
+      reference: op.reference,
+      documentNo: op.reference,
+      user: op.user,
+      note: op.note,
+    }
+    if (op.type !== 'Adjustment' && product.trackBatch === true) {
+      const taken = allocate(op.productId, op.qty)
+      for (const { lot, take } of taken) {
+        rows.push(movementRow({ ...common, quantity: -take, batchNo: lot.batchNo, expiryDate: lot.expiryDate }))
+      }
+    }
+    else {
+      rows.push(movementRow(common))
+    }
+  }
+
+  // 4) Returns (restock / return-to-supplier — display rows, unbatched).
+  for (const ret of saleReturns) {
+    if (Number(ret.restockedQuantity) <= 0) continue
+    const sale = sales.find(row => String(row.id) === String(ret.saleId))
+    const item = ((sale?.items as AppRecord[] | undefined) ?? [])[0]
+    if (!item) continue
+    rows.push(movementRow({
+      ...baseRow(String(item.productId), String(ret.date), String(ret.createdAt)),
+      type: 'Sale Return',
+      quantity: Number(ret.restockedQuantity),
+      unitPrice: Number(item.price ?? 0),
+      reference: String(ret.returnNo),
+      documentNo: String(ret.returnNo),
+      user: String(ret.user || '—'),
+      note: 'Customer return restocked',
+    }))
+  }
+  for (const ret of purchaseReturns) {
+    const purchase = stockIns.find(row => String(row.id) === String(ret.stockInId))
+    const item = ((purchase?.items as AppRecord[] | undefined) ?? [])[0]
+    if (!item) continue
+    rows.push(movementRow({
+      ...baseRow(String(item.productId), String(ret.date), String(ret.createdAt)),
+      type: 'Purchase Return',
+      quantity: -1,
+      unitPrice: Number(item.price ?? 0),
+      reference: String(ret.returnNo),
+      documentNo: String(ret.returnNo),
+      user: String(ret.user || '—'),
+      note: 'Returned to supplier',
+    }))
+  }
+
+  // 5) Running balances per product (ledger math stays in the base UOM).
+  const chronological = [...rows].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+  const balanceByProduct = new Map<string, number>()
+  for (const row of chronological) {
+    const pid = String(row.productId)
+    const before = balanceByProduct.get(pid) ?? 0
+    const qty = Number(row.quantity ?? 0)
+    row.qtyIn = qty > 0 ? qty : 0
+    row.qtyOut = qty < 0 ? Math.abs(qty) : 0
+    row.balanceBefore = before
+    row.balanceAfter = before + qty
+    balanceByProduct.set(pid, before + qty)
+  }
+
+  return chronological
+    .slice()
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+}
+
+export const stockMovements: AppRecord[] = buildStockMovements()
 
 /* ------------------------------------------------------------------ */
 /* Delivery notes (fulfillment of sold products — no stock impact)     */
@@ -387,17 +612,17 @@ interface DeliveryNoteSeed {
   lines: Array<[number, number]>
   scheduledInDays: number
   driverName?: string
-  vehicleNote?: string
+  vehicleNo?: string
   note?: string
   cancelReason?: string
   createdDaysAgo: number
 }
 
 const deliveryNoteSeeds: DeliveryNoteSeed[] = [
-  { status: 'Delivered', saleFromEnd: 5, lines: [[0, 2]], scheduledInDays: -3, driverName: 'Vannak Ouk', vehicleNote: 'Moto 1AB-1234', createdDaysAgo: 5 },
+  { status: 'Delivered', saleFromEnd: 5, lines: [[0, 2]], scheduledInDays: -3, driverName: 'Vannak Ouk', vehicleNo: 'Moto 1AB-1234', createdDaysAgo: 5 },
   { status: 'Cancelled', saleFromEnd: 4, lines: [[0, 1]], scheduledInDays: -1, note: 'Customer picked up at the shop instead.', cancelReason: 'Customer cancelled the delivery request.', createdDaysAgo: 4 },
   { status: 'Confirmed', saleFromEnd: 3, lines: [[0, 1]], scheduledInDays: 1, driverName: 'Vannak Ouk', createdDaysAgo: 2 },
-  { status: 'Out for Delivery', saleFromEnd: 2, lines: [[0, 3]], scheduledInDays: 0, driverName: 'Dara Kim', vehicleNote: 'Tuk-tuk 2CD-5678', createdDaysAgo: 2 },
+  { status: 'Out for Delivery', saleFromEnd: 2, lines: [[0, 3]], scheduledInDays: 0, driverName: 'Dara Kim', vehicleNo: 'Tuk-tuk 2CD-5678', createdDaysAgo: 2 },
   { status: 'Delivered', saleFromEnd: 1, lines: [[1, 1]], scheduledInDays: -1, driverName: 'Vannak Ouk', createdDaysAgo: 2 },
   { status: 'Draft', saleFromEnd: 0, lines: [[0, 1]], scheduledInDays: 2, note: 'Call customer before dispatch.', createdDaysAgo: 1 },
   { status: 'Confirmed', saleFromEnd: 1, lines: [[0, 2]], scheduledInDays: 3, driverName: 'Sreymom Lim', note: 'Second trip for the remaining boxes.', createdDaysAgo: 1 },
@@ -419,10 +644,11 @@ function buildDeliveryNotes(): AppRecord[] {
           saleItemId: String(item.id),
           productId: String(item.productId),
           product: String(item.name),
-          uomSymbol: String(product?.uomSymbol || ''),
+          uomSymbol: String(item.uomSymbol || product?.uomSymbol || ''),
           qtyOrdered: Number(item.quantity || 0),
-          qtyToDeliver: qty,
-          qtyDelivered: seed.status === 'Delivered' ? qty : 0,
+          // Never deliver more than the sale line's remaining quantity.
+          qtyToDeliver: Math.min(qty, Number(item.quantity || 0)),
+          qtyDelivered: seed.status === 'Delivered' ? Math.min(qty, Number(item.quantity || 0)) : 0,
         }
       })
       .filter((line): line is AppRecord => Boolean(line))
@@ -443,7 +669,7 @@ function buildDeliveryNotes(): AppRecord[] {
       deliveredAt: delivered ? daysAgo(Math.max(0, -seed.scheduledInDays)) : null,
       status: seed.status,
       driverName: seed.driverName ?? null,
-      vehicleNote: seed.vehicleNote ?? null,
+      vehicleNo: seed.vehicleNo ?? null,
       note: seed.note ?? null,
       cancelReason: seed.cancelReason ?? null,
       items: lines,

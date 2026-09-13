@@ -30,13 +30,13 @@ function moduleFixture(overrides: Partial<ModuleConfig> = {}): ModuleConfig {
 describe('product document tabs (spec §5.9)', () => {
   const productModule = stockModules.find(item => item.collection === 'products')!
 
-  it('has exactly General | Pricing | Expire — no Convert UOM tab', () => {
+  it('has exactly General | Pricing | Movements — no Expire or Convert UOM tab', () => {
     const tabs = moduleDocumentTabs(productModule)
-    expect(tabs.map(tab => tab.id)).toEqual(['general', 'pricing', 'expire'])
+    expect(tabs.map(tab => tab.id)).toEqual(['general', 'pricing', 'movements'])
     expect(tabs.map(tab => tab.labelKey)).toEqual([
       'app.stock.tabGeneral',
       'app.stock.tabPricing',
-      'app.stock.tabExpire',
+      'app.stock.tabMovements',
     ])
   })
 
@@ -51,10 +51,8 @@ describe('product document tabs (spec §5.9)', () => {
     // Cost Price and Current Stock are not editable document fields.
     expect(generalKeys).not.toContain('costPrice')
     expect(generalKeys).not.toContain('quantity')
-    // Moved to Pricing / Expire tabs.
+    // Sale price lives on the Pricing tab.
     expect(generalKeys).not.toContain('salePrice')
-    expect(generalKeys).not.toContain('expiryTracking')
-    expect(generalKeys).not.toContain('expiryDate')
   })
 
   it('binds the Pricing tab to uomConversions with the exact column contract', () => {
@@ -64,14 +62,19 @@ describe('product document tabs (spec §5.9)', () => {
     expect(pricingField?.colSpan).toBe(2)
   })
 
-  it('owns Track Expiry + read-only Expire Date on the Expire tab', () => {
+  it('owns Track Expiry + read-only Expire Date + Batches on the General tab', () => {
     const tabs = moduleDocumentTabs(productModule)
-    const fields = tabs[2]!.sections.flatMap(s => s.fields)
+    const general = tabs[0]!
+    const fields = general.sections
+      .filter(section => section.id === 'stock-costing' || section.id === 'stock-expire')
+      .flatMap(s => s.fields)
     const tracking = fields.find(f => f.key === 'expiryTracking')
     const expiry = fields.find(f => f.key === 'expiryDate')
     expect(tracking?.type).toBe('boolean')
     expect(expiry?.type).toBe('date')
     expect(expiry?.readOnly).toBe(true)
+    // Batch lots table stays on the same tab for easy expiry management.
+    expect(fields.some(f => f.type === 'batches')).toBe(true)
     // No raw i18n keys — every label/help resolves to a defined locale entry.
     for (const field of fields) {
       expect(field.labelKey).toMatch(/^app\.stock\./)

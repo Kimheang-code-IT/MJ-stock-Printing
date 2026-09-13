@@ -67,8 +67,6 @@ class Settings(BaseSettings):
 
     # Product / shop / brand images on local disk (not S3/MinIO).
     local_storage_dir: str = "var/media"
-    # Archived invoice PDFs (object key stored on sales.invoice_pdf_object_key).
-    invoice_storage_dir: str = "var/invoices"
     max_upload_bytes: int = 5 * 1024 * 1024
 
     @property

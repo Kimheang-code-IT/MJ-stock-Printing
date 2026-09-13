@@ -91,3 +91,73 @@ async def test_product_crud_sku_conflict_and_price_audit(client, db_session):
     # Cleanup
     await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
     await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+
+async def test_barcode_is_operational_identifier(client):
+    """Barcode-first: sku optional, barcode unique+required, fast lookup."""
+    headers = await admin_headers(client)
+    category = (
+        await client.post("/api/v1/categories", json={"code": "BAR", "name": "Barcode"}, headers=headers)
+    ).json()["data"]
+
+    # 1. Create without sku and without barcode: barcode is auto-issued.
+    no_ids = await client.post(
+        "/api/v1/products",
+        json={
+            "name": "Auto Barcode Product",
+            "category_id": category["id"],
+            "uom_id": str(DEFAULT_UOM_ID),
+            "selling_price": "2.00",
+        },
+        headers=headers,
+    )
+    assert no_ids.status_code == 201, no_ids.text
+    auto = no_ids.json()["data"]
+    assert auto["barcode"]
+    assert auto["barcode"].startswith("BAR-")
+    assert auto["sku"] is None
+
+    # 2. Barcode lookup returns the product (POS operational path).
+    found = await client.get(f"/api/v1/pos/products/barcode/{auto['barcode']}", headers=headers)
+    assert found.status_code == 200, found.text
+    assert found.json()["data"]["id"] == auto["id"]
+
+    # 3. Unknown barcode -> 404.
+    missing = await client.get("/api/v1/pos/products/barcode/nope-nope", headers=headers)
+    assert missing.status_code == 404
+
+    # 4. Duplicate barcode rejected.
+    dup = await client.post(
+        "/api/v1/products",
+        json={
+            "barcode": auto["barcode"],
+            "name": "Dup Barcode",
+            "category_id": category["id"],
+            "uom_id": str(DEFAULT_UOM_ID),
+            "selling_price": "1.00",
+        },
+        headers=headers,
+    )
+    assert dup.status_code == 409
+
+    # 5. POS search by exact barcode short-circuits to the product.
+    searched = await client.get(
+        f"/api/v1/pos/products/search?q={auto['barcode']}", headers=headers
+    )
+    assert searched.status_code == 200, searched.text
+    results = searched.json()["data"]
+    assert [row["id"] for row in results] == [auto["id"]]
+
+    # 6. sku can be added later and stays unique.
+    patched = await client.patch(
+        f"/api/v1/products/{auto['id']}", json={"sku": "LEGACY-1"}, headers=headers
+    )
+    assert patched.status_code == 200
+    assert patched.json()["data"]["sku"] == "LEGACY-1"
+
+    # 7. Product list search matches barcode.
+    listing = await client.get(f"/api/v1/products?q={auto['barcode']}", headers=headers)
+    assert listing.status_code == 200
+    assert any(row["id"] == auto["id"] for row in listing.json()["data"])
+
+    await client.delete(f"/api/v1/products/{auto['id']}", headers=headers)
+    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)

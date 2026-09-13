@@ -142,6 +142,32 @@ async def test_finance_summary_includes_operating_expenses_in_net_result(client,
 
 
 @pytest.mark.asyncio
+async def test_khr_expense_and_summary_normalization(client, finance_baseline):
+    """Expenses carry their document currency; the Finance summary normalizes
+    KHR amounts to USD via the exchange rate stored on the document."""
+    headers = await admin_headers(client)
+    response = await client.post(
+        "/api/v1/reports/finance/expenses",
+        json=_payload(amount="82000", currency="KHR", exchange_rate="41000", description="KHR riel ledger check"),
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    row = response.json()["data"]
+    assert row["currency"] == "KHR"
+    assert Decimal(row["exchange_rate"]) == Decimal("41000")
+
+    # The ledger row keeps the document currency.
+    entries = (await client.get("/api/v1/reports/finance/entries?q=KHR riel ledger", headers=headers)).json()["data"]
+    assert entries and entries[0]["currency"] == "KHR"
+    assert Decimal(entries[0]["amount"]) == Decimal("82000.00")
+
+    # Summary normalizes: 82000 KHR / 41000 = 2.00 USD.
+    data = (await client.get("/api/v1/reports/finance", headers=headers)).json()["data"]
+    delta = Decimal(data["total_expense"]) - Decimal(finance_baseline["total_expense"])
+    assert delta == Decimal("2.00")
+
+
+@pytest.mark.asyncio
 async def test_finance_entries_income_derived_from_sales_and_filters(client):
     headers = await admin_headers(client)
     # One sale to derive an income row from.

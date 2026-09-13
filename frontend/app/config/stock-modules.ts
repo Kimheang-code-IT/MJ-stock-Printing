@@ -44,7 +44,16 @@ function createModule(partial: Omit<ModuleConfig, 'canCreate' | 'titleKm' | 'sin
 const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Payment', 'Bank Transfer', 'Credit'] as const
 const SALE_STATUS = ['Paid', 'Partial', 'Unpaid', 'Returned'] as const
 const DEBT_STATUS = ['UNPAID', 'PARTIAL', 'PAID'] as const
-const STOCK_MOVEMENT_TYPES = ['Stock In', 'Sale', 'Adjustment', 'Damage', 'Expiry', 'Sale Return'] as const
+const STOCK_MOVEMENT_TYPES = [
+  'Stock In',
+  'Sale',
+  'Sale Return',
+  'Purchase Return',
+  'Adjustment Increase',
+  'Adjustment Decrease',
+  'Damage',
+  'Expiry',
+] as const
 const ACTIVE_INACTIVE = ACTIVE_STATUS
 
 export const stockModules: ModuleConfig[] = [
@@ -133,7 +142,7 @@ export const stockModules: ModuleConfig[] = [
     ],
   }),
   createModule({
-    path: '/stock',
+    path: '/stock/products',
     title: 'Stock',
     singular: 'Product',
     description: 'Products with current stock, cost and pricing. Stock in, adjustment, damage and expiry run as actions from this page.',
@@ -145,19 +154,15 @@ export const stockModules: ModuleConfig[] = [
     documentForm: 'product',
     columns: [
       col('imageUrl', 'Image', { labelKm: 'រូបភាព', type: 'image' }),
-      col('code', 'Code'),
+      col('barcode', 'Barcode'),
       col('name', 'Product'),
       col('category', 'Category'),
       col('brand', 'Brand', { labelKm: 'ម៉ាក' }),
-      col('barcode', 'Barcode'),
       col('uomSymbol', 'UOM'),
-      col('stockInQty', 'Stock In'),
-      col('stockOutQty', 'Stock Out'),
       col('quantity', 'Current Stock'),
-      col('damageQty', 'Damage'),
-      col('costPrice', 'Cost'),
-      col('salePrice', 'Price'),
-      col('expiryDate', 'Expire Date', { labelKm: 'ថ្ងៃផុតកំណត់', type: 'date' }),
+      col('costPrice', 'Cost Price', { labelKey: 'app.stock.costPrice' }),
+      col('salePrice', 'Sale Price', { labelKey: 'app.modules.products.fields.salePrice' }),
+      col('expiryDate', 'Nearest Expiry', { labelKey: 'app.stock.nearestExpiry', labelKm: 'ផុតកំណត់ឆាប់បំផុត', type: 'date' }),
       col('status', 'Status'),
     ],
     fields: [
@@ -479,12 +484,19 @@ export const stockModules: ModuleConfig[] = [
     tableOnly: true,
     columns: [
       col('date', 'Date'),
+      col('documentNo', 'Document No.'),
       col('product', 'Product'),
-      col('type', 'Type'),
-      col('quantity', 'Qty'),
-      col('reference', 'Reference'),
+      col('barcode', 'Barcode'),
+      // Batch traceability (spec: movements expose the lot the change hit).
+      col('batchNo', 'Batch', { labelKey: 'app.stock.batchNo' }),
+      col('expiryDate', 'Expiry', { labelKey: 'app.stock.expiryDateCol', labelKm: 'ថ្ងៃផុតកំណត់', type: 'date' }),
+      col('type', 'Movement Type'),
+      col('uomSymbol', 'UOM'),
+      col('qtyIn', 'Qty In'),
+      col('qtyOut', 'Qty Out'),
+      col('balanceBefore', 'Balance Before'),
+      col('balanceAfter', 'Balance After'),
       col('user', 'User'),
-      col('note', 'Note'),
     ],
     fields: [],
     filters: [

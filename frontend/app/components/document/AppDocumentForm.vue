@@ -41,7 +41,8 @@ const wideForm = computed(() =>
         field.type === 'notification-rules'
         || field.type === 'line-table'
         || field.type === 'uom-conversions'
-        || field.type === 'related-records',
+        || field.type === 'related-records'
+        || field.type === 'batches',
       ),
     ),
   ),
@@ -57,6 +58,7 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
     || field.type === 'line-table'
     || field.type === 'uom-conversions'
     || field.type === 'related-records'
+    || field.type === 'batches'
 }
 
 const sectionItems = (fields: DocumentTabSchema['sections'][0]['fields']) =>

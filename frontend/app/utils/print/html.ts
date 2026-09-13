@@ -108,6 +108,12 @@ table.lines {
   table-layout: fixed;
   border: 0.5px solid #000;
 }
+/* Multi-page sales: repeat the header row and never split an item row. */
+table.lines thead { display: table-header-group; }
+table.lines tbody tr {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
 th, td {
   border: 0.5px solid #000;
   padding: ${pad};

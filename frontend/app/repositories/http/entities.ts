@@ -11,6 +11,7 @@ import type {
   FinanceSummary,
   PosCommandRepository,
   PosCompleteSaleInput,
+  ProductBatchRow,
   ProductCostHistoryRow,
   ProductHistoryRow,
   ProductSalePriceRow,
@@ -23,6 +24,7 @@ import type {
 import { ApiEndpoints, CollectionEndpoints, type ApiCollection } from '~/utils/constants/api-endpoints'
 import { documentSequencePreview } from '~/utils/document-sequences'
 import { ROLE_DOCUMENT_TYPES, normalizePermissionRows } from '~/utils/role/permissions'
+import { roundQty } from '~/utils/stock/uom-conversions'
 
 export function metaOf(response: unknown): ApiMeta | null {
   const meta = (response as ApiResponse<unknown>)?.meta
@@ -220,6 +222,8 @@ function adaptProductOut(row: Record<string, unknown>): Record<string, unknown> 
     salePrice: row.salePrice ?? row.selling_price,
     minimumStock: row.minimumStock ?? row.minimum_stock,
     expiryTracking: row.expiryTracking ?? row.expiry_tracking ?? false,
+    trackBatch: row.trackBatch ?? row.track_batch ?? (row.expiryTracking ?? row.expiry_tracking ?? false) === true,
+    trackExpiry: row.trackExpiry ?? row.track_expiry ?? row.expiryTracking ?? row.expiry_tracking ?? false,
     fifo: row.fifo ?? false,
     stockInQty: row.stockInQty ?? row.stock_in_qty,
     stockOutQty: row.stockOutQty ?? row.stock_out_qty,
@@ -281,6 +285,7 @@ function adaptProductIn(input: Record<string, unknown>): Record<string, unknown>
   if (input.salePrice != null) output.salePrice = Number(input.salePrice)
   if (input.minimumStock != null) output.minimum_stock = Number(input.minimumStock)
   if (input.expiryTracking != null) output.expiry_tracking = Boolean(input.expiryTracking)
+  if (input.trackBatch != null) output.track_batch = Boolean(input.trackBatch)
   if (input.fifo != null) output.fifo = Boolean(input.fifo)
   if (input.note != null) output.note = input.note
   // imageObjectKey is the stored object key; a bare string imageUrl without a
@@ -443,8 +448,8 @@ function adaptStockMovementOut(row: Record<string, unknown>): Record<string, unk
     SALE: 'Sale',
     SALE_RETURN: 'Sale Return',
     PURCHASE_RETURN: 'Purchase Return',
-    ADJUSTMENT_IN: 'Adjustment',
-    ADJUSTMENT_OUT: 'Adjustment',
+    ADJUSTMENT_IN: 'Adjustment Increase',
+    ADJUSTMENT_OUT: 'Adjustment Decrease',
     DAMAGE: 'Damage',
     EXPIRE: 'Expiry',
   }
@@ -454,10 +459,24 @@ function adaptStockMovementOut(row: Record<string, unknown>): Record<string, unk
     productId: asRecordId(row.productId ?? row.product_id),
     product: row.product ?? row.product_name ?? '',
     productName: row.productName ?? row.product_name ?? '',
+    barcode: row.barcode ?? row.product_barcode ?? '',
     type: labels[movementType] ?? movementType,
     movementType,
     quantity: Number(row.quantity ?? row.quantity_delta ?? 0),
     quantityDelta: row.quantityDelta ?? row.quantity_delta ?? 0,
+    // Batch traceability (spec: movements expose the lot the change hit).
+    batchNo: row.batchNo ?? row.batch_no ?? null,
+    expiryDate: row.expiryDate ?? row.expiry_date ?? null,
+    // Source business document number (PIN / INV / SRT / PRT / ADJ / DMG / EXP).
+    documentNo: String(row.document_no ?? row.documentNo ?? row.reference ?? ''),
+    // Line-unit + cost snapshots (display only; ledger stays base-UOM).
+    unit: row.unit ?? row.uom_symbol ?? '',
+    unitCost: row.unit_cost ?? row.unitCost ?? null,
+    // Entered-UOM display (Damage / Expiry / Purchase Return lines).
+    enteredUom: row.entered_uom_symbol ?? row.enteredUomSymbol ?? null,
+    enteredQty: row.entered_quantity ?? row.enteredQty ?? null,
+    balanceBefore: Number(row.balance_before ?? row.balanceBefore ?? 0),
+    balanceAfter: Number(row.balance_after ?? row.balanceAfter ?? null),
     reference: row.reference ?? row.document_no ?? '',
     referenceType: row.referenceType ?? row.reference_type ?? '',
     uom: row.uom ?? row.uom_symbol ?? '',
@@ -555,6 +574,9 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
     invoiceNo: String(row.invoice_no ?? row.invoiceNo ?? ''),
     customer: String(row.customer_name ?? row.customer ?? ''),
     product: String(row.product_name ?? row.product ?? ''),
+    // Batch traceability (spec §12): the lots that fed this sold line.
+    batchNo: row.batch_no ?? row.batchNo ?? null,
+    expiryDate: row.expiry_date ?? row.expiryDate ?? null,
     quantity: q4(row.quantity),
     returnedQuantity: q4(row.returned_quantity ?? row.returnedQuantity),
     returnableQuantity: q4(row.returnable_quantity ?? row.returnableQuantity),
@@ -609,6 +631,9 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
       productId: line.productId,
       name: line.product,
       uom: '',
+      // Batch allocation traceability (spec §12, internal only).
+      batchNo: line.batchNo,
+      expiryDate: line.expiryDate,
       quantity: line.quantity,
       returnedQuantity: line.returnedQuantity,
       returnableQuantity: line.returnableQuantity,
@@ -652,6 +677,9 @@ function adaptPurchaseReportLine(row: Record<string, unknown>): Record<string, u
     supplier: String(row.supplier_name ?? row.supplier ?? ''),
     supplierId: asRecordId(row.supplier_id ?? row.supplierId) || null,
     product: String(row.product_name ?? row.product ?? ''),
+    // Batch traceability (spec §17): the lot each line was received into.
+    batchNo: row.batch_no ?? row.batchNo ?? null,
+    expiryDate: row.expiry_date ?? row.expiryDate ?? null,
     quantity: q4(row.quantity),
     returnedQuantity: q4(row.returned_quantity ?? row.returnedQuantity),
     returnableQuantity: q4(row.returnable_quantity ?? row.returnableQuantity),
@@ -697,6 +725,9 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
       productId: line.productId,
       name: line.product,
       uom: '',
+      // Batch traceability (spec §17).
+      batchNo: line.batchNo,
+      expiryDate: line.expiryDate,
       quantity: line.quantity,
       returnedQuantity: line.returnedQuantity,
       returnableQuantity: line.returnableQuantity,
@@ -850,6 +881,8 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
         product_id: line.productId,
         quantity: Number(line.quantity || 0),
         ...(line.unitCost != null ? { unit_cost: Number(line.unitCost) } : {}),
+        ...(line.batchNo ? { batch_no: line.batchNo } : {}),
+        ...(line.expiryDate ? { expiry_date: line.expiryDate } : {}),
         ...(line.uomId ? { uom_id: line.uomId } : {}),
         ...(line.uomSymbol ? { uom_symbol: line.uomSymbol } : {}),
         ...(line.factorToBase != null ? { factor_to_base: line.factorToBase } : {}),
@@ -867,10 +900,17 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     } as const
     const endpoint = endpointByType[input.type]
     if (input.type !== 'stock_in') {
+      // Damage / Expiry accept the target batch no + entered UOM; the
+      // backend validates the batch remaining quantity server-side.
       return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
         product_id: input.productId,
         quantity: input.quantity,
         note: input.note ?? null,
+        ...(input.batchNo ? { batch_no: input.batchNo } : {}),
+        ...(input.type === 'expiry' && input.expiryDate ? { expiry_date: input.expiryDate } : {}),
+        ...(input.uomId ? { uom_id: input.uomId } : {}),
+        ...(input.uomSymbol ? { uom_symbol: input.uomSymbol } : {}),
+        ...(input.factorToBase != null ? { factor_to_base: input.factorToBase } : {}),
       })) as AppRecord
     }
     // Stock In = purchase (POST /stock/in): one line per call, qty/cost per
@@ -891,6 +931,8 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
         product_id: input.productId,
         quantity,
         unit_cost: unitCost,
+        ...(input.batchNo ? { batch_no: input.batchNo } : {}),
+        ...(input.expiryDate ? { expiry_date: input.expiryDate } : {}),
         ...(input.uomId ? { uom_id: input.uomId } : {}),
         ...(input.uomSymbol ? { uom_symbol: input.uomSymbol } : {}),
         ...(input.factorToBase != null ? { factor_to_base: input.factorToBase } : {}),
@@ -977,6 +1019,9 @@ function adaptProductHistoryOut(row: Record<string, unknown>, kind: StockHistory
     referenceId: String(row.reference_id ?? row.referenceId ?? ''),
     user: String(row.user ?? row.created_by_name ?? ''),
     note: String(row.note ?? ''),
+    // Batch traceability (spec: movements expose the lot the change hit).
+    batchNo: (row.batchNo ?? row.batch_no ?? null) as string | null,
+    expiryDate: (row.expiryDate ?? row.expiry_date ?? null) as string | null,
     kind: (row.kind as StockHistoryKind) ?? kind,
   }
 }
@@ -1039,6 +1084,95 @@ function adaptSalePriceOut(row: Record<string, unknown>): ProductSalePriceRow {
 }
 
 /**
+ * Batch lots of one product derived from the movement ledger rows
+ * (already camelCased by `adaptStockMovementOut`). Batch identity = product
+ * + batch_no. Batches without a batch no (unbatched stock) stay invisible:
+ * the UI never edits them (spec: unbatched stock drains FEFO server-side).
+ */
+function productBatchRows(movementRows: Record<string, unknown>[]): ProductBatchRow[] {
+  const today = new Date().toISOString().slice(0, 10)
+  const lots = new Map<string, {
+    batchNo: string
+    productId: string
+    expiryDates: string[]
+    received: number
+    remaining: number
+    unitCost: number | null
+    supplier: string
+    purchaseNo: string
+    createdDate: string
+  }>()
+  for (const raw of movementRows) {
+    const movement = adaptStockMovementOut(raw)
+    const batchNo = String(movement.batchNo ?? '').trim()
+    if (!batchNo) continue
+    const qty = Number(movement.quantityDelta ?? movement.quantity ?? 0)
+    const date = String(movement.date ?? movement.createdAt ?? '').slice(0, 10)
+    const key = `${String(movement.productId)}:${batchNo}`
+    let lot = lots.get(key)
+    if (!lot) {
+      lot = {
+        batchNo,
+        productId: String(movement.productId ?? ''),
+        expiryDates: [],
+        received: 0,
+        remaining: 0,
+        unitCost: null,
+        supplier: '',
+        purchaseNo: '',
+        createdDate: date,
+      }
+      lots.set(key, lot)
+    }
+    if (qty > 0) {
+      // Inbound (Stock In): stamps expiry + supplier + opening document.
+      lot.received += qty
+      lot.remaining += qty
+      if (movement.expiryDate) lot.expiryDates.push(String(movement.expiryDate))
+      if (movement.unitCost != null && Number(movement.unitCost) > 0) {
+        lot.unitCost = Number(movement.unitCost)
+      }
+      if (!lot.purchaseNo) lot.purchaseNo = String(movement.documentNo ?? '')
+    }
+    else {
+      lot.remaining += qty
+    }
+    // Latest movement wins as the lot's opening date.
+    if (date && date > lot.createdDate) lot.createdDate = date
+  }
+  const rows: ProductBatchRow[] = []
+  for (const [key, lot] of lots) {
+    const remaining = roundQty(lot.remaining)
+    const expiry = lot.expiryDates.sort()[0] ?? null
+    rows.push({
+      id: key,
+      productId: lot.productId,
+      batchNo: lot.batchNo,
+      expiryDate: expiry,
+      remainingQty: remaining,
+      receivedQty: roundQty(lot.received),
+      unitCost: lot.unitCost ?? 0,
+      supplier: lot.supplier,
+      purchaseNo: lot.purchaseNo,
+      createdDate: lot.createdDate,
+      status: remaining <= 0
+        ? 'Depleted'
+        : (lot.expiryDates.length && (lot.expiryDates.sort()[0] ?? '') < today)
+          ? 'Expired'
+          : 'Active',
+    })
+  }
+  // Nearest expiry first, depleted lots last.
+  return rows.sort((a, b) => {
+    const depleted = Number(a.remainingQty <= 0) - Number(b.remainingQty <= 0)
+    if (depleted !== 0) return depleted
+    const expiry = String(a.expiryDate ?? '9999-12-31').localeCompare(String(b.expiryDate ?? '9999-12-31'))
+    if (expiry !== 0) return expiry
+    return a.batchNo.localeCompare(b.batchNo)
+  })
+}
+
+/**
  * HTTP implementation of the product-scoped dialog queries. Each method hits
  * the product-scoped /api/v1 URL so HTTP mode never downloads unrelated
  * collections (spec §7 Stock).
@@ -1085,6 +1219,34 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
       return {
         items: (Array.isArray(rows) ? rows : []).map(adaptCostHistoryOut),
         meta: metaOf(response),
+      }
+    },
+
+    /**
+     * Batch lots of one product, derived read-only from the immutable
+     * movement ledger (GET /stock/movements?productId=…). Batch identity =
+     * product + batch_no; expiry is the latest expiry stamped on the lot's
+     * movements; remaining = inbound − outbound; received = remaining +
+     * outflows. No batch write path exists on this surface.
+     */
+    async listProductBatches(productId, query = {}): Promise<EntityListResult<ProductBatchRow>> {
+      const response = await api.get<unknown>(ApiEndpoints.STOCK_MOVEMENTS, {
+        query: {
+          productId,
+          page: 1,
+          limit: 500,
+        },
+        requestKey: `product-batches:${productId}`,
+        cancelPrevious: true,
+      })
+      const rows = unwrap<Record<string, unknown>[]>(response)
+      return {
+        items: productBatchRows(rows).filter((row) => {
+          const status = String(query.status || '').toUpperCase()
+          if (!status || status === 'ALL') return true
+          return row.status.toUpperCase() === status
+        }),
+        meta: null,
       }
     },
 

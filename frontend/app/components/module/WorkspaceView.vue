@@ -85,7 +85,7 @@ const permissionPrefix = computed(() => current.value?.permission.replace(/\.vie
 const canCreate = computed(() => Boolean(
   current.value?.canCreate
   // createPermission lets report modules route Create to a /new flow with
-  // the operation's own permission (Purchase Report → stock.in).
+  // the operation's own permission (Purchase Report â†’ stock.in).
   && auth.canAccessPage(current.value.createPermission || `${permissionPrefix.value}.create`),
 ))
 const canEdit = computed(() => Boolean(
@@ -103,7 +103,7 @@ const canOperate = computed(() => Boolean(
   && !current.value.readOnly
   && (auth.canAccessPage(`${permissionPrefix.value}.operate`) || auth.canAccessPage(`${permissionPrefix.value}.edit`)),
 ))
-// Backend returns require pos.access (PosService.return_sale) — the UI
+// Backend returns require pos.access (PosService.return_sale) â€” the UI
 // check only hides the action.
 const canReturnSale = computed(() =>
   auth.canAccessPage('pos.access'),
@@ -175,7 +175,7 @@ const uomById = (id: string) => store.list('uoms').find(uom => String(uom.id) ==
 /** Brand lookup for product display enrichment. */
 const brandById = (id: string) => store.list('brands').find(brand => String(brand.id) === id)
 
-/** Products linked to each brand — used to keep the brand list informative. */
+/** Products linked to each brand â€” used to keep the brand list informative. */
 const brandProductCounts = computed(() => {
   const counts = new Map<string, number>()
   for (const row of store.list('products')) {
@@ -186,7 +186,7 @@ const brandProductCounts = computed(() => {
   return counts
 })
 
-/** Products linked to each UOM — used to keep the UOM list informative. */
+/** Products linked to each UOM â€” used to keep the UOM list informative. */
 const uomProductCounts = computed(() => {
   const counts = new Map<string, number>()
   for (const row of store.list('products')) {
@@ -214,8 +214,8 @@ const stockTotalsByProduct = computed(() => {
   return totals
 })
 
-/** Quantity column → history dialog movement-kind filter.
- *  Current Stock (`quantity`) is display-only — it never opens the dialog. */
+/** Quantity column â†’ history dialog movement-kind filter.
+ *  Current Stock (`quantity`) is display-only â€” it never opens the dialog. */
 const STOCK_QTY_KIND: Record<string, StockHistoryKind> = {
   stockInQty: 'stock_in',
   stockOutQty: 'stock_out',
@@ -259,7 +259,7 @@ watch(current, (value) => {
   setBreadcrumbs([{ label: moduleTitle(value) }])
   rowSelection.value = {}
   // Cross-document links land here with ?q=<document no> so the linked
-  // document is pre-filtered in the list (e.g. Customer Debt → Sales Report).
+  // document is pre-filtered in the list (e.g. Customer Debt â†’ Sales Report).
   const searchQuery = route.query.q
   q.value = typeof searchQuery === 'string' ? searchQuery : ''
   for (const key of Object.keys(filters)) Reflect.deleteProperty(filters, key)
@@ -280,7 +280,7 @@ watch([q, filters, dateFrom, dateTo], () => {
 }, { deep: true })
 
 // Client-only: reload list data after mount and when filters change. Mock
-// mode fetches too — the mock repository serves the in-memory seed cheaply,
+// mode fetches too â€” the mock repository serves the in-memory seed cheaply,
 // so loading/error stays repository-driven in every mode.
 function reloadModuleData() {
   if (!import.meta.client || !current.value) return
@@ -758,7 +758,7 @@ function refresh() {
 /* ------------------------- Stock operations ------------------------- */
 
 const productOptions = computed(() => store.list('products').map(product => ({
-  label: `${product.code} · ${product.name}`,
+  label: `${product.code} Â· ${product.name}`,
   value: String(product.id),
 })))
 
@@ -819,7 +819,14 @@ async function submitStockOperation() {
    ONE submit stores the complete purchase document (items[], supplier, payment,
    unpaid balance as supplier debt) via POST /stock/in. */
 
-interface PurchaseLine { productId: string, uomId: string, quantity?: number, unitCost?: number }
+interface PurchaseLine {
+  productId: string
+  uomId: string
+  quantity?: number
+  unitCost?: number
+  batchNo: string
+  expiryDate: string
+}
 
 const purchaseOpen = ref(false)
 const purchaseBusy = ref(false)
@@ -850,7 +857,14 @@ const stockOperationSupplierOptions = computed(() =>
 
 function emptyPurchaseLine(productId = ''): PurchaseLine {
   const product = store.list('products').find(row => String(row.id) === String(productId))
-  return { productId, uomId: String(product?.uomId || ''), quantity: undefined, unitCost: undefined }
+  return {
+    productId,
+    uomId: String(product?.uomId || ''),
+    quantity: undefined,
+    unitCost: undefined,
+    batchNo: '',
+    expiryDate: '',
+  }
 }
 
 function openPurchase(productId = '') {
@@ -887,6 +901,21 @@ function purchaseUomOptionsFor(productId: string) {
       .map(row => ({ label: String(row.uomSymbol || row.uomId || ''), value: String(row.uomId) }))
   }
   return [{ label: String(product.uomSymbol || product.uom || ''), value: String(product.uomId || '') }]
+}
+
+/** Batch tracking is per product toggle (spec §5.9 Stock Costing). */
+function purchaseTracksBatch(productId: string): boolean {
+  const product = purchaseProductRecord(productId)
+  if (!product) return false
+  return product.trackBatch === true
+    || (product.trackBatch == null && (product.expiryTracking === true || product.expiryTracking === 'true'))
+}
+
+function purchaseTracksExpiry(productId: string): boolean {
+  const product = purchaseProductRecord(productId)
+  if (!product) return false
+  return product.trackExpiry === true || product.expiryTracking === true
+    || (product.trackExpiry == null && product.expiryTracking === true)
 }
 
 function purchaseConversionFor(line: PurchaseLine) {
@@ -948,9 +977,15 @@ const purchasePaidAmount = computed(() =>
 const purchaseOutstanding = computed(() =>
   roundMoney(purchaseGrandTotal.value - purchasePaidAmount.value))
 
-/** Lines that will actually be submitted (product + quantity set). */
+/** Lines that will actually be submitted (product + qty set, batch/expiry
+ *  requirements of the row's product satisfied). */
 const purchaseCompleteLines = computed(() =>
-  purchaseLines.value.filter(line => line.productId && Number(line.quantity) > 0))
+  purchaseLines.value.filter((line) => {
+    if (!line.productId || !(Number(line.quantity) > 0)) return false
+    if (purchaseTracksBatch(line.productId) && !line.batchNo.trim()) return false
+    if (purchaseTracksExpiry(line.productId) && !line.expiryDate.trim()) return false
+    return true
+  }))
 
 const purchaseHasIncompleteLine = computed(() =>
   purchaseLines.value.some(line => line.productId && !(Number(line.quantity) > 0)))
@@ -973,6 +1008,9 @@ async function submitPurchase() {
         uomSymbol: purchaseUomSymbolFor(line) || undefined,
         factorToBase: purchaseFactorFor(line),
         ...(line.unitCost != null ? { unitCost: Number(line.unitCost) } : {}),
+        // Batch traceability: receive into the named lot with its expiry.
+        ...(line.batchNo.trim() ? { batchNo: line.batchNo.trim() } : {}),
+        ...(line.expiryDate.trim() ? { expiryDate: line.expiryDate.trim() } : {}),
       })),
       supplierId: purchaseSupplier.value || null,
       paidAmount: purchasePaidAmount.value,
@@ -1112,7 +1150,7 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
         />
         <CommonAppNumberField
           v-model="stockOperationQuantity"
-          :label="`${t('app.fields.quantity')} (${stockOperationType === 'adjustment' ? '+/−' : '−'})`"
+          :label="`${t('app.fields.quantity')} (${stockOperationType === 'adjustment' ? '+/âˆ’' : 'âˆ’'})`"
           :required="true"
           :min="stockOperationType === 'adjustment' ? undefined : 0"
           :step="1"
@@ -1196,6 +1234,21 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
               :disabled="!line.productId"
               class="w-full"
               @update:model-value="onPurchaseLineUom(line)"
+            />
+            <CommonAppTextField
+              v-if="purchaseTracksBatch(line.productId)"
+              v-model="line.batchNo"
+              :label="t('app.stock.batchNo')"
+              :required="true"
+              class="w-full"
+            />
+            <CommonAppInputDate
+              v-if="purchaseTracksExpiry(line.productId)"
+              v-model="line.expiryDate"
+              :label="t('app.stock.expiryDateCol')"
+              :required="true"
+              size="md"
+              class="w-full"
             />
             <CommonAppNumberField
               v-model="line.quantity"

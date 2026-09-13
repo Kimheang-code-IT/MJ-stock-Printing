@@ -95,7 +95,7 @@ onMounted(async () => {
 })
 
 function blankLine(): Record<string, unknown> {
-  return { productId: '', uomId: '', quantity: 0, unitAmount: 0, amount: 0 }
+  return { productId: '', uomId: '', quantity: 0, unitAmount: 0, amount: 0, batchNo: '', expiryDate: '' }
 }
 
 const supplierOptions = computed(() => store.list('suppliers').map(row => ({
@@ -118,10 +118,23 @@ function availableProductOptions(row: Record<string, unknown>) {
   return store.list('products')
     .filter(row => !excluded.has(String(row.id)))
     .map(row => ({
-      label: [String(row.code || row.sku || ''), String(row.name || '')]
+      label: [String(row.barcode || ''), String(row.name || '')]
         .filter(Boolean).join(' · '),
       value: String(row.id),
     }))
+}
+
+/** Batch tracking is per product toggle (spec §5.9 Stock Costing). */
+function tracksBatch(product: Record<string, unknown> | null): boolean {
+  if (!product) return false
+  return product.trackBatch === true
+    || (product.trackBatch == null && (product.expiryTracking === true || product.expiryTracking === 'true'))
+}
+
+function tracksExpiry(product: Record<string, unknown> | null): boolean {
+  if (!product) return false
+  return product.trackExpiry === true || product.expiryTracking === true
+    || (product.trackExpiry == null && product.expiryTracking === true)
 }
 
 /** Pricing Original UOMs of the row's product (base UOM included). */
@@ -155,7 +168,8 @@ function suggestedCost(productId: string, uomId: string): number {
 }
 
 // Keep rows coherent: valid UOM for the row's product + suggested cost when
-// empty (the generic line table cannot derive cross-column defaults itself).
+// empty + base-qty readout + batch/expiry clearing for unbatched products
+// (the generic line table cannot derive cross-column defaults itself).
 watch(() => model.lines, (rows) => {
   if (!Array.isArray(rows)) return
   const next = (rows as Array<Record<string, unknown>>).map((row) => {
@@ -166,8 +180,15 @@ watch(() => model.lines, (rows) => {
     const nextUomId = validUom ? uomId : String(product.uomId || '')
     const unitAmount = Number(row.unitAmount || 0)
     const nextCost = unitAmount > 0 ? unitAmount : suggestedCost(String(row.productId), nextUomId)
-    if (nextUomId === uomId && nextCost === unitAmount) return row
-    return { ...row, uomId: nextUomId, unitAmount: nextCost }
+    const nextRow: Record<string, unknown> = { ...row, uomId: nextUomId, unitAmount: nextCost }
+    // Base qty display: entered qty × factor (display only — ledger math
+    // happens server-side from factorToBase).
+    nextRow.baseQuantity = multiplyDecimalSafe(Number(row.quantity || 0), conversionForUom(product, nextUomId)?.factorToBase ?? 1)
+    // Batch/expiry columns only when the product tracks them.
+    if (!tracksBatch(product)) nextRow.batchNo = ''
+    if (!tracksExpiry(product)) nextRow.expiryDate = ''
+    if (JSON.stringify(nextRow) !== JSON.stringify(row)) return nextRow
+    return row
   })
   if (JSON.stringify(next) !== JSON.stringify(rows)) model.lines = next
 }, { deep: true })
@@ -186,6 +207,8 @@ const linesTable = computed<ModuleTable>(() => ({
       required: true,
       optionItems: row => availableProductOptions(row),
     },
+    { key: 'batchNo', label: t('app.stock.batchNo'), type: 'text' },
+    { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date' },
     {
       key: 'uomId',
       label: t('app.pos.uom'),
@@ -193,6 +216,7 @@ const linesTable = computed<ModuleTable>(() => ({
       optionItems: row => rowUomOptions(row),
     },
     { key: 'quantity', label: t('app.fields.quantity'), type: 'number', required: true },
+    { key: 'baseQuantity', label: t('app.stock.baseQty'), type: 'number', computed: true },
     { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number' },
     { key: 'amount', label: t('app.fields.lineTotal'), type: 'number', computed: true },
   ],
@@ -268,16 +292,26 @@ type PurchaseRow = Record<string, unknown> & {
   uomId: string
   quantity: number
   unitAmount: number
+  batchNo?: string
+  expiryDate?: string
 }
 
 const lines = computed<PurchaseRow[]>(() =>
   (Array.isArray(model.lines) ? model.lines as PurchaseRow[] : []))
 
-/** Lines ready to save: product + quantity + cost are all set. */
-const completedLines = computed(() => lines.value.filter(row =>
-  row.productId
-  && Number(row.quantity) > 0
-  && Number(row.unitAmount) >= 0))
+/** Lines ready to save: product + quantity + cost are all set, and the
+ *  batch/expiry requirements of the row's product are satisfied. */
+const completedLines = computed(() => lines.value.filter((row) => {
+  if (!row.productId) return false
+  if (!(Number(row.quantity) > 0)) return false
+  if (Number(row.unitAmount) < 0) return false
+  const product = productFor(row.productId)
+  // Spec: batch no required when the product tracks batches; expiry date
+  // required when it tracks expiry (expiry implies batch).
+  if (tracksBatch(product) && !String(row.batchNo ?? '').trim()) return false
+  if (tracksExpiry(product) && !String(row.expiryDate ?? '').trim()) return false
+  return true
+}))
 
 const subtotal = computed(() =>
   round2(completedLines.value.reduce(
@@ -315,6 +349,9 @@ async function save() {
           uomId: String(row.uomId || product?.uomId || '') || undefined,
           uomSymbol: String(conversion?.uomSymbol || product?.uomSymbol || product?.uom || '') || undefined,
           factorToBase: conversion?.factorToBase ?? 1,
+          // Batch traceability: receive into the named lot with its expiry.
+          batchNo: String(row.batchNo || '').trim() || null,
+          expiryDate: String(row.expiryDate || '').trim() || null,
         }
       }),
       supplierId: String(model.supplierId || '') || null,

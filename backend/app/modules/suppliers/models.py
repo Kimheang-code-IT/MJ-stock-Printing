@@ -54,6 +54,12 @@ class SupplierDebt(Base):
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
     remaining_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Document currency: every amount on this document is in THIS currency
+    # (never mixed). exchange_rate = KHR per 1 USD (1 for USD documents).
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="USD", server_default="USD")
+    exchange_rate: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=Decimal("1"), server_default="1"
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="UNPAID")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

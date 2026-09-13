@@ -1,0 +1,209 @@
+import { describe, expect, it, beforeEach } from 'vitest'
+import { configureFormats, DEFAULT_FORMAT_CONFIG } from '../app/utils/format/format-service'
+import { printPageCss, PRINT_IFRAME_SIZES } from '../app/utils/print/html'
+import {
+  buildSaleInvoiceHtml,
+  saleInvoicePrintInputFromRecord,
+  saleReceiptPrintInput,
+} from '../app/utils/print/invoice'
+import type { SaleReceipt } from '../app/repositories/contracts/entities'
+
+/** Intl may insert NBSP between groups — normalize for assertions. */
+const normalize = (html: string) => html.replace(/\u00A0/g, ' ')
+
+describe('invoice A4/A5 sizes (one component, two paper variants)', () => {
+  beforeEach(() => {
+    configureFormats(DEFAULT_FORMAT_CONFIG)
+  })
+
+  it('A4 renders a 210mm × 297mm page', () => {
+    expect(PRINT_IFRAME_SIZES.A4).toEqual({ width: '210mm', height: '297mm' })
+    expect(printPageCss('A4')).toContain('@page { size: A4;')
+  })
+
+  it('A5 renders a 148mm × 210mm page with a compact budget (no transform scale)', () => {
+    expect(PRINT_IFRAME_SIZES.A5).toEqual({ width: '148mm', height: '210mm' })
+    const css = printPageCss('A5')
+    expect(css).toContain('@page { size: A5;')
+    // A5 is its own metric set — never a transform:scale() of the A4 page.
+    expect(css).not.toContain('transform')
+  })
+
+  it('shares one visual structure between A4 and A5 (same rule set)', () => {
+    const ruleNames = (css: string) => css.split('}').map(rule => rule.split('{')[0]?.trim()).filter(Boolean).sort()
+    expect(ruleNames(printPageCss('A4'))).toEqual(ruleNames(printPageCss('A5')))
+  })
+
+  it('keeps the existing visual structure on both sizes', () => {
+    const input = {
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000010',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 0,
+      outstandingAmount: 3.15,
+    }
+    for (const size of ['A4', 'A5'] as const) {
+      const html = buildSaleInvoiceHtml(input, size)
+      expect(html).toContain('វិក្កយបត្រ / INVOICE')
+      expect(html).toContain('លេខ Invoice')
+      expect(html).toContain('កាលបរិច្ឆេទ Date')
+      expect(html).toContain('អតិថិជន Customer')
+      expect(html).toContain('បេឡា Cashier')
+      expect(html).toContain('<span>N°</span>')
+      expect(html).toContain('<span>Product</span>')
+      expect(html).toContain('<span>Unit</span>')
+      expect(html).toContain('<span>Qty</span>')
+      expect(html).toContain('<span>Price</span>')
+      expect(html).toContain('<span>Discount</span>')
+      expect(html).toContain('<span>Amount</span>')
+      expect(html).toContain('ទឹកប្រាក់សរុប / Total Amount')
+      expect(html).toContain('ខ្វះសរុប')
+      expect(html).toContain('អ្នកទិញ / Buyer')
+      expect(html).toContain('អ្នកលក់ / Seller')
+      // A5 shrinks spacing/metrics — not the layout structure.
+      expect((html.match(/<tr class="empty">/g) || []).length).toBeGreaterThan(0)
+    }
+  })
+
+  it('keeps A5 fillers below A4 so signatures stay on page 1', () => {
+    const input = {
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000011',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 0,
+      outstandingAmount: 3.15,
+    }
+    const countFillers = (html: string) => (html.match(/<tr class="empty">/g) || []).length
+    const a4 = countFillers(buildSaleInvoiceHtml(input, 'A4'))
+    const a5 = countFillers(buildSaleInvoiceHtml(input, 'A5'))
+    expect(a5).toBeLessThan(a4)
+  })
+
+  it('repeats the table header on page breaks and never splits item rows', () => {
+    const css = printPageCss('A4')
+    expect(css).toContain('table.lines thead { display: table-header-group; }')
+    expect(css).toContain('page-break-inside: avoid')
+    expect(css).toContain('break-inside: avoid')
+  })
+})
+
+describe('USD/KHR invoice printing (stored currency + rate)', () => {
+  beforeEach(() => {
+    configureFormats(DEFAULT_FORMAT_CONFIG)
+  })
+
+  it('prints USD amounts as $254.75', () => {
+    const html = normalize(buildSaleInvoiceHtml({
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000012',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 254.75, discountPercent: 0 }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 0,
+      outstandingAmount: 254.75,
+    }))
+    expect(html).toContain('$254.75')
+  })
+
+  it('prints KHR amounts as 1,019,000៛ (whole riel, symbol after)', () => {
+    const html = normalize(buildSaleInvoiceHtml({
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000013',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'KHR',
+      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 1019000, discountPercent: 0 }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 0,
+      outstandingAmount: 1019000,
+    }))
+    expect(html).toContain('1,019,000៛')
+  })
+
+  it('renders a KHR sale with the exchange rate printed in the meta block', () => {
+    const html = normalize(buildSaleInvoiceHtml({
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000014',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 6.3, discountPercent: 0 }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 0,
+      outstandingAmount: 6.3,
+      displayCurrency: 'KHR',
+      exchangeRate: 4100,
+    }))
+    expect(html).toContain('25,830៛')
+    expect(html).toContain('1 USD = 4,100 KHR')
+  })
+
+  it('never re-uses the current exchange rate on historical reprints', () => {
+    const printInput = saleInvoicePrintInputFromRecord({
+      invoiceNo: 'INV-000015',
+      date: '2026-01-02T09:30:00Z',
+      customer: 'Dara',
+      cashier: 'Sokha',
+      currency: 'KHR',
+      exchangeRate: 4000,
+      items: [{ name: 'Glove', uom: 'PCS', quantity: 2, price: 8200, discountPercent: 0 }],
+      paidAmount: 8200,
+      remaining: 8200,
+    }, 'Demo Shop')
+    // Stored snapshot currency/rate, not the shop's live rate.
+    expect(printInput.currency).toBe('KHR')
+    expect(printInput.displayCurrency).toBe('KHR')
+    expect(printInput.exchangeRate).toBe(4000)
+    const html = normalize(buildSaleInvoiceHtml(printInput, 'A4'))
+    // 2 × 8,200 = 16,400 riel — converted nowhere else.
+    expect(html).toContain('16,400៛')
+  })
+
+  it('derives a reprint input from the receipt payload (movement/history dialog)', () => {
+    const receipt: SaleReceipt = {
+      saleId: 's1',
+      saleNo: 'SALE-000001',
+      invoiceNo: 'INV-000016',
+      date: '2026-02-01',
+      customer: 'Walk-in customer',
+      cashier: 'Sokha',
+      paymentMethod: 'CASH',
+      note: '',
+      currency: 'KHR',
+      exchangeRate: 4100,
+      items: [{ name: 'Glove', quantity: 1, uom: 'PCS', unitPrice: 4100, discount: 0, total: 4100 }],
+      subtotal: 4100,
+      discount: 0,
+      deliveryPrice: 0,
+      deposit: 4100,
+      total: 4100,
+      paidAmount: 4100,
+      remaining: 0,
+    }
+    const input = saleReceiptPrintInput(receipt, 'Demo Shop')
+    expect(input.currency).toBe('KHR')
+    const html = normalize(buildSaleInvoiceHtml(input, 'A5'))
+    expect(html).toContain('INV-000016')
+    expect(html).toContain('4,100៛')
+  })
+})

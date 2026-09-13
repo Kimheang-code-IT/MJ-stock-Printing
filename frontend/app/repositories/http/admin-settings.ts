@@ -26,9 +26,19 @@ export function toAdminSettingsValues(input: Partial<AppConfig>): AdminSettingsG
   const telegram: Record<string, unknown> = {}
   const telegramInput = input.telegram
   if (telegramInput) {
+    if (telegramInput.enabled !== undefined) telegram.enabled = telegramInput.enabled
     if (telegramInput.passwordResetEnabled !== undefined) telegram.enable_password_reset = telegramInput.passwordResetEnabled
     if (telegramInput.paymentInvoiceNotifyEnabled !== undefined) telegram.payment_invoice_notify_enabled = telegramInput.paymentInvoiceNotifyEnabled
     if (telegramInput.stockInquiryEnabled !== undefined) telegram.stock_inquiry_enabled = telegramInput.stockInquiryEnabled
+    if (telegramInput.expiryAlertsEnabled !== undefined) telegram.expiry_alerts_enabled = telegramInput.expiryAlertsEnabled
+    if (telegramInput.saleNotificationsEnabled !== undefined) telegram.sale_enabled = telegramInput.saleNotificationsEnabled
+    if (telegramInput.purchaseNotificationsEnabled !== undefined) telegram.purchase_enabled = telegramInput.purchaseNotificationsEnabled
+    if (telegramInput.dailySummaryEnabled !== undefined) telegram.daily_summary_enabled = telegramInput.dailySummaryEnabled
+    // Never write an empty/blank summary time.
+    if (telegramInput.dailySummaryTime !== undefined && String(telegramInput.dailySummaryTime).trim()) {
+      telegram.daily_summary_time = String(telegramInput.dailySummaryTime).trim()
+    }
+    if (telegramInput.messageLanguage !== undefined) telegram.notification_language = telegramInput.messageLanguage
   }
   // The expiry-alerts toggle lives on the Stock tab of the UI but is stored
   // under the telegram settings group (spec section 3.6).
@@ -68,7 +78,19 @@ export function applyAdminSettingsGroups(config: AppConfig, groups: AdminSetting
     if (telegram.enable_password_reset !== undefined) next.telegram.passwordResetEnabled = asBoolean(telegram.enable_password_reset, next.telegram.passwordResetEnabled)
     if (telegram.payment_invoice_notify_enabled !== undefined) next.telegram.paymentInvoiceNotifyEnabled = asBoolean(telegram.payment_invoice_notify_enabled, next.telegram.paymentInvoiceNotifyEnabled)
     if (telegram.stock_inquiry_enabled !== undefined) next.telegram.stockInquiryEnabled = asBoolean(telegram.stock_inquiry_enabled, next.telegram.stockInquiryEnabled)
-    if (telegram.expiry_alerts_enabled !== undefined) next.stock.telegramExpiryAlertsEnabled = asBoolean(telegram.expiry_alerts_enabled, next.stock.telegramExpiryAlertsEnabled)
+    if (telegram.expiry_alerts_enabled !== undefined) {
+      const enabled = asBoolean(telegram.expiry_alerts_enabled, next.telegram.expiryAlertsEnabled)
+      next.telegram.expiryAlertsEnabled = enabled
+      next.stock.telegramExpiryAlertsEnabled = enabled
+    }
+    if (telegram.sale_enabled !== undefined) next.telegram.saleNotificationsEnabled = asBoolean(telegram.sale_enabled, next.telegram.saleNotificationsEnabled)
+    if (telegram.purchase_enabled !== undefined) next.telegram.purchaseNotificationsEnabled = asBoolean(telegram.purchase_enabled, next.telegram.purchaseNotificationsEnabled)
+    if (telegram.daily_summary_enabled !== undefined) next.telegram.dailySummaryEnabled = asBoolean(telegram.daily_summary_enabled, next.telegram.dailySummaryEnabled)
+    if (telegram.daily_summary_time !== undefined) next.telegram.dailySummaryTime = String(telegram.daily_summary_time)
+    if (telegram.notification_language !== undefined) {
+      const language = String(telegram.notification_language)
+      if (language === 'en' || language === 'km') next.telegram.messageLanguage = language
+    }
   }
 
   return next

@@ -1,0 +1,43 @@
+# Local-only production overlay for Stock & POS on a Windows PC.
+#
+# Used together with the base compose file:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Differences from the development defaults:
+# - ENVIRONMENT=production / DEBUG=false (boot refuses dev secrets)
+# - db / redis / api are NOT published to the host: internal Docker network only
+# - frontend is published on 127.0.0.1:80 by default (FRONTEND_BIND in .env is
+#   configurable for LAN access later; never 0.0.0.0 by default)
+# - no dev bind mounts, no hot reload — images are built once or pulled
+# - API health gate: compose waits for GET /health/ready (DB + Redis checks)
+#   before the frontend starts
+# - CORS for the same-origin localhost frontend
+# - RabbitMQ / Celery / MinIO / scheduler containers: never started
+#   (the FastAPI in-process scheduler owns all scheduled jobs)
+
+services:
+  db:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DEBUG: ${DEBUG:-false}
+    healthcheck:
+      # Deep health: only "ok" when PostgreSQL and Redis respond.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  frontend:
+    # The host binding comes from the base file's FRONTEND_BIND variable
+    # (127.0.0.1 by default in .env.local.example). Nothing to override here.
+    depends_on:
+      api:
+        condition: service_healthy

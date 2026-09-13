@@ -36,8 +36,8 @@ class UomConversionOut(BaseModel):
 
 class POSProductOut(BaseModel):
     id: UUID
-    sku: str
-    barcode: str | None
+    sku: str | None
+    barcode: str
     name: str
     category_id: UUID | None
     category_name: str | None = None
@@ -145,6 +145,14 @@ class SaleCreateRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("due_date", "dueDate"),
     )
+    # Document currency: every amount on this sale (lines, discount, delivery,
+    # paid, debt) is in THIS currency. exchange_rate = KHR per 1 USD.
+    currency: str = Field(default="USD", pattern="^(USD|KHR)$")
+    exchange_rate: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        validation_alias=AliasChoices("exchange_rate", "exchangeRate"),
+    )
     items: list[SaleItemRequest] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -164,7 +172,7 @@ class SaleItemOut(BaseModel):
     id: UUID
     product_id: UUID
     product_name: str
-    sku: str
+    sku: str | None
     barcode: str | None
     uom_id: UUID | None = None
     uom_code: str | None = None
@@ -197,6 +205,8 @@ class SaleOut(BaseModel):
     cashier_id: UUID
     note: str | None
     change_amount: Decimal = Decimal("0")
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     items: list[SaleItemOut]
 
 
@@ -282,6 +292,8 @@ class CustomerDebtOut(BaseModel):
     remaining_amount: Decimal
     due_date: date | None
     status: str
+    currency: str = "USD"
+    exchange_rate: Decimal = Decimal("1")
     created_at: datetime
 
 

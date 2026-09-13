@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { TableColumn } from '@nuxt/ui'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { useDeliveryCommands, useSettingsRepositories } from '~/repositories/index'
@@ -7,17 +8,20 @@ import {
   deliveryLines,
   deliveryStatusOf,
   noteInvoiceNos,
+  noteSales,
   type DeliveryStatusAction,
 } from '~/utils/delivery/notes'
+import { formatDateTime } from '~/utils/format/format-service'
 import { printDeliveryNoteDocument } from '~/utils/print/delivery-note'
 import type { AppRecord } from '~/config/admin-seed'
 
 /**
- * Delivery note detail (spec §2.1.9 / §5.13): header chrome only (status
- * badge + **Delivery OK** + optional Cancel + Print) above a single lines
- * table from the linked POS sale. No contact/driver/schedule form — those
- * live only in the sale/customer snapshot used for printing. Delivery never
- * mutates stock.
+ * Delivery note detail (spec §2.1.9 / §5.13): full fulfillment header
+ * (Delivery No, Date, Customer, Phone, Address, Delivery Person, Vehicle /
+ * Plate, Status, Note), all linked invoices, per-line delivery quantities,
+ * the status timeline (audit history when the data exists) and the
+ * status-based actions (Confirm / Out for Delivery / Delivered / Cancel /
+ * Print). Delivery never mutates stock.
  */
 definePageMeta({
   titleKey: 'app.pages.deliveryNotes',
@@ -63,6 +67,9 @@ onMounted(async () => {
     await Promise.all([
       store.fetchList('sales'),
       store.fetchList('customers'),
+      // Status timeline (best effort): audit rows only exist when the
+      // backend/audit history recorded transitions for this note.
+      store.fetchList('auditLogs').catch(() => {}),
     ])
     try {
       const info = await appInfo.get()
@@ -78,12 +85,23 @@ onMounted(async () => {
   }
 })
 
-/** Multi-invoice notes (spec §2.1.9): the joined invoice list is shown in
- *  the lines card; the first linked sale (if any) stays available for lookups. */
+/** Multi-invoice notes (spec §2.1.9): joined display + linked sales. */
 const linkedInvoiceNos = computed(() => noteInvoiceNos(note.value))
+const linkedSales = computed(() => noteSales(note.value))
+const invoiceNoBySaleId = computed(() =>
+  new Map(linkedSales.value.map(link => [link.saleId, link.invoiceNo])))
+
+/** Status timeline from the audit trail (hidden when nothing recorded). */
+const timeline = computed(() => (store.list('auditLogs') as AppRecord[])
+  .filter(row =>
+    String(row.entityType || '') === 'DeliveryNote'
+    && (String(row.entityId || '') === noteId.value
+      || String(row.entityLabel || '') === String(note.value?.deliveryNo || '')))
+  .slice(0, 20))
 
 /* ------------------------------ permissions ------------------------------ */
 
+const canConfirm = computed(() => auth.canAccessPage('delivery.confirm'))
 const canDeliver = computed(() => auth.canAccessPage('delivery.deliver'))
 const canCancel = computed(() => auth.canAccessPage('delivery.cancel'))
 
@@ -91,10 +109,12 @@ function allowed(action: DeliveryStatusAction): boolean {
   return Boolean(note.value) && canTransitionAction(note.value as AppRecord, action)
 }
 
-/** Simplified actions (spec §5.13): Delivery OK when possible, else Cancel. */
+/** Status-based actions (spec §5.13 transitions). */
 const statusActions = computed(() => ([
-  { action: 'deliver' as const, label: t('app.delivery.actionDeliveryOk'), icon: 'i-lucide-package-check', color: 'success' as const, solid: true, enabled: allowed('deliver') && canDeliver.value },
-  { action: 'cancel' as const, label: t('app.delivery.actionCancel'), icon: 'i-lucide-circle-off', color: 'error' as const, solid: false, enabled: allowed('cancel') && canCancel.value },
+  { action: 'confirm' as const, label: t('app.delivery.actionConfirm'), icon: 'i-lucide-check-circle-2', color: 'primary' as const, enabled: allowed('confirm') && canConfirm.value },
+  { action: 'out_for_delivery' as const, label: t('app.delivery.statusOutForDelivery'), icon: 'i-lucide-truck', color: 'warning' as const, enabled: allowed('out_for_delivery') && canDeliver.value },
+  { action: 'deliver' as const, label: t('app.delivery.statusDelivered'), icon: 'i-lucide-package-check', color: 'success' as const, enabled: allowed('deliver') && canDeliver.value },
+  { action: 'cancel' as const, label: t('app.delivery.actionCancel'), icon: 'i-lucide-circle-off', color: 'error' as const, enabled: allowed('cancel') && canCancel.value },
 ]).filter(item => item.enabled))
 
 /* ------------------------------ transitions ------------------------------ */
@@ -138,6 +158,69 @@ function printNote() {
   if (!note.value) return
   void printDeliveryNoteDocument(note.value, shopName.value)
 }
+
+/* -------------------------------- header --------------------------------- */
+
+const headerItems = computed(() => note.value
+  ? [
+      { label: t('app.delivery.deliveryNo'), value: String(note.value.deliveryNo || '—') },
+      { label: t('app.fields.date'), value: note.value.deliveryDate
+        ? formatDateTime(note.value.deliveryDate)
+        : formatDateTime(note.value.createdAt) },
+      { label: t('app.pos.customer'), value: String(note.value.customer || '—') },
+      { label: t('app.delivery.deliveryPhone'), value: String(note.value.deliveryPhone || '—') },
+      { label: t('app.delivery.deliveryAddress'), value: String(note.value.deliveryLocation || '—') },
+      { label: t('app.delivery.driverName'), value: String(note.value.driverName || '—') },
+      { label: t('app.delivery.vehicleNo'), value: String(note.value.vehicleNo || '—') },
+      { label: t('app.fields.note'), value: String(note.value.note || '—') },
+    ]
+  : [])
+
+/* ------------------------------ lines table ------------------------------ */
+
+interface DetailLine {
+  saleId: string
+  invoiceNo: string
+  product: string
+  uomSymbol: string
+  qtyOrdered: number
+  qtyToDeliver: number
+  qtyDelivered: number
+}
+
+const detailLines = computed<DetailLine[]>(() => lines.value.map((line) => {
+  const saleId = String(line.saleId || '')
+  return {
+    saleId,
+    invoiceNo: invoiceNoBySaleId.value.get(saleId) || linkedInvoiceNos.value[0] || '—',
+    product: String(line.product || ''),
+    uomSymbol: String(line.uomSymbol || ''),
+    qtyOrdered: Number(line.qtyOrdered ?? 0),
+    qtyToDeliver: Number(line.qtyToDeliver ?? 0),
+    qtyDelivered: Number(line.qtyDelivered ?? 0),
+  }
+}))
+
+const lineColumns = computed<TableColumn<DetailLine>[]>(() => [
+  { accessorKey: 'invoiceNo', header: t('app.delivery.selectInvoices') },
+  { accessorKey: 'product', header: t('app.fields.product') },
+  { accessorKey: 'uomSymbol', header: t('app.fields.uom') },
+  {
+    accessorKey: 'qtyOrdered',
+    header: t('app.delivery.qtyOrdered'),
+    meta: { class: { td: 'text-end tabular-nums', th: 'text-end' } },
+  },
+  {
+    accessorKey: 'qtyDelivered',
+    header: t('app.delivery.qtyDelivered'),
+    meta: { class: { td: 'text-end tabular-nums', th: 'text-end' } },
+  },
+  {
+    accessorKey: 'qtyToDeliver',
+    header: t('app.delivery.qtyToDeliver'),
+    meta: { class: { td: 'text-end tabular-nums', th: 'text-end' } },
+  },
+])
 </script>
 
 <template>
@@ -151,7 +234,7 @@ function printNote() {
     />
 
     <template v-else>
-      <!-- Header chrome: status badge + Delivery OK / Cancel + Print -->
+      <!-- Header chrome: status badge + status actions + Print -->
       <div class="flex flex-wrap items-center justify-between gap-2 print:hidden">
         <div class="flex items-center gap-2">
           <UBadge
@@ -168,7 +251,7 @@ function printNote() {
             v-for="item in statusActions"
             :key="item.action"
             :color="item.color"
-            :variant="item.solid ? 'solid' : 'soft'"
+            variant="soft"
             size="sm"
             :icon="item.icon"
             :label="item.label"
@@ -186,41 +269,93 @@ function printNote() {
         </div>
       </div>
 
-      <!-- Lines to deliver (from the linked POS sale) -->
-      <UCard :ui="{ body: 'p-0 sm:p-0' }" class="print:hidden">
+      <!-- Fulfillment header: Delivery No / Date / Customer / Phone / Address /
+           Delivery Person / Vehicle / Status / Note -->
+      <UCard>
         <template #header>
-          <p class="text-sm font-medium">{{ t('app.delivery.lines') }}</p>
+          <p class="text-sm font-medium">{{ t('app.delivery.infoSection') }}</p>
+        </template>
+        <dl class="grid gap-x-4 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div
+            v-for="item in headerItems.filter(item => item.label !== t('app.fields.note'))"
+            :key="item.label"
+          >
+            <dt class="text-[11px] text-muted">{{ item.label }}</dt>
+            <dd class="font-medium">{{ item.value }}</dd>
+          </div>
+        </dl>
+        <div
+          v-if="String(note.note || '').trim()"
+          class="mt-3 border-t border-default pt-3 text-sm"
+        >
+          <p class="text-[11px] text-muted">{{ t('app.fields.note') }}</p>
+          <p class="whitespace-pre-line">{{ note.note }}</p>
+        </div>
+      </UCard>
+
+      <!-- Linked invoices (one note may cover many invoices of the same customer) -->
+      <UCard :ui="{ body: 'p-0 sm:p-0' }">
+        <template #header>
+          <p class="text-sm font-medium">{{ t('app.delivery.selectInvoices') }}</p>
         </template>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-elevated text-left text-xs text-muted">
               <tr>
-                <th class="px-3 py-2 font-medium">{{ t('app.fields.product') }}</th>
-                <th class="px-3 py-2 font-medium">{{ t('app.fields.uom') }}</th>
-                <th class="px-3 py-2 text-right font-medium">{{ t('app.delivery.qtyOrdered') }}</th>
-                <th class="px-3 py-2 text-right font-medium">{{ t('app.delivery.qtyToDeliver') }}</th>
-                <th class="px-3 py-2 text-right font-medium">{{ t('app.delivery.qtyDelivered') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('app.delivery.invoiceCol') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('app.delivery.lines') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(line, index) in lines" :key="line.id ?? index" class="border-t border-default">
-                <td class="px-3 py-2 font-medium">{{ line.product }}</td>
-                <td class="px-3 py-2 text-muted">{{ line.uomSymbol || '—' }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ line.qtyOrdered }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ line.qtyToDeliver }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ line.qtyDelivered }}</td>
+              <tr v-for="link in linkedSales" :key="link.saleId" class="border-t border-default">
+                <td class="px-3 py-2 font-medium">{{ link.invoiceNo || '—' }}</td>
+                <td class="px-3 py-2 tabular-nums text-muted">
+                  {{ detailLines.filter(line => line.saleId === link.saleId).length }}
+                </td>
               </tr>
-              <tr v-if="!lines.length">
-                <td colspan="5" class="px-3 py-4 text-center text-sm text-muted">{{ t('app.ui.noRecords') }}</td>
+              <tr v-if="!linkedSales.length">
+                <td colspan="2" class="px-3 py-4 text-center text-sm text-muted">
+                  {{ linkedInvoiceNos.join(', ') || t('app.ui.noRecords') }}
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
       </UCard>
 
-      <p v-if="linkedInvoiceNos.length" class="text-xs text-muted">
-        {{ t('app.delivery.linkedSale') }}: {{ linkedInvoiceNos.join(', ') }}
-      </p>
+      <!-- Item delivery quantities (no stock impact — display only) -->
+      <UCard :ui="{ body: 'p-0 sm:p-0' }">
+        <template #header>
+          <p class="text-sm font-medium">{{ t('app.delivery.lines') }}</p>
+        </template>
+        <UTable
+          :data="detailLines"
+          :columns="lineColumns"
+          sticky
+          class="max-h-[50vh]"
+        />
+        <p v-if="!detailLines.length" class="px-3 py-4 text-center text-sm text-muted">
+          {{ t('app.ui.noRecords') }}
+        </p>
+      </UCard>
+
+      <!-- Status timeline (audit history, when recorded) -->
+      <UCard v-if="timeline.length" :ui="{ body: 'p-0 sm:p-0' }">
+        <template #header>
+          <p class="text-sm font-medium">{{ t('app.delivery.timeline') }}</p>
+        </template>
+        <ol class="px-4 py-3">
+          <li
+            v-for="row in timeline"
+            :key="String(row.id)"
+            class="flex items-center gap-3 border-l-2 border-default py-1.5 pl-3 text-sm"
+          >
+            <span class="whitespace-nowrap text-xs text-muted">{{ formatDateTime(row.occurredAt) }}</span>
+            <span class="font-medium">{{ row.action }}</span>
+            <span class="text-muted">{{ row.user }}</span>
+          </li>
+        </ol>
+      </UCard>
     </template>
 
     <!-- Cancel reason dialog -->

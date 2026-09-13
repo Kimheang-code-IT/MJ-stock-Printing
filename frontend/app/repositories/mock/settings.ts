@@ -73,6 +73,12 @@ export const MOCK_APP_CONFIG: AppConfig = {
     passwordResetEnabled: true,
     paymentInvoiceNotifyEnabled: true,
     stockInquiryEnabled: true,
+    expiryAlertsEnabled: true,
+    // Backend catalog defaults: sale/purchase/summary notifications off.
+    saleNotificationsEnabled: false,
+    purchaseNotificationsEnabled: false,
+    dailySummaryEnabled: false,
+    dailySummaryTime: '07:00',
     connectionStatus: status('disabled'),
   },
   stock: {

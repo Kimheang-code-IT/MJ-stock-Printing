@@ -94,6 +94,9 @@ function money(value: unknown) {
           <thead>
             <tr class="border-b border-default bg-elevated/50 text-start">
               <th class="px-2 py-1.5 text-start font-medium text-muted">{{ t('app.pos.product') }}</th>
+              <!-- Batch traceability (spec §17): the lot each line hit. -->
+              <th class="px-2 py-1.5 text-start font-medium text-muted">{{ t('app.stock.batchNo') }}</th>
+              <th class="px-2 py-1.5 text-start font-medium text-muted">{{ t('app.stock.expiryDateCol') }}</th>
               <th class="px-2 py-1.5 text-end font-medium text-muted">{{ t('app.fields.quantity') }}</th>
               <th class="px-2 py-1.5 text-end font-medium text-muted">{{ t('app.fields.unitPrice') }}</th>
               <th class="px-2 py-1.5 text-end font-medium text-muted">{{ t('app.fields.lineTotal') }}</th>
@@ -106,12 +109,14 @@ function money(value: unknown) {
               class="border-b border-default last:border-b-0"
             >
               <td class="px-2 py-1.5 text-default">{{ line.name || '—' }}</td>
+              <td class="px-2 py-1.5 tabular-nums text-default">{{ line.batchNo || '—' }}</td>
+              <td class="px-2 py-1.5 tabular-nums text-default">{{ line.expiryDate || '—' }}</td>
               <td class="px-2 py-1.5 text-end tabular-nums text-default">{{ line.quantity }}</td>
               <td class="px-2 py-1.5 text-end tabular-nums text-default">{{ money(line.price) }}</td>
               <td class="px-2 py-1.5 text-end tabular-nums text-default">{{ money(line.total) }}</td>
             </tr>
             <tr v-if="!lines.length">
-              <td colspan="4" class="px-2 py-3 text-center text-muted">{{ t('app.ui.noRecords') }}</td>
+              <td colspan="6" class="px-2 py-3 text-center text-muted">{{ t('app.ui.noRecords') }}</td>
             </tr>
           </tbody>
         </table>

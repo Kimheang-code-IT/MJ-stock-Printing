@@ -71,11 +71,55 @@ async def test_history_kind_rows_and_display_labels(client):
     types = {row["type"] for row in in_rows}
     assert kinds == {"stock_in"}
     assert types == {"Stock In", "Sale Return"}
+    # Stock In dialog columns: product name, unit snapshot and per-unit price.
+    assert all(row["product"] == product["name"] for row in in_rows)
+    assert all(row["unit"] for row in in_rows)
+    assert all(Decimal(row["unit_price"]) > 0 for row in in_rows)
 
     stock_out = await client.get(f"/api/v1/stock/products/{pid}/history?type=stock_out", headers=headers)
     out_rows = stock_out.json()["data"]
     assert {row["type"] for row in out_rows} == {"Sale"}
     assert all(Decimal(row["qty"]) < 0 for row in out_rows)
+    # Stock Out dialog columns: invoice no, product, unit, unit price.
+    assert all(row["reference"] for row in out_rows)
+    assert all(row["product"] == product["name"] for row in out_rows)
+    assert all(row["unit"] for row in out_rows)
+    assert all(Decimal(row["unit_price"]) > 0 for row in out_rows)
+    # SALE rows carry the sale linkage for the invoice detail click-through.
+    assert all(row["reference_type"] == "sale" for row in out_rows)
+    assert all(row["reference_id"] for row in out_rows)
+
+
+@pytest.mark.asyncio
+async def test_movement_invoice_click_through(client):
+    """Clicking an Invoice No on a SALE stock-out row opens the invoice detail."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await make_stocked_product(client, headers, sku=f"INV-{tag}", name=f"Invoice Widget {tag}", qty="8")
+    pid = product["id"]
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={"payment_method": "CASH", "amount_received": "100.00", "items": [{"product_id": pid, "quantity": "3"}]},
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    invoice_no = sale.json()["data"]["invoice_no"]
+
+    history = await client.get(f"/api/v1/stock/products/{pid}/history?type=stock_out", headers=headers)
+    row = next(r for r in history.json()["data"] if r["reference"] == invoice_no)
+
+    detail = await client.get(f"/api/v1/stock/movements/{row['id']}/invoice", headers=headers)
+    assert detail.status_code == 200, detail.text
+    data = detail.json()["data"]
+    assert data["invoice_no"] == invoice_no
+    assert any(str(item["name"]).startswith(product["name"]) for item in data["items"])
+
+    # Non-sale movements have no invoice.
+    in_history = await client.get(f"/api/v1/stock/products/{pid}/history?type=stock_in", headers=headers)
+    in_row = in_history.json()["data"][0]
+    rejected = await client.get(f"/api/v1/stock/movements/{in_row['id']}/invoice", headers=headers)
+    assert rejected.status_code in (400, 404, 422)
 
 
 @pytest.mark.asyncio

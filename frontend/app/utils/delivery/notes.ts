@@ -80,6 +80,40 @@ export function deliveryStatusOf(note: AppRecord | null | undefined): DeliverySt
   return isDeliveryStatus(value) ? value : normalizeDeliveryStatusInput(value)
 }
 
+/** i18n key of a delivery status label (must exist in every locale). */
+export function deliveryStatusLabelKey(status: unknown): string {
+  const raw = String(status ?? '').trim()
+  const normalized = isDeliveryStatus(raw) ? raw : normalizeDeliveryStatusInput(raw)
+  const keys: Record<DeliveryStatus, string> = {
+    Draft: 'app.delivery.statusDraft',
+    Confirmed: 'app.delivery.statusConfirmed',
+    'Out for Delivery': 'app.delivery.statusOutForDelivery',
+    Delivered: 'app.delivery.statusDelivered',
+    Cancelled: 'app.delivery.statusCancelled',
+  }
+  if (keys[normalized]) return keys[normalized]!
+  // Fulfillment-specific statuses outside the note lifecycle.
+  const extra: Record<string, string> = {
+    Pending: 'app.delivery.statusPending',
+    Preparing: 'app.delivery.statusPreparing',
+    Failed: 'app.delivery.statusFailed',
+    Returned: 'app.delivery.statusReturned',
+  }
+  return extra[raw] ?? 'app.delivery.statusPending'
+}
+
+/** i18n key of an invoice delivery-fulfillment status (backend enum). */
+export function invoiceDeliveryStatusLabelKey(status: unknown): string {
+  const raw = String(status ?? '').trim().toUpperCase()
+  const keys: Record<string, string> = {
+    FULLY_DELIVERED: 'app.delivery.statusDelivered',
+    PARTIALLY_DELIVERED: 'app.delivery.statusPartiallyDelivered',
+    PENDING: 'app.delivery.statusPending',
+    UNDELIVERED: 'app.delivery.statusPending',
+  }
+  return keys[raw] ?? 'app.delivery.statusPending'
+}
+
 /** The statuses the list **Update Status** control may offer (spec §5.13). */
 export function allowedNextStatuses(note: AppRecord | null | undefined): DeliveryStatus[] {
   return DELIVERY_TRANSITIONS[deliveryStatusOf(note)]

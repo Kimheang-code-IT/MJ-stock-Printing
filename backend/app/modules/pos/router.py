@@ -135,23 +135,3 @@ async def sale_receipt(
     service = POSService(db)
     sale = await service.get_sale(sale_id)
     return envelope(await service.build_receipt(sale))
-
-
-@router.get("/sales/{sale_id}/invoice.pdf")
-async def sale_invoice_pdf(
-    sale_id: UUID,
-    db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("pos.print")),
-):
-    """Archived invoice PDF: streams the stored object when it exists, otherwise
-    renders and archives it first (object key is kept on the sale row)."""
-    from fastapi import Response
-
-    service = POSService(db)
-    sale = await service.get_sale(sale_id)
-    content = await service.get_or_generate_invoice_pdf(sale)
-    return Response(
-        content=content,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{sale.invoice_no}.pdf"'},
-    )

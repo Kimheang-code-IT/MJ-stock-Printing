@@ -46,29 +46,46 @@ from app.shared.documents import allocate_document_number
 DELIVERABLE_SALE_STATUSES = ("COMPLETED", "PARTIAL_RETURN")
 FOUR = Decimal("0.0001")
 
-# §2.1.9 Update Status transition table; Delivered/Cancelled are terminal.
+# §2.1.9 extended transition table (vocabulary: PENDING, PREPARING,
+# OUT_FOR_DELIVERY, PARTIALLY_DELIVERED, DELIVERED, FAILED, RETURNED).
+# PENDING/PREPARING can edit lines; PARTIALLY_DELIVERED keeps remaining flows
+# alive; DELIVERED / FAILED / RETURNED are terminal.
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     DeliveryNote.STATUS_DRAFT: {
         DeliveryNote.STATUS_CONFIRMED,
+        DeliveryNote.STATUS_OUT_FOR_DELIVERY,
         DeliveryNote.STATUS_CANCELLED,
     },
     DeliveryNote.STATUS_CONFIRMED: {
         DeliveryNote.STATUS_OUT_FOR_DELIVERY,
         DeliveryNote.STATUS_DELIVERED,
+        DeliveryNote.STATUS_PARTIALLY_DELIVERED,
+        DeliveryNote.STATUS_FAILED,
         DeliveryNote.STATUS_CANCELLED,
     },
     DeliveryNote.STATUS_OUT_FOR_DELIVERY: {
         DeliveryNote.STATUS_DELIVERED,
+        DeliveryNote.STATUS_PARTIALLY_DELIVERED,
+        DeliveryNote.STATUS_FAILED,
+        DeliveryNote.STATUS_CANCELLED,
+    },
+    DeliveryNote.STATUS_PARTIALLY_DELIVERED: {
+        DeliveryNote.STATUS_OUT_FOR_DELIVERY,
+        DeliveryNote.STATUS_DELIVERED,
+        DeliveryNote.STATUS_FAILED,
         DeliveryNote.STATUS_CANCELLED,
     },
     DeliveryNote.STATUS_DELIVERED: set(),
+    DeliveryNote.STATUS_FAILED: set(),
     DeliveryNote.STATUS_CANCELLED: set(),
 }
 
 STATUS_TRANSITION_AUDIT_ACTION = {
     DeliveryNote.STATUS_CONFIRMED: "delivery_confirmed",
     DeliveryNote.STATUS_OUT_FOR_DELIVERY: "delivery_out_for_delivery",
+    DeliveryNote.STATUS_PARTIALLY_DELIVERED: "delivery_partially_delivered",
     DeliveryNote.STATUS_DELIVERED: "delivery_delivered",
+    DeliveryNote.STATUS_FAILED: "delivery_failed",
     DeliveryNote.STATUS_CANCELLED: "delivery_cancelled",
 }
 
@@ -81,9 +98,30 @@ ACTION_TO_STATUS = {
     "cancel": DeliveryNote.STATUS_CANCELLED,
 }
 
+# Legacy status spellings accepted on /status and create payloads.
+LEGACY_STATUS_ALIASES = {
+    "CONFIRMED": DeliveryNote.STATUS_CONFIRMED,
+    "DRAFT": DeliveryNote.STATUS_DRAFT,
+    "CANCELLED": DeliveryNote.STATUS_CANCELLED,
+}
+
+# Permission required per target status (server-side enforcement).
+STATUS_PERMISSIONS = {
+    DeliveryNote.STATUS_CONFIRMED: "delivery.confirm",
+    DeliveryNote.STATUS_OUT_FOR_DELIVERY: "delivery.confirm",
+    DeliveryNote.STATUS_PARTIALLY_DELIVERED: "delivery.deliver",
+    DeliveryNote.STATUS_DELIVERED: "delivery.deliver",
+    DeliveryNote.STATUS_FAILED: "delivery.cancel",
+    DeliveryNote.STATUS_CANCELLED: "delivery.cancel",
+}
+
 
 def _q4(value) -> Decimal:
     return Decimal(value).quantize(FOUR)
+
+
+def _money(value) -> Decimal:
+    return Decimal(value or "0").quantize(Decimal("0.01"))
 
 
 class _SaleGroup:
@@ -154,6 +192,7 @@ class DeliveryNoteService:
         *,
         q: str | None = None,
         customer_id: uuid.UUID | None = None,
+        currency: str | None = None,
         start=None,
         end=None,
         limit: int = 50,
@@ -161,10 +200,13 @@ class DeliveryNoteService:
         """Confirmed sales with remaining deliverable qty (create-page picker).
 
         Live search by invoice no (customer name / phone secondary).
-        """
+        `currency` filters invoices to one currency so a note never mixes
+        raw KHR and USD amounts."""
         conditions = [Sale.sale_status.in_(DELIVERABLE_SALE_STATUSES)]
         if customer_id is not None:
             conditions.append(Sale.customer_id == customer_id)
+        if currency is not None:
+            conditions.append(Sale.currency == currency)
         if q and q.strip():
             pattern = f"%{q.strip()}%"
             customer_ids = (
@@ -192,13 +234,15 @@ class DeliveryNoteService:
             if customer is not None:
                 customers[customer.id] = customer
 
+        invoice_statuses = await self.invoice_delivery_statuses([sale.id for sale in sales])
         out: list[DeliverableInvoiceOut] = []
         for sale in sales:
             deliverable = await self.deliverable_items(sale.id)
             remaining = sum((item.qty_remaining for item in deliverable.items), Decimal("0"))
             if remaining <= 0:
-                continue
+                continue  # fully delivered / allocated invoices are not selectable
             customer = customers.get(sale.customer_id)
+            derived = invoice_statuses.get(sale.id, "NOT_DELIVERED")
             out.append(
                 DeliverableInvoiceOut(
                     sale_id=sale.id,
@@ -211,6 +255,11 @@ class DeliveryNoteService:
                     customer_name=customer.name if customer else None,
                     phone=(customer.phone if customer else None) or None,
                     location=(customer.address if customer else None) or None,
+                    currency=sale.currency,
+                    grand_total=_money(sale.grand_total),
+                    grandTotal=_money(sale.grand_total),
+                    delivery_status=derived,
+                    deliveryStatus=derived,
                     qty_remaining=_q4(remaining),
                     items=deliverable.items,
                 )
@@ -299,17 +348,66 @@ class DeliveryNoteService:
         if customer is None:
             raise NotFoundError("Customer not found")
 
+        # Currency rule: one note covers invoices of ONE currency only, so
+        # KHR and USD amounts are never mixed on a delivery note.
+        currency = (payload.currency or "USD").upper()
+        sale_currencies = {group.sale.currency for group in groups.values()}
+        if len(sale_currencies) > 1:
+            raise ValidationError(
+                "All invoices on one delivery note must share the same currency",
+                field_errors={"lines": "Mixed currencies"},
+            )
+        if sale_currencies and currency not in sale_currencies:
+            raise ValidationError(
+                f"Invoice currency ({'/'.join(sorted(sale_currencies))}) does not match the note currency ({currency})",
+                field_errors={"currency": "Currency mismatch"},
+            )
+
         await self._validate_lines(groups)
+
+        # Optional initial status: PENDING (default), PREPARING,
+        # OUT_FOR_DELIVERY or DELIVERED. DELIVERED also stamps delivered_at
+        # + quantities. Later moves follow the transition table.
+        requested_status = (payload.status or "").upper() or None
+        if requested_status:
+            requested_status = LEGACY_STATUS_ALIASES.get(requested_status, requested_status)
+        if requested_status == DeliveryNote.STATUS_DRAFT:
+            requested_status = None
+        if requested_status and requested_status not in {
+            DeliveryNote.STATUS_CONFIRMED,
+            DeliveryNote.STATUS_OUT_FOR_DELIVERY,
+            DeliveryNote.STATUS_DELIVERED,
+        }:
+            raise ValidationError(
+                "Invalid delivery status",
+                field_errors={"status": "Must be PENDING, PREPARING, OUT_FOR_DELIVERY or DELIVERED"},
+            )
+        if requested_status:
+            for group in groups.values():
+                if not (payload.delivery_phone or customer.phone or "").strip() or not (
+                    payload.delivery_location or customer.address or ""
+                ).strip():
+                    raise ValidationError(
+                        "Phone and location are required before confirming or delivering",
+                        field_errors={"delivery_phone": "Required"},
+                    )
+                break
 
         delivery_no = await allocate_document_number(self.session, "DELIVERY_NOTE")
         note = DeliveryNote(
             delivery_no=delivery_no,
             customer_id=customer.id,
             # phone/location are NOT NULL (spec §2.1.9): caller value wins,
-            # then the customer snapshot, then an empty string so the draft
+            # then the customer snapshot, then an empty string so the note
             # can always be persisted and edited before Confirm.
             delivery_phone=payload.delivery_phone or customer.phone or "",
             delivery_location=payload.delivery_location or customer.address or "",
+            driver_name=(payload.driver_name or "").strip() or None,
+            vehicle_no=(payload.vehicle_no or "").strip() or None,
+            delivery_date=payload.delivery_date,
+            delivery_fee=_money(payload.delivery_fee),
+            received_by=(payload.received_by or "").strip() or None,
+            currency=currency,
             status=DeliveryNote.STATUS_DRAFT,
             note=payload.note,
             created_by=actor.id,
@@ -332,11 +430,37 @@ class DeliveryNoteService:
                         qty_ordered=_q4(sale_item.quantity),
                         qty_to_deliver=qty,
                         qty_delivered=Decimal("0"),
+                        note=(next(
+                            (line.note for line in payload.lines if line.sale_item_id == sale_item.id),
+                            None,
+                        ) or None),
                     )
                 )
 
-        if payload.confirm:
-            await self._transition(note, DeliveryNote.STATUS_CONFIRMED, actor=actor)
+        if payload.confirm and requested_status is None:
+            requested_status = DeliveryNote.STATUS_CONFIRMED
+        if requested_status:
+            # Initial state at creation time — not a transition: the note is
+            # born in this status (guards above already ran). DELIVERED also
+            # stamps delivered_at + delivered quantities.
+            note.status = requested_status
+            if requested_status == DeliveryNote.STATUS_DELIVERED:
+                note.delivered_at = datetime.now(timezone.utc)
+                for item in self.session.new:
+                    if isinstance(item, DeliveryNoteItem) and item.delivery_note_id == note.id:
+                        item.qty_delivered = item.qty_to_deliver
+            await record_audit(
+                self.session,
+                action=STATUS_TRANSITION_AUDIT_ACTION[requested_status],
+                module="delivery",
+                user_id=actor.id,
+                entity_type="delivery_note",
+                entity_id=note.id,
+                new_values={
+                    "delivery_no": note.delivery_no,
+                    "status": requested_status,
+                },
+            )
         else:
             await record_audit(
                 self.session,
@@ -462,6 +586,16 @@ class DeliveryNoteService:
             value = getattr(payload, field)
             if value is not None:
                 setattr(note, field, value)
+        if payload.driver_name is not None:
+            note.driver_name = (payload.driver_name or "").strip() or None
+        if payload.vehicle_no is not None:
+            note.vehicle_no = (payload.vehicle_no or "").strip() or None
+        if payload.received_by is not None:
+            note.received_by = (payload.received_by or "").strip() or None
+        if payload.delivery_date is not None:
+            note.delivery_date = payload.delivery_date
+        if payload.delivery_fee is not None:
+            note.delivery_fee = _money(payload.delivery_fee)
         await self.repo.flush()
         await self.session.commit()
         await self.session.refresh(note, attribute_names=["items", "sales"])
@@ -525,10 +659,10 @@ class DeliveryNoteService:
         if target not in ALLOWED_TRANSITIONS.get(old_status, set()):
             raise ConflictError(f"Cannot move a {old_status} delivery note to {target}")
 
-        if target == DeliveryNote.STATUS_CANCELLED:
+        if target in (DeliveryNote.STATUS_CANCELLED, DeliveryNote.STATUS_FAILED):
             if not (reason or "").strip():
                 raise ValidationError(
-                    "A reason is required to cancel a delivery note",
+                    "A reason is required to cancel or fail a delivery note",
                     field_errors={"cancel_reason": "Required"},
                 )
         else:
@@ -547,6 +681,8 @@ class DeliveryNoteService:
             note.delivered_at = note.delivered_at or datetime.now(timezone.utc)
             for item in note.items:
                 item.qty_delivered = item.qty_to_deliver
+        if target == DeliveryNote.STATUS_FAILED and (reason or "").strip():
+            note.cancel_reason = reason
         await self.repo.flush()
         await record_audit(
             self.session,
@@ -608,12 +744,52 @@ class DeliveryNoteService:
         customer = await self.session.get(Customer, note.customer_id)
         return customer.name if customer else None
 
+    async def invoice_delivery_statuses(
+        self, sale_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, str]:
+        """Derived delivery status per invoice (NOT_DELIVERED /
+        PARTIALLY_DELIVERED / FULLY_DELIVERED) from delivered quantities
+        across all non-cancelled delivery notes."""
+        if not sale_ids:
+            return {}
+        statuses: dict[uuid.UUID, str] = {}
+        for sale_id in set(sale_ids):
+            sale = await self.session.get(Sale, sale_id)
+            if sale is None:
+                continue
+            sale_items = await self._sale_items(sale_id)
+            delivered = await self.repo.delivered_by_sale_item(sale_id)
+            ordered_total = Decimal("0")
+            delivered_total = Decimal("0")
+            for item in sale_items:
+                ordered = _q4(item.quantity - item.returned_quantity)
+                if ordered <= 0:
+                    continue
+                ordered_total += ordered
+                delivered_total += min(_q4(delivered.get(item.id, Decimal("0"))), ordered)
+            if ordered_total <= 0 or delivered_total <= 0:
+                statuses[sale_id] = "NOT_DELIVERED"
+            elif delivered_total >= ordered_total:
+                statuses[sale_id] = "FULLY_DELIVERED"
+            else:
+                statuses[sale_id] = "PARTIALLY_DELIVERED"
+        return statuses
 
-def note_to_out(note: DeliveryNote, customer_name: str | None = None) -> DeliveryNoteOut:
+
+def note_to_out(
+    note: DeliveryNote,
+    customer_name: str | None = None,
+    invoice_statuses: dict[uuid.UUID, str] | None = None,
+) -> DeliveryNoteOut:
     sales = sorted(
         (DeliveryNoteSaleOut(sale_id=link.sale_id, invoice_no=link.invoice_no) for link in note.sales),
         key=lambda link: link.invoice_no,
     )
+    if invoice_statuses:
+        for link in sales:
+            derived = invoice_statuses.get(link.sale_id, "NOT_DELIVERED")
+            link.delivery_status = derived
+            link.deliveryStatus = derived
     invoice_nos = [link.invoice_no for link in sales]
     return DeliveryNoteOut(
         id=note.id,
@@ -628,6 +804,17 @@ def note_to_out(note: DeliveryNote, customer_name: str | None = None) -> Deliver
         deliveryPhone=note.delivery_phone,
         delivery_location=note.delivery_location,
         deliveryLocation=note.delivery_location,
+        driver_name=note.driver_name,
+        driverName=note.driver_name,
+        vehicle_no=note.vehicle_no,
+        vehicleNo=note.vehicle_no,
+        delivery_date=note.delivery_date,
+        deliveryDate=note.delivery_date,
+        delivery_fee=_money(note.delivery_fee),
+        deliveryFee=_money(note.delivery_fee),
+        received_by=note.received_by,
+        receivedBy=note.received_by,
+        currency=note.currency,
         delivered_at=note.delivered_at,
         deliveredAt=note.delivered_at,
         status=note.status,

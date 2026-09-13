@@ -1,6 +1,7 @@
-import { formatMoney, formatNumber } from '~/utils/format/format-service'
+import { formatMoney, formatNumber, formatDate, formatDateTime } from '~/utils/format/format-service'
 import { cartTotal, lineNet, type PosCartLine } from '~/utils/pos/cart'
 import { escapeHtml, PAPER_STYLES, printHtmlDocument, type PrintPaperSize } from '~/utils/print/html'
+import type { SaleReceipt } from '~/repositories/contracts/entities'
 
 export type SaleInvoicePrintLine = Pick<
   PosCartLine,
@@ -56,7 +57,8 @@ function formatPrintMoney(
     : amount
   const code = converting ? displayCurrency : recordCurrency
   if (code === 'KHR') {
-    return formatNumber(Math.round(converted), { style: 'currency', currency: 'KHR', maximumFractionDigits: 0 })
+    // Whole riel, symbol after the amount (1,019,000៛).
+    return `${formatNumber(Math.round(converted), { maximumFractionDigits: 0 })}៛`
   }
   return formatMoney(converted, code)
 }
@@ -223,4 +225,70 @@ export function printSaleInvoice(
     ? { ...input, displayCurrency: currencyChoice.currency, exchangeRate: currencyChoice.exchangeRate }
     : input
   return printHtmlDocument(buildSaleInvoiceHtml(printInput, paperSize), printInput.invoiceNo || 'Invoice', { paperSize })
+}
+
+/**
+ * Reprint input from a stored sale record (movement/history dialogs).
+ * Uses the record's currency/exchange-rate snapshot — never the shop's live
+ * rate — so historical reprints show the amounts as sold.
+ */
+export function saleInvoicePrintInputFromRecord(
+  record: Record<string, unknown>,
+  shopName: string,
+): SaleInvoicePrintInput {
+  const items = Array.isArray(record.items) ? record.items as Array<Record<string, unknown>> : []
+  const currency = String(record.currency || 'USD')
+  return {
+    shopName,
+    invoiceNo: String(record.invoiceNo ?? record.saleNo ?? ''),
+    dateLabel: formatDateTime(record.date),
+    customerName: String(record.customer ?? ''),
+    cashier: String(record.cashier ?? ''),
+    currency,
+    // Stored snapshot: print in the sale's own currency/rate.
+    displayCurrency: String(record.displayCurrency || currency),
+    exchangeRate: Number(record.exchangeRate || 0) || undefined,
+    lines: items.map(item => ({
+      name: String(item.name ?? ''),
+      uom: String(item.uom ?? ''),
+      quantity: Number(item.quantity || 0),
+      unitPrice: Number(item.price ?? item.unitPrice ?? 0),
+      discountPercent: Number(item.discountPercent ?? item.discount ?? 0),
+    })),
+    deliveryPrice: Number(record.deliveryPrice ?? 0),
+    previousDebtAmount: Number(record.previousDebtAmount ?? 0),
+    depositAmount: Number(record.depositAmount ?? record.deposit ?? 0),
+    outstandingAmount: Number(record.remaining ?? record.outstandingAmount ?? 0),
+  }
+}
+
+/**
+ * Reprint input from a sale receipt payload (GET receipt of a sale /
+ * movement invoice). Same snapshot rule as `saleInvoicePrintInputFromRecord`.
+ */
+export function saleReceiptPrintInput(
+  receipt: SaleReceipt,
+  shopName: string,
+): SaleInvoicePrintInput {
+  return {
+    shopName,
+    invoiceNo: receipt.invoiceNo || receipt.saleNo,
+    dateLabel: formatDate(receipt.date),
+    customerName: receipt.customer,
+    cashier: receipt.cashier,
+    currency: receipt.currency || 'USD',
+    displayCurrency: receipt.currency || 'USD',
+    exchangeRate: Number(receipt.exchangeRate || 0) || undefined,
+    lines: receipt.items.map(item => ({
+      name: item.name,
+      uom: item.uom,
+      quantity: Number(item.quantity || 0),
+      unitPrice: Number(item.unitPrice || 0),
+      discountPercent: Number(item.discount || 0),
+    })),
+    deliveryPrice: Number(receipt.deliveryPrice || 0),
+    previousDebtAmount: 0,
+    depositAmount: Number(receipt.deposit || 0),
+    outstandingAmount: Number(receipt.remaining || 0),
+  }
 }

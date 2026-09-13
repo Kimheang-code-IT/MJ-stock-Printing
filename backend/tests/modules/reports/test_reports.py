@@ -441,3 +441,121 @@ async def test_report_permissions_are_enforced(client, sales_only_headers):
         f"/api/v1/reports/sales/export?product_id={seeded['product']['id']}", headers=sales_only_headers
     )
     assert allowed_export.status_code == 200
+
+    # Return history follows its parent report's permission (sales / purchase).
+    allowed_returns = await client.get("/api/v1/reports/sale-returns", headers=sales_only_headers)
+    assert allowed_returns.status_code == 200
+    denied_purchase_returns = await client.get(
+        "/api/v1/reports/purchase-returns", headers=sales_only_headers
+    )
+    assert denied_purchase_returns.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_sales_report_rows_carry_document_currency(client):
+    """Grouped sale rows include the stored document currency + exchange rate
+    (invoice reprints must never re-apply the shop's current rate)."""
+    headers = await admin_headers(client)
+    tag = __import__("uuid").uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"REP-CUR-{tag}", "name": "Rep Cur Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={"sku": f"REPCUR-{tag}", "name": f"Rep Cur {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "1.00"},
+            headers=headers,
+        )
+    ).json()["data"]
+
+    stock_in = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "100.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "1.00"}],
+        },
+        headers=headers,
+    )
+    assert stock_in.status_code == 201, stock_in.text
+
+    khr_sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "8200",
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "items": [{"product_id": product["id"], "quantity": "2"}],
+        },
+        headers=headers,
+    )
+    assert khr_sale.status_code == 201, khr_sale.text
+
+    response = await client.get(f"/api/v1/reports/sales?q={khr_sale.json()['data']['invoice_no']}", headers=headers)
+    assert response.status_code == 200, response.text
+    rows = response.json()["data"]
+    assert rows
+    row = rows[0]
+    assert row["currency"] == "KHR"
+    assert Decimal(str(row["exchange_rate"])) == Decimal("4100")
+
+    # USD sales keep the default USD snapshot at rate 1.
+    default_rows = (
+        await client.get("/api/v1/reports/sales", headers=headers)
+    ).json()["data"]
+    assert all(r["currency"] in ("USD", "KHR") for r in default_rows)
+
+
+@pytest.mark.asyncio
+async def test_return_history_reports(client):
+    """Customer/supplier return history lists the immutable return documents
+    (GET /reports/sale-returns, GET /reports/purchase-returns)."""
+    headers = await admin_headers(client)
+    seeded = await _seed(client, headers)
+
+    # Customer returns: the sale return created by _seed (1 unit, restocked).
+    response = await client.get(
+        f"/api/v1/reports/sale-returns?q={seeded['cash_sale']['invoice_no']}", headers=headers
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    rows = [r for r in payload["data"] if r["sale_no"] == seeded["cash_sale"]["invoice_no"]]
+    assert len(rows) >= 1
+    row = rows[0]
+    assert row["return_no"].startswith("SRT-")
+    assert row["customer_name"] in ("Walk-in Customer", f"Rep Customer {seeded['customer']['code'].split('-')[-1]}")
+    assert row["item_count"] == 1
+    assert Decimal(row["refund_amount"]) == Decimal("10.00")
+    assert Decimal(row["restocked_quantity"]) == Decimal("1")
+    assert row["user_name"]
+
+    # Supplier returns: return 2 units against the seeded stock-in (2.00 each).
+    item_id = seeded["stock_in"]["items"][0]["id"]
+    purchase_return = await client.post(
+        f"/api/v1/stock/in/{seeded['stock_in']['id']}/return",
+        json={
+            "reason": "Damaged in shipment",
+            "lines": [{"stock_transaction_item_id": item_id, "quantity": "2"}],
+        },
+        headers=headers,
+    )
+    assert purchase_return.status_code == 201, purchase_return.text
+    return_no = purchase_return.json()["data"]["return_no"]
+
+    response = await client.get(
+        f"/api/v1/reports/purchase-returns?q={return_no}", headers=headers
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    rows = [r for r in payload["data"] if r["return_no"] == return_no]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["document_no"] == seeded["stock_in"]["document_no"]
+    assert row["item_count"] == 1
+    assert Decimal(row["refund_amount"]) == Decimal("4.00")
+    # The stock-in still has open supplier debt, so the refund reduces it.
+    assert Decimal(row["debt_reduction"]) == Decimal("4.00")
+    assert Decimal(row["credit_amount"]) == Decimal("0.00")
+    assert row["supplier_name"] == f"Rep Supplier {seeded['supplier']['code'].split('-')[-1]}"

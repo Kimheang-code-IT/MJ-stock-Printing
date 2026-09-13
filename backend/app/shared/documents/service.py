@@ -78,8 +78,6 @@ async def allocate_document_number(session: AsyncSession, document_type: str) ->
             sequence = await _get_sequence_for_update(session, document_type)
     if sequence is None:
         raise NotFoundError(f"Document sequence '{document_type}' is not configured")
-    if sequence is None:
-        raise NotFoundError(f"Document sequence '{document_type}' is not configured")
     if sequence.status != "ACTIVE":
         raise ConflictError(f"Document sequence '{document_type}' is inactive")
 

@@ -77,7 +77,7 @@ export const PAGE_SIZE_OPTIONS: FieldOption[] = [
 export const LANDING_PAGE_OPTIONS: FieldOption[] = [
   { label: 'Dashboard', value: '/' },
   { label: 'Categories', value: '/setup/categories' },
-  { label: 'Stock', value: '/stock' },
+  { label: 'Stock', value: '/stock/products' },
   { label: 'Suppliers', value: '/setup/suppliers' },
   { label: 'POS', value: '/pos' },
   { label: 'Customers', value: '/setup/customers' },

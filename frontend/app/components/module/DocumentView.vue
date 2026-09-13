@@ -257,6 +257,8 @@ function setField(key: string, value: unknown) {
 
 function fieldValue(key: string) {
   if (key === RELATED_FIELD_KEY) return related.value
+  // Batches tab: the panel needs the whole record (product id, UOM, barcode).
+  if (key === '__record') return model.value
   if (module.value?.tables?.some(table => table.key === key)) {
     return Array.isArray(model.value[key]) ? model.value[key] : []
   }
@@ -296,7 +298,7 @@ async function save() {
   saving.value = true
   try {
     recalculate()
-    const payload = { ...model.value }
+    let payload = { ...model.value }
     if (module.value.collection === 'documentSequences') {
       payload.documentType = normalizeDocumentSequenceType(payload.documentType)
       payload.prefix = String(payload.prefix || '').trim()
@@ -346,6 +348,13 @@ async function save() {
       return
     }
     if (module.value.collection === 'products') {
+      // Spec: Track Expiry implies Track Batch — an expiry lot is always a
+      // batch lot. Keep the pair consistent before saving.
+      const trackExpiry = payload.trackExpiry === true || payload.expiryTracking === true
+      const trackBatch = payload.trackBatch === true || trackExpiry
+      if (trackBatch !== payload.trackBatch || trackExpiry !== payload.trackExpiry) {
+        payload = { ...payload, trackBatch, trackExpiry, expiryTracking: trackExpiry }
+      }
       // Spec §5.9 Pricing: the base UOM row's sale price is required > 0.
       // (It lives on the product record, edited from the Pricing tab.)
       if (!(Number(payload.salePrice ?? 0) > 0)) {

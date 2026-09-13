@@ -28,7 +28,6 @@ from app.modules.stock.schemas import (
 from app.modules.stock.service import (
     ProductService,
     StockOperationService,
-    movement_to_out,
 )
 from app.shared.pagination.params import list_meta
 
@@ -43,12 +42,19 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 async def list_products(
     params: ListParams = Depends(list_params),
     category_id: UUID | None = None,
+    brand_id: UUID | None = None,
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(get_current_user),
 ) -> dict:
     service = ProductService(db)
     products, total = await service.list(
-        q=params.q, category_id=category_id, status=params.status, page=params.page, limit=params.limit
+        q=params.q,
+        category_id=category_id,
+        brand_id=brand_id,
+        status=params.status,
+        page=params.page,
+        limit=params.limit,
+        sort=params.sort,
     )
     return envelope(products, {"page": params.page, "limit": params.limit, "total": total})
 
@@ -380,6 +386,12 @@ async def list_movements(
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("stock.view")),
 ) -> dict:
+    """Immutable movement ledger (Stock Movements page).
+
+    Filters: q (document no / note), product, movement type, date range,
+    plus pagination and `sort` (`createdAt`/`quantity`, `-` = descending).
+    Balance before/after is derived from the ledger; rows are read-only.
+    """
     service = StockOperationService(db)
     movements, total = await service.list_movements(
         q=params.q,
@@ -389,8 +401,9 @@ async def list_movements(
         end=params.end_date,
         page=params.page,
         limit=params.limit,
+        sort=params.sort,
     )
-    return envelope([movement_to_out(m) for m in movements], list_meta(params.page, params.limit, total))
+    return envelope(movements, list_meta(params.page, params.limit, total))
 
 
 @router.get("/products/{product_id}/history")
@@ -422,3 +435,48 @@ async def product_history(
         limit=params.limit,
     )
     return envelope(rows, list_meta(params.page, params.limit, total))
+
+
+@router.get("/products/{product_id}/batches")
+async def product_batches(
+    product_id: UUID,
+    params: ListParams = Depends(list_params),
+    status: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("stock.view")),
+) -> dict:
+    """Read-only batch lots for one product (product detail Batches tab).
+
+    Mirrors ``batch_stock_balances`` (authoritative per-batch state, written
+    only by the canonical stock-mutation service): batch no, expiry, received
+    and remaining base quantities, unit cost, supplier, opening purchase
+    document and a derived UI status (ACTIVE | EXPIRED | DEPLETED). No write
+    path exists — batches are mutated only through the canonical operations.
+    """
+    from app.modules.stock.history import product_batches as fetch_batches
+
+    rows, total = await fetch_batches(
+        db,
+        product_id=product_id,
+        status=status,
+        q=params.q,
+        page=params.page,
+        limit=params.limit,
+    )
+    return envelope(rows, list_meta(params.page, params.limit, total))
+
+
+@router.get("/movements/{movement_id}/invoice")
+async def movement_invoice(
+    movement_id: UUID,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("stock.view")),
+) -> dict:
+    """Invoice detail behind one SALE movement (Stock Out dialog click-through).
+
+    Read-only: reuses the POS receipt payload (items, UOM, totals, payment)
+    so the dialog detail matches the invoice exactly.
+    """
+    from app.modules.stock.history import movement_invoice as fetch_movement_invoice
+
+    return envelope(await fetch_movement_invoice(db, movement_id))

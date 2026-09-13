@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -6,7 +7,7 @@ import pytest
 from tests.utils import DEFAULT_UOM_ID, admin_headers
 
 
-async def _make_product(client, headers, *, sku: str, name: str, expiry_tracking: bool = False):
+async def _make_product(client, headers, *, sku: str, name: str, expiry_tracking: bool = False, fifo: bool = False):
     category = (
         await client.post(
             "/api/v1/categories", json={"code": f"C-{sku}", "name": f"Cat {sku}"}, headers=headers
@@ -22,6 +23,7 @@ async def _make_product(client, headers, *, sku: str, name: str, expiry_tracking
                 "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "10.00",
                 "expiry_tracking": expiry_tracking,
+                "fifo": fifo,
             },
             headers=headers,
         )
@@ -130,6 +132,67 @@ async def test_stock_in_supplier_debt_partial_and_full(client):
     )
     assert full.status_code == 201
     assert full.json()["data"]["debt_created"] is False
+
+
+async def test_stock_in_tax_discount_total_and_debt(client):
+    """Purchase footer adjustments: total = subtotal − discount + tax; the
+    supplier debt (and payment cap) use the adjusted total."""
+    headers = await admin_headers(client)
+    supplier = (
+        await client.post("/api/v1/suppliers", json={"name": "Tax Supplier"}, headers=headers)
+    ).json()["data"]
+    product = await _make_product(client, headers, sku="SI-TAX", name="Tax Widget")
+
+    # Subtotal 10 × 2.00 = 20.00 → − 5.00 discount + 4.00 tax = 19.00 total.
+    response = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "supplier_id": supplier["id"],
+            "discount_amount": "5.00",
+            "tax_amount": "4.00",
+            "paid_amount": "9.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    assert data["discount_amount"] == "5.00"
+    assert data["tax_amount"] == "4.00"
+    assert data["total_amount"] == "19.00"
+    assert data["paid_amount"] == "9.00"
+    assert data["debt_created"] is True
+
+    debts = await client.get(f"/api/v1/suppliers/{supplier['id']}/debts", headers=headers)
+    assert debts.status_code == 200
+    debt = debts.json()["data"][0]
+    assert debt["original_amount"] == "19.00"
+    assert debt["remaining_amount"] == "10.00"
+
+    # Discount above the subtotal is rejected.
+    over = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "discount_amount": "21.00",
+            "paid_amount": "0",
+            "items": [{"product_id": product["id"], "quantity": "1", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert over.status_code == 422
+    assert over.json()["detail"]["code"] == "VALIDATION_ERROR"
+
+    # Negative amounts are rejected by the schema.
+    negative = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "tax_amount": "-1.00",
+            "paid_amount": "0",
+            "items": [{"product_id": product["id"], "quantity": "1", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert negative.status_code == 422
 
 
 async def test_stock_in_requires_full_payment_without_supplier(client):
@@ -398,3 +461,150 @@ async def test_concurrent_outbound_only_one_succeeds(client):
     assert statuses == [201, 409], f"exactly one concurrent outbound must succeed: {statuses}"
     balance = await _balance(client, headers, product["id"])
     assert balance["quantity"] == Decimal("0.0000")
+
+async def test_stock_in_khr_currency_debt_and_out(client):
+    """Document currency: a KHR purchase records every amount in KHR and the
+    supplier debt inherits the KHR currency."""
+    headers = await admin_headers(client)
+    supplier = (
+        await client.post("/api/v1/suppliers", json={"name": "KHR Supplier"}, headers=headers)
+    ).json()["data"]
+    product = await _make_product(client, headers, sku="SI-KHR", name="KHR Widget")
+
+    # Subtotal 100 × 10000 = 1,000,000 KHR → paid 410,000 → debt 590,000 KHR.
+    response = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "supplier_id": supplier["id"],
+            "currency": "KHR",
+            "exchange_rate": "41000",
+            "paid_amount": "410000",
+            # Yesterday — keeps today's Finance aggregates untouched.
+            "transaction_date": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "items": [{"product_id": product["id"], "quantity": "100", "unit_cost": "10000"}],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    assert data["currency"] == "KHR"
+    assert Decimal(data["exchange_rate"]) == Decimal("41000")
+    assert Decimal(data["total_amount"]) == Decimal("1000000.00")
+    assert data["debt_created"] is True
+
+    debts = await client.get(f"/api/v1/suppliers/{supplier['id']}/debts", headers=headers)
+    assert debts.status_code == 200
+    debt = debts.json()["data"][0]
+    assert debt["currency"] == "KHR"
+    assert Decimal(debt["remaining_amount"]) == Decimal("590000.00")
+
+
+async def _fifo_cost_of_last_outbound(client, headers, product_id, movement_type: str) -> Decimal:
+    movements = await client.get(
+        f"/api/v1/stock/movements?product_id={product_id}&movement_type={movement_type}",
+        headers=headers,
+    )
+    assert movements.status_code == 200
+    data = movements.json()["data"]
+    assert data, "expected at least one outbound movement"
+    return Decimal(data[0]["unit_cost"])
+
+
+@pytest.mark.asyncio
+async def test_fifo_costing_uses_oldest_lots_when_enabled(client):
+    """product.fifo=True → outbound movements cost FIFO; unchecked → average."""
+    headers = await admin_headers(client)
+    fifo_product = await _make_product(client, headers, sku="FIFO-1", name="FIFO Widget", fifo=True)
+    avg_product = await _make_product(client, headers, sku="FIFO-2", name="Average Widget")
+    assert fifo_product["fifo"] is True
+    assert avg_product["fifo"] is False
+
+    for product in (fifo_product, avg_product):
+        await client.post(
+            "/api/v1/stock/in",
+            json={
+                "paid_amount": "20.00",
+                "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
+            },
+            headers=headers,
+        )
+        await client.post(
+            "/api/v1/stock/in",
+            json={
+                "paid_amount": "40.00",
+                "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "4.00"}],
+            },
+            headers=headers,
+        )
+
+    # Both products now hold 20 units at a 3.00 weighted average cost.
+    balance = await _balance(client, headers, fifo_product["id"])
+    assert balance["average_cost"] == Decimal("3.00")
+
+    # Damage 6 units from each product.
+    for product in (fifo_product, avg_product):
+        damaged = await client.post(
+            "/api/v1/stock/damage",
+            json={"items": [{"product_id": product["id"], "quantity": "6", "reason": "Test"}]},
+            headers=headers,
+        )
+        assert damaged.status_code == 201, damaged.text
+
+    # FIFO product: 6 units costed from the oldest lot @ 2.00.
+    fifo_cost = await _fifo_cost_of_last_outbound(client, headers, fifo_product["id"], "DAMAGE")
+    assert fifo_cost == Decimal("2.00")
+
+    # Unchecked (normal) product: weighted average cost 3.00.
+    avg_cost = await _fifo_cost_of_last_outbound(client, headers, avg_product["id"], "DAMAGE")
+    assert avg_cost == Decimal("3.00")
+
+    # Second FIFO outbound spans two lots: 4 @ 2.00 + 2 @ 4.00 → blended 2.67.
+    damaged = await client.post(
+        "/api/v1/stock/damage",
+        json={"items": [{"product_id": fifo_product["id"], "quantity": "6", "reason": "Test 2"}]},
+        headers=headers,
+    )
+    assert damaged.status_code == 201, damaged.text
+    blended = await _fifo_cost_of_last_outbound(client, headers, fifo_product["id"], "DAMAGE")
+    assert blended == Decimal("2.67")
+
+    # FIFO only changes the outbound cost — the average cost is untouched.
+    balance = await _balance(client, headers, fifo_product["id"])
+    assert balance["average_cost"] == Decimal("3.00")
+
+
+@pytest.mark.asyncio
+async def test_fifo_costing_on_pos_sale(client):
+    headers = await admin_headers(client)
+    product = await _make_product(client, headers, sku="FIFO-3", name="FIFO Sale Widget", fifo=True)
+    await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "20.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "40.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "4.00"}],
+        },
+        headers=headers,
+    )
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "1000.00",
+            "items": [{"product_id": product["id"], "quantity": "5"}],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    sale_data = sale.json()["data"]
+    assert Decimal(sale_data["items"][0]["unit_cost"]) == Decimal("2.00"), (
+        "FIFO product sale must be costed from the oldest lot"
+    )

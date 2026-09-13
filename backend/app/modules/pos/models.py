@@ -31,12 +31,17 @@ class Sale(Base):
     delivery_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
     debt_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
+    # Document currency: every amount on this document is in THIS currency
+    # (never mixed). exchange_rate = KHR per 1 USD (1 for USD documents).
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="USD", server_default="USD")
+    exchange_rate: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=Decimal("1"), server_default="1"
+    )
     payment_status: Mapped[str] = mapped_column(String(20), nullable=False)
     sale_status: Mapped[str] = mapped_column(String(20), nullable=False, default="COMPLETED")
     cashier_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
-    invoice_pdf_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -58,7 +63,8 @@ class SaleItem(Base):
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    sku: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Barcode snapshot (operational identifier); sku is legacy-optional.
+    sku: Mapped[str | None] = mapped_column(String(100), nullable=True)
     barcode: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # UOM snapshot at transaction time (display on POS/invoice; spec section 2.1.3).
     uom_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
@@ -79,6 +85,42 @@ class SaleItem(Base):
 
     sale_ref: Mapped[Sale] = relationship(back_populates="items")
     product_ref: Mapped["object"] = relationship("Product", lazy="selectin")
+    batch_allocations: Mapped[list["SaleItemBatch"]] = relationship(
+        back_populates="sale_item_ref", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class SaleItemBatch(Base):
+    """Batch allocation behind one sold line (spec: sale_item_batches).
+
+    Invariant: SUM(quantity_base) == sale_item.quantity × factor_to_base.
+    One customer-visible sale line may draw from many FEFO batches; the
+    cost_per_base snapshot lets reporting compute the blended cost without
+    changing the customer price.
+    """
+
+    __tablename__ = "sale_item_batches"
+    __table_args__ = (
+        Index("ix_sale_item_batches_sale_item_id", "sale_item_id"),
+        Index("ix_sale_item_batches_batch_id", "batch_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sale_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sale_items.id", ondelete="CASCADE"), nullable=False
+    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("batch_stock_balances.id", ondelete="RESTRICT"), nullable=False
+    )
+    quantity_base: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    # Cost-per-BASE-unit snapshot (6dp to match batch_stock_balances.unit_cost).
+    cost_per_base: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0.000000"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    sale_item_ref: Mapped[SaleItem] = relationship(back_populates="batch_allocations")
+    batch_ref: Mapped["BatchStockBalance"] = relationship()
 
 
 class SaleReturn(Base):

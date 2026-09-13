@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -34,8 +35,11 @@ class Product(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    sku: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    barcode: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
+    # Legacy internal code: optional (barcode is the operational identifier);
+    # UNIQUE retained so any stored value stays distinct.
+    sku: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
+    # Operational identifier: unique, required, POS barcode lookup.
+    barcode: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     category_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("categories.id", ondelete="SET NULL"), nullable=True
@@ -51,6 +55,13 @@ class Product(Base):
     selling_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     minimum_stock: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     expiry_tracking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Costing option: when True, outbound movements (sales, damage, expiry,
+    # adjustment out) are costed FIFO — the oldest remaining stock-in lots —
+    # instead of the weighted average cost.
+    fifo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Batch tracking: when True, incoming stock MUST be assigned a batch_no
+    # (spec: batch/lot management). Unbatched products stay the legacy path.
+    track_batch: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # Pricing rows (spec 4.2 / §2.1.3 products): [{uom_id, uom_symbol,
     # convert_uom_id, convert_uom_symbol, factor_to_base, sale_price,
     # is_default_sale, cost_price?}]. Validated by the product service.
@@ -91,6 +102,57 @@ class StockBalance(Base):
     )
 
     product_ref: Mapped[Product] = relationship(back_populates="balance")
+
+
+class BatchStockBalance(Base):
+    """Per-(product, batch_no) remaining base quantity + cost + lifecycle.
+
+    The authoritative batch state (spec: batch = physical inventory, expiry,
+    cost). Written only by the canonical stock-mutation service under row
+    lock; the product's stock_balances row stays the materialized total.
+    """
+
+    __tablename__ = "batch_stock_balances"
+    __table_args__ = (
+        # Batch identity = product + batch_no; expiry_date is a recorded
+        # ATTRIBUTE of the lot (stamped from the purchase), not part of its
+        # identity — operations reference a batch by batch_no only.
+        UniqueConstraint("product_id", "batch_no", name="uq_batch_stock_balances"),
+        Index("ix_batch_stock_balances_product_id", "product_id"),
+        Index("ix_batch_stock_balances_product_expiry", "product_id", "expiry_date"),
+        Index("ix_batch_stock_balances_expiry_date", "expiry_date"),
+        # Ledger integrity (spec: batch quantities never negative, never
+        # exceed what was received into the lot).
+        CheckConstraint("remaining_quantity >= 0", name="ck_batch_remaining_nonneg"),
+        CheckConstraint("received_quantity >= remaining_quantity", name="ck_batch_received_gte_remaining"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    batch_no: Mapped[str] = mapped_column(String(100), nullable=False)
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    received_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    remaining_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0"
+    )
+    # Lifecycle: ACTIVE | DEPLETED | EXPIRED (maintained by the mutation paths).
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE", server_default="ACTIVE")
+    # Traceable purchase cost per BASE unit of the lot (latest purchase).
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0.000000"))
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
+    )
+    document_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ProductSalePrice(Base):
@@ -150,6 +212,20 @@ class StockTransaction(Base):
     transaction_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reference_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Purchase header adjustments (Stock In = purchase): discount is
+    # subtracted from the line subtotal, tax is added afterwards.
+    discount_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=Decimal("0.00"), server_default="0.00"
+    )
+    tax_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 2), nullable=False, default=Decimal("0.00"), server_default="0.00"
+    )
+    # Document currency: every amount on this document is in THIS currency
+    # (never mixed). exchange_rate = KHR per 1 USD (1 for USD documents).
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="USD", server_default="USD")
+    exchange_rate: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=Decimal("1"), server_default="1"
+    )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="CONFIRMED")
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
@@ -250,6 +326,13 @@ class StockTransactionItem(Base):
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Line UOM symbol snapshot (the selected Pricing UOM for Stock In lines).
     uom_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Entered UOM of the operator on outbound lines (Damage / Expiry /
+    # Purchase Return): entered_quantity = quantity_base Ã· factor. Ledger
+    # and batch quantities stay in the base UOM (display only).
+    entered_uom_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    entered_uom_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    entered_factor_to_base: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    entered_quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     line_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     # Cumulative returned-to-supplier qty (base UOM) across purchase returns.
@@ -283,6 +366,14 @@ class StockMovement(Base):
     document_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
     batch_no: Mapped[str | None] = mapped_column(String(100), nullable=True)
     expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Batch lot link (single-batch movements only; multi-batch outflows such
+    # as a POS line drawing from several lots stay NULL — the per-batch
+    # detail lives in the allocation/ledger rows).
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("batch_stock_balances.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     # Line UOM symbol snapshot (display only; quantities stay in base UOM).
     uom_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
