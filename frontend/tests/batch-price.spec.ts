@@ -3,6 +3,7 @@ import { stockModules } from '../app/config/stock-modules'
 import { moduleDocumentTabs } from '../app/utils/module/document-tabs'
 import { createMockStockQueryRepository } from '../app/repositories/mock/entities'
 import { mockRecords } from '../app/mocks/db'
+import { salePriceVersionSelection } from '../app/utils/stock/uom-conversions'
 
 /**
  * Batch/lot + expiry + sale-price versioning (spec §5.9, §2.1.5):
@@ -109,5 +110,32 @@ describe('sale price versioning (Product + UOM price, never batch cost)', () => 
   it('rejects non-positive prices', async () => {
     await expect(repository.addSalePrice('prd1', { date: '2026-09-02', salePrice: 0 }))
       .rejects.toThrow()
+  })
+})
+
+describe('sale price version selection (Pricing tab)', () => {
+  it('maps a version history row into the Pricing-tab selection payload', () => {
+    const selection = salePriceVersionSelection({
+      id: 'sp1',
+      version: 3,
+      batchNo: 'B-100',
+      isActive: true,
+      salePrice: 12.5,
+      uomPrices: [
+        { uomId: 'u1', uomSymbol: 'pcs', factorToBase: 1, salePrice: 12.5, isDefaultSale: true },
+        { uomId: 'u2', uomSymbol: 'box', factorToBase: 12, salePrice: 140 },
+      ],
+    })
+    expect(selection).toMatchObject({ id: 'sp1', version: 3, batchNo: 'B-100', isActive: true, salePrice: 12.5 })
+    expect(selection.uomPrices).toHaveLength(2)
+    expect(selection.uomPrices[1]).toMatchObject({ uomSymbol: 'box', factorToBase: 12, salePrice: 140 })
+  })
+
+  it('normalizes a blank batch/price and defaults UOM rows to empty', () => {
+    const selection = salePriceVersionSelection({ id: 'sp2', version: 1 })
+    expect(selection.batchNo).toBeNull()
+    expect(selection.isActive).toBe(false)
+    expect(selection.salePrice).toBe(0)
+    expect(selection.uomPrices).toEqual([])
   })
 })

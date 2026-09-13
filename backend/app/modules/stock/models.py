@@ -158,18 +158,23 @@ class BatchStockBalance(Base):
 class ProductSalePrice(Base):
     """Versioned POS sale price (spec 4.2 product_sale_prices).
 
-    Exactly one row per product is POS-active (partial unique index); the
-    active row's sale_price is always copied onto products.selling_price in
-    the same transaction, so POS and the Stock list can never diverge.
-    Cost history is NOT stored here — it is derived from Stock In lots.
+    One version holds a batch scope (batch_no NULL = general pricing), its
+    purchase/expiry/effective dates and its per-UOM price rows in
+    product_sale_price_uoms. Exactly ONE version is POS-active per
+    (product, batch scope) — functional partial unique index; activating a
+    version deactivates the previous matching scope. The active version's
+    default-sale/base UOM price mirrors products.selling_price in the same
+    transaction, so POS and the Stock list never diverge. Cost history is
+    NOT stored here — it is derived from Stock In lots.
     """
 
     __tablename__ = "product_sale_prices"
     __table_args__ = (
         UniqueConstraint("product_id", "version", name="uq_product_sale_prices_product_version"),
         Index(
-            "uq_product_sale_prices_one_active",
+            "uq_product_sale_prices_one_active_scope",
             "product_id",
+            func.coalesce(text("batch_no"), text("''")),
             unique=True,
             postgresql_where=text("is_active"),
         ),
@@ -184,6 +189,10 @@ class ProductSalePrice(Base):
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Optional batch scope: NULL = general pricing (all lots of the product).
+    batch_no: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    purchase_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -195,6 +204,48 @@ class ProductSalePrice(Base):
     )
 
     product_ref: Mapped[Product] = relationship(back_populates="sale_prices")
+    uom_prices: Mapped[list["ProductSalePriceUom"]] = relationship(
+        back_populates="price_version", cascade="all, delete-orphan", order_by="ProductSalePriceUom.id"
+    )
+
+    def default_uom_price(self) -> Decimal:
+        """The version's default-sale UOM price (base-UOM row fallback)."""
+        for row in self.uom_prices:
+            if row.is_default_sale:
+                return Decimal(row.sale_price)
+        for row in self.uom_prices:
+            if str(row.uom_id) == str(self.product_ref.uom_id):
+                return Decimal(row.sale_price)
+        return Decimal(self.sale_price)
+
+
+class ProductSalePriceUom(Base):
+    """One UOM sale price inside a price version (spec 4.2): pcs / pack /
+    box rows of the same version. factor_to_base snapshots the product's
+    conversion factor at the time the version was written."""
+
+    __tablename__ = "product_sale_price_uoms"
+    __table_args__ = (
+        UniqueConstraint("price_version_id", "uom_id", name="uq_sale_price_uoms_version_uom"),
+        Index("ix_product_sale_price_uoms_version", "price_version_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    price_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("product_sale_prices.id", ondelete="CASCADE"), nullable=False
+    )
+    uom_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("units_of_measure.id", ondelete="RESTRICT"), nullable=False
+    )
+    uom_symbol: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    factor_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    sale_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    is_default_sale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    price_version: Mapped[ProductSalePrice] = relationship(back_populates="uom_prices")
 
 
 class StockTransaction(Base):

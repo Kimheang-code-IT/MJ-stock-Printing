@@ -4,7 +4,7 @@ import type { PaginationState } from '@tanstack/vue-table'
 import { UButton, UInputNumber, USelect } from '#components'
 import { h } from 'vue'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
-import type { UomConversion } from '~/utils/stock/uom-conversions'
+import type { SalePriceVersionSelection, UomConversion } from '~/utils/stock/uom-conversions'
 
 /**
  * Pricing editor on the product form (spec §2.1.3 / §5.9 Pricing tab). A
@@ -111,19 +111,81 @@ const draftBaseRow = computed<PricingRow>(() => ({
   __base: true,
 }))
 
+/**
+ * Sale-price version selected in the Sale Price History table (shared through
+ * the document record). When set, the Pricing table previews that version's
+ * UOM prices: the POS-active version stays editable; older versions are a
+ * read-only history preview. Browsing old versions never mutates the product's
+ * saved `uomConversions`.
+ */
+const versionSelection = computed<SalePriceVersionSelection | null>(() => {
+  const raw = recordAccess?.get('__salePriceSelection')
+  return raw && typeof raw === 'object' ? raw as SalePriceVersionSelection : null
+})
+const isVersionPreview = computed(() => versionSelection.value !== null)
+const previewReadOnly = computed(() => isVersionPreview.value && versionSelection.value?.isActive !== true)
+const effectiveDisabled = computed(() => props.disabled || previewReadOnly.value)
+
+const selectionRows = ref<PricingRow[]>([])
+
+watch(versionSelection, (selected) => {
+  if (!selected) {
+    selectionRows.value = []
+    return
+  }
+  // Older versions store at least one UOM price; fall back to the version-level
+  // price when a legacy version has no child rows.
+  const uomRows = selected.uomPrices.length
+    ? selected.uomPrices
+    : [{
+        uomId: baseUomId.value,
+        uomSymbol: baseUomSymbol.value,
+        factorToBase: 1,
+        salePrice: selected.salePrice,
+        isDefaultSale: true,
+      }]
+  selectionRows.value = uomRows.map((uom, index) => ({
+    uomId: String(uom.uomId),
+    uomSymbol: String(uom.uomSymbol || ''),
+    convertUomId: baseUomId.value,
+    convertUomSymbol: baseUomSymbol.value,
+    factorToBase: Number(uom.factorToBase) || 1,
+    salePrice: Number(uom.salePrice) || 0,
+    costPrice: null,
+    __key: `version:${selected.id}:${index}:${String(uom.uomId)}`,
+    __base: String(uom.uomId) === baseUomId.value,
+  }))
+}, { immediate: true })
+
+/** Displayed rows: the selected version preview, else the product's own Pricing rows. */
 const rows = computed<PricingRow[]>(() =>
-  savedRows.value.length ? savedRows.value : [draftBaseRow.value])
+  isVersionPreview.value
+    ? selectionRows.value
+    : (savedRows.value.length ? savedRows.value : [draftBaseRow.value]))
+
+function clearVersionSelection() {
+  recordAccess?.set?.('__salePriceSelection', null)
+}
 
 function emitRows(next: PricingRow[]) {
   emit('update:modelValue', next.map(({ __key, __base, ...row }) => ({ ...row })))
 }
 
 function updateRow(key: string, patch: Partial<UomConversion>) {
+  if (effectiveDisabled.value) return
+  if (isVersionPreview.value) {
+    // Active version: edit the loaded preview and mirror it onto the product's
+    // editable Pricing rows (persisted with Save). Old versions stay read-only.
+    selectionRows.value = selectionRows.value.map(row => row.__key === key ? { ...row, ...patch } : row)
+    emitRows(selectionRows.value)
+    return
+  }
   emitRows(rows.value.map(row => row.__key === key ? { ...row, ...patch } : row))
 }
 
 function removeRow(key: string) {
-  // Spec: keep at least one sellable row — the base row can never be deleted.
+  // A version's UOM rows are fixed; the base row can never be deleted.
+  if (isVersionPreview.value) return
   emitRows(rows.value.filter(row => row.__key !== key))
 }
 
@@ -134,6 +196,8 @@ function uomOptionsFor(row: PricingRow) {
 }
 
 function addRow() {
+  // Version UOM rows are fixed — no adding rows to a historical snapshot.
+  if (isVersionPreview.value) return
   // Never offer the base UOM (it already has its own row) or a used UOM.
   const free = activeUoms.value.find(option =>
     option.value !== baseUomId.value && !rows.value.some(row => row.uomId === option.value))
@@ -183,17 +247,24 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
     accessorKey: 'uomId',
     header: t('app.stock.pricingOriginalUom'),
     enableSorting: false,
-    cell: ({ row }) => row.original.__base
-      ? h('span', { class: 'text-sm text-highlighted whitespace-nowrap' }, baseUomLabel.value)
-      : h(USelect, {
-          modelValue: row.original.uomId || undefined,
-          items: uomOptionsFor(row.original),
-          placeholder: t('app.stock.pricingOriginalUom'),
-          size: 'xs',
-          class: 'w-40',
-          disabled: props.disabled,
-          'onUpdate:modelValue': (value: string) => onUomChange(row.original.__key, String(value)),
-        }),
+    cell: ({ row }) => {
+      // Version preview: the UOM set is fixed, so show it as read-only text.
+      if (isVersionPreview.value) {
+        return h('span', { class: 'text-sm text-highlighted whitespace-nowrap' },
+          row.original.uomSymbol || row.original.uomId || baseUomLabel.value)
+      }
+      return row.original.__base
+        ? h('span', { class: 'text-sm text-highlighted whitespace-nowrap' }, baseUomLabel.value)
+        : h(USelect, {
+            modelValue: row.original.uomId || undefined,
+            items: uomOptionsFor(row.original),
+            placeholder: t('app.stock.pricingOriginalUom'),
+            size: 'xs',
+            class: 'w-40',
+            disabled: props.disabled,
+            'onUpdate:modelValue': (value: string) => onUomChange(row.original.__key, String(value)),
+          })
+    },
   },
   {
     accessorKey: 'convertUomId',
@@ -214,7 +285,7 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
         step: 0.5,
         size: 'xs',
         class: 'w-24 tabular-nums',
-        disabled: props.disabled || row.original.__base,
+        disabled: effectiveDisabled.value || row.original.__base,
         'onUpdate:modelValue': (value: number | null) => updateRow(row.original.__key, { factorToBase: Number(value ?? 0) }),
       }),
       row.original.__base
@@ -233,7 +304,7 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
       step: 0.01,
       size: 'xs',
       class: 'w-28 tabular-nums',
-      disabled: props.disabled,
+      disabled: effectiveDisabled.value,
       'onUpdate:modelValue': (value: number | null) => {
         // The base row's price stays in sync with the product sale price.
         if (row.original.__base) setBaseSalePrice(value)
@@ -246,23 +317,54 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
     header: '',
     enableSorting: false,
     meta: { class: { td: 'w-10', th: 'w-10' } },
-    cell: ({ row }) => h(UButton, {
-      size: 'xs',
-      color: 'error',
-      variant: 'ghost',
-      icon: 'i-lucide-trash-2',
-      // The base UOM row is never deletable: the product must keep at least
-      // one sellable Pricing row (spec §2.1.3).
-      disabled: props.disabled || row.original.__base,
-      ariaLabel: row.original.__base ? undefined : t('app.ui.delete'),
-      onClick: () => removeRow(row.original.__key),
-    }),
+    // A version's UOM rows are fixed (no delete), so hide the column in preview.
+    cell: ({ row }) => isVersionPreview.value
+      ? null
+      : h(UButton, {
+          size: 'xs',
+          color: 'error',
+          variant: 'ghost',
+          icon: 'i-lucide-trash-2',
+          // The base UOM row is never deletable: the product must keep at least
+          // one sellable Pricing row (spec §2.1.3).
+          disabled: props.disabled || row.original.__base,
+          ariaLabel: row.original.__base ? undefined : t('app.ui.delete'),
+          onClick: () => removeRow(row.original.__key),
+        }),
   },
 ])
 </script>
 
 <template>
-  <div class="flex h-[420px] max-h-[60vh] min-h-0 min-w-0 flex-col">
+  <div class="flex h-[420px] max-h-[60vh] min-h-0 min-w-0 flex-col gap-2">
+    <!-- Selected sale-price version: active = editable, old = read-only history. -->
+    <div
+      v-if="versionSelection"
+      class="flex items-center justify-between gap-2 rounded-sm border px-3 py-1.5 text-xs"
+      :class="previewReadOnly
+        ? 'border-default bg-elevated text-muted'
+        : 'border-primary/40 bg-primary/5 text-primary'"
+    >
+      <span class="flex min-w-0 items-center gap-1.5 font-medium">
+        <UIcon :name="previewReadOnly ? 'i-lucide-history' : 'i-lucide-pencil'" class="size-3.5 shrink-0" />
+        <span class="truncate">
+          {{ previewReadOnly
+            ? t('app.stock.priceHistoryPreviewHistory', { version: versionSelection.version })
+            : t('app.stock.priceHistoryPreviewActive', { version: versionSelection.version }) }}
+        </span>
+        <span v-if="versionSelection.batchNo" class="shrink-0 text-muted">· {{ versionSelection.batchNo }}</span>
+      </span>
+      <UButton
+        size="xs"
+        variant="ghost"
+        color="neutral"
+        icon="i-lucide-x"
+        :label="t('app.stock.priceHistoryPreviewClear')"
+        class="shrink-0"
+        @click="clearVersionSelection"
+      />
+    </div>
+
     <TableAppListTable
       v-model:search="search"
       v-model:pagination="pagination"
@@ -272,11 +374,11 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
       :search-placeholder="t('app.stock.convSearch')"
       :empty-title="t('app.stock.convEmpty')"
       :empty-description="t('app.stock.convEmptyHint')"
-      :empty-actions="disabled ? [] : [{ icon: 'i-lucide-plus', label: t('app.stock.convAddRow'), onClick: addRow }]"
+      :empty-actions="(disabled || isVersionPreview) ? [] : [{ icon: 'i-lucide-plus', label: t('app.stock.convAddRow'), onClick: addRow }]"
     >
       <template #actions>
         <UButton
-          v-if="!disabled"
+          v-if="!disabled && !isVersionPreview"
           size="sm"
           icon="i-lucide-plus"
           class="shrink-0"

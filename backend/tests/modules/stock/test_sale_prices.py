@@ -216,3 +216,95 @@ async def test_sale_price_permissions(client, db_session):
         headers=viewer,
     )
     assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_add_version_with_multiple_uom_prices(client):
+    """One version carries per-UOM price rows (pcs + pack) in ONE version."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await _make_product(client, headers, tag)
+
+    pack = (
+        await client.post(
+            "/api/v1/uoms",
+            json={"code": f"PK-{tag}", "name": f"Pack {tag}", "symbol": "pk"},
+            headers=headers,
+        )
+    ).json()["data"]
+
+    created = await client.post(
+        "/api/v1/products/sale-prices",
+        json={
+            "productId": product["id"],
+            "salePrice": "10.00",
+            "effectiveDate": "2030-02-01",
+            "uomPrices": [
+                {"uomId": str(DEFAULT_UOM_ID), "factorToBase": 1, "salePrice": "10.00"},
+                {"uomId": pack["id"], "factorToBase": 10, "salePrice": "95.00"},
+            ],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    row = created.json()["data"]
+    assert row["version"] == 2
+    assert row["is_active"] is True
+    # Default-sale row = base UOM → mirrors products.selling_price.
+    assert Decimal(row["selling_price"]) == Decimal("10.00")
+    assert len(row["uom_prices"]) == 2
+    by_uom = {str(row_uom["uom_id"]): row_uom for row_uom in row["uom_prices"]}
+    assert Decimal(by_uom[str(DEFAULT_UOM_ID)]["sale_price"]) == Decimal("10.00")
+    assert by_uom[str(DEFAULT_UOM_ID)]["is_default_sale"] is True
+    assert Decimal(by_uom[pack["id"]]["sale_price"]) == Decimal("95.00")
+    assert Decimal(by_uom[pack["id"]]["factor_to_base"]) == Decimal("10")
+
+    # Listing exposes the version's UOM price rows too.
+    prices = (await client.get(f"/api/v1/products/{product['id']}/sale-prices", headers=headers)).json()["data"]
+    v2 = next(p for p in prices if p["version"] == 2)
+    assert len(v2["uom_prices"]) == 2
+    # Version 1 (historical) keeps a single base-UOM row at its own price.
+    v1 = next(p for p in prices if p["version"] == 1)
+    assert len(v1["uom_prices"]) == 1
+    assert Decimal(v1["uom_prices"][0]["sale_price"]) == Decimal("10.00")
+
+
+@pytest.mark.asyncio
+async def test_batch_scope_is_independent(client):
+    """General + batch-specific versions are active simultaneously; activating
+    a version only retires the previous version of the SAME batch scope."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await _make_product(client, headers, tag)
+
+    batch_version = await client.post(
+        "/api/v1/products/sale-prices",
+        json={"productId": product["id"], "salePrice": "20.00", "batchNo": "LOT-1"},
+        headers=headers,
+    )
+    assert batch_version.status_code == 201, batch_version.text
+    general_version = await client.post(
+        "/api/v1/products/sale-prices",
+        json={"productId": product["id"], "salePrice": "12.50"},
+        headers=headers,
+    )
+    assert general_version.status_code == 201, general_version.text
+
+    prices = (await client.get(f"/api/v1/products/{product['id']}/sale-prices", headers=headers)).json()["data"]
+    assert len(_active(prices)) == 2  # one general + one batch-specific
+    active_batches = {row["batch_no"] for row in _active(prices)}
+    assert active_batches == {"LOT-1", None}
+
+    # Re-activating the seed version (general scope) retires the general V2
+    # but leaves the batch-specific version active.
+    v1 = next(row for row in prices if row["version"] == 1)
+    reactivated = await client.post(
+        f"/api/v1/products/{product['id']}/sale-prices/{v1['id']}/activate", headers=headers
+    )
+    assert reactivated.status_code == 200, reactivated.text
+
+    prices = (await client.get(f"/api/v1/products/{product['id']}/sale-prices", headers=headers)).json()["data"]
+    active = _active(prices)
+    assert len(active) == 2
+    assert {row["batch_no"] for row in active} == {"LOT-1", None}
+    assert any(row["version"] == 1 and row["is_active"] for row in prices)

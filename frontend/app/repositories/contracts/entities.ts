@@ -170,6 +170,8 @@ export interface ProductSalePriceRow {
   batchNo?: string | null
   purchaseDate?: string | null
   expiryDate?: string | null
+  /** Purchase cost of the version's lot, when the API reports one. */
+  purchaseCost?: number | null
   /** UOM price rows inside the version (pcs / pack / box…). */
   uomPrices?: SalePriceUomRow[]
 }

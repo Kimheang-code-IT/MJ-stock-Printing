@@ -1091,6 +1091,9 @@ function adaptSalePriceOut(row: Record<string, unknown>): ProductSalePriceRow {
     expiryDate: row.expiry_date != null || row.expiryDate != null
       ? String(row.expiry_date ?? row.expiryDate).slice(0, 10)
       : null,
+    purchaseCost: row.purchase_cost != null || row.purchaseCost != null
+      ? Number(row.purchase_cost ?? row.purchaseCost)
+      : null,
     uomPrices: uomPrices.map(uomRow => ({
       uomId: String(uomRow.uom_id ?? uomRow.uomId ?? ''),
       uomSymbol: uomRow.uom_symbol != null || uomRow.uomSymbol != null

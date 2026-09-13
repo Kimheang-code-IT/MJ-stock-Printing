@@ -116,22 +116,26 @@ class POSService:
                     Product.name.ilike(pattern) | Product.sku.ilike(pattern) | Product.barcode.ilike(pattern)
                 )
                 rows = list((await self.session.execute(stmt)).scalars().all())
-            return [self._product_out(p) for p in rows]
+            return [await self._product_out(p) for p in rows]
         if category_id is not None:
             stmt = stmt.where(Product.category_id == category_id)
         rows = await self.session.execute(stmt)
-        return [self._product_out(p) for p in rows.scalars().all()]
+        return [await self._product_out(p) for p in rows.scalars().all()]
 
     async def product_by_barcode(self, barcode: str) -> POSProductOut:
         product = await self.products.get_by_barcode(barcode.strip())
         if product is None or product.status != "ACTIVE":
             raise NotFoundError("No active product matches this barcode")
-        return self._product_out(product)
+        return await self._product_out(product)
 
-    def _product_out(self, product: Product) -> POSProductOut:
+    async def _product_out(self, product: Product) -> POSProductOut:
         from app.modules.image.service import resolve_media_url
+        from app.modules.stock import sale_prices as sale_price_service
 
         balance = product.balance
+        # Active version prices (batch-specific first, else general) picked
+        # per UOM — POS always prices through the active price version.
+        version_prices = await sale_price_service.active_version_uom_prices(self.session, product.id)
         # Pricing rows (spec §2.1.3): every row is POS-selectable; the base UOM
         # row is synthesized for legacy products saved without one.
         conversions: list[UomConversionOut] = [
@@ -142,7 +146,10 @@ class POSService:
                 "convert_uom_symbol": row.get("convert_uom_symbol") or None,
                 "factor_to_base": Decimal(str(row.get("factor_to_base", 1))),
                 "cost_price": Decimal(str(row["cost_price"])) if row.get("cost_price") else None,
-                "sale_price": Decimal(str(row["sale_price"])) if row.get("sale_price") else None,
+                "sale_price": (
+                    version_prices.get(str(row["uom_id"]), Decimal(str(row["sale_price"])))
+                    if row.get("sale_price") else None
+                ),
                 "is_default_sale": bool(row.get("is_default_sale")),
             }
             for row in (product.uom_conversions or [])
@@ -226,16 +233,28 @@ class POSService:
         subtotal = Decimal("0.00")
         discount_total = Decimal("0.00")
         item_rows: list[SaleItem] = []
+        version_prices: dict[uuid.UUID, dict[str, Decimal]] = {}
         for item in payload.items:
             product = products[item.product_id]
             quantity = item.quantity
+
+            # Active price-version prices per UOM (batch-first resolution;
+            # POS cart lines carry no batch → the general active version).
+            if item.product_id not in version_prices:
+                from app.modules.stock import sale_prices as sale_price_service
+
+                version_prices[item.product_id] = await sale_price_service.active_version_uom_prices(
+                    self.session, item.product_id
+                )
+            active_uom_prices = version_prices[item.product_id]
 
             # ---- line UOM resolution (stock is always mutated in base UOM) ----
             factor = item.factor_to_base
             uom_id = item.uom_id
             uom_symbol = item.uom_symbol
             uom_code = None
-            default_price = product.selling_price  # POS-active sale price
+            default_price = active_uom_prices.get(str(product.uom_id), product.selling_price)
+            default_price = default_price if default_price is not None else product.selling_price  # POS-active sale price
             if uom_id is not None and str(uom_id) != str(product.uom_id):
                 conversion = next(
                     (
@@ -251,13 +270,16 @@ class POSService:
                         field_errors={"items": "Invalid UOM"},
                     )
                 factor = Decimal(str(conversion.get("factor_to_base", factor)))
-                if conversion.get("sale_price") is not None:
+                if str(uom_id) in active_uom_prices:
+                    # The chosen UOM's price from the ACTIVE version wins.
+                    default_price = active_uom_prices[str(uom_id)]
+                elif conversion.get("sale_price") is not None:
                     default_price = Decimal(str(conversion["sale_price"]))
                 uom_symbol = uom_symbol or conversion.get("uom_symbol") or None
             elif uom_id is not None and str(uom_id) == str(product.uom_id):
                 factor = Decimal("1")
                 # The base=base Pricing row's sale price is the base unit price
-                # (spec §2.1.3); selling_price stays the fallback.
+                # (spec §2.1.3); the active version / selling_price stays the fallback.
                 base_row = next(
                     (
                         row
@@ -266,7 +288,9 @@ class POSService:
                     ),
                     None,
                 )
-                if base_row is not None and base_row.get("sale_price") is not None:
+                if str(uom_id) in active_uom_prices:
+                    default_price = active_uom_prices[str(uom_id)]
+                elif base_row is not None and base_row.get("sale_price") is not None:
                     default_price = Decimal(str(base_row["sale_price"]))
             if uom_id is None:
                 uom_id = product.uom_id

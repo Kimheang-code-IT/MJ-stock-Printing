@@ -101,7 +101,8 @@ async def create_sale_price(
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("product.update")),
 ) -> dict:
-    """Add version MAX(version)+1 and make it the ONLY POS-active row."""
+    """Add a price version (per-UOM price rows, optional batch scope) and
+    make it the ONLY active version of that scope."""
     from app.core.exceptions import ValidationError
     from app.modules.stock import sale_prices as sale_price_service
 
@@ -115,6 +116,12 @@ async def create_sale_price(
             sale_price=payload.sale_price,
             effective_date=payload.effective_date,
             actor=actor,
+            batch_no=payload.batch_no,
+            purchase_date=payload.purchase_date,
+            expiry_date=payload.expiry_date,
+            uom_prices=[row.model_dump(by_alias=False) for row in payload.uom_prices]
+            if payload.uom_prices is not None
+            else None,
         )
     )
 

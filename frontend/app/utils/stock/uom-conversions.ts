@@ -224,3 +224,47 @@ export function salePriceForUom(product: Record<string, unknown> | null | undefi
   if (conversion) return conversion.salePrice
   return null
 }
+
+/**
+ * One sale-price version selected in the Pricing tab's Sale Price History,
+ * loaded into the editable Pricing table for review. Only the POS-active
+ * version is editable; older versions load read-only (history). This is UI
+ * state only — it never mutates the product's saved `uomConversions`.
+ */
+export interface SalePriceVersionSelection {
+  id: string
+  version: number
+  /** Batch/lot scope; null = general pricing (all lots). */
+  batchNo: string | null
+  /** Exactly one POS-active version per product + batch scope. */
+  isActive: boolean
+  /** Version-level (default-sale) price mirror. */
+  salePrice: number
+  /** UOM price rows inside the version. */
+  uomPrices: Array<{
+    uomId: string
+    uomSymbol?: string | null
+    factorToBase: number
+    salePrice: number
+    isDefaultSale?: boolean
+  }>
+}
+
+/** Build the Pricing-tab selection payload from a version-history row. */
+export function salePriceVersionSelection(row: {
+  id: string
+  version: number
+  batchNo?: string | null
+  isActive?: boolean
+  salePrice?: number
+  uomPrices?: SalePriceVersionSelection['uomPrices']
+}): SalePriceVersionSelection {
+  return {
+    id: String(row.id ?? ''),
+    version: Number(row.version ?? 0),
+    batchNo: row.batchNo ?? null,
+    isActive: row.isActive === true,
+    salePrice: Number(row.salePrice ?? 0),
+    uomPrices: Array.isArray(row.uomPrices) ? row.uomPrices.map(uom => ({ ...uom })) : [],
+  }
+}

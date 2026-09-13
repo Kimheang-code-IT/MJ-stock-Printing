@@ -452,6 +452,36 @@ class ProductHistoryRow(BaseModel):
 # ---------------------------------------------------------------- sale prices
 
 
+class SalePriceUomIn(BaseModel):
+    """One UOM sale price row inside a price version (pcs / pack / box…)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    uom_id: UUID = Field(validation_alias=AliasChoices("uom_id", "uomId"))
+    uom_symbol: str | None = Field(
+        default=None,
+        max_length=50,
+        validation_alias=AliasChoices("uom_symbol", "uomSymbol"),
+    )
+    factor_to_base: Decimal = Field(
+        default=Decimal("1"),
+        gt=0,
+        max_digits=18,
+        decimal_places=6,
+        validation_alias=AliasChoices("factor_to_base", "factorToBase"),
+    )
+    sale_price: Decimal = Field(
+        gt=0,
+        max_digits=18,
+        decimal_places=2,
+        validation_alias=AliasChoices("sale_price", "salePrice"),
+    )
+    is_default_sale: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("is_default_sale", "isDefaultSale"),
+    )
+
+
 class SalePriceCreate(BaseModel):
     """Add Sale Price payload (snake_case and camelCase accepted)."""
 
@@ -470,6 +500,26 @@ class SalePriceCreate(BaseModel):
     product_id: UUID | None = Field(
         default=None,
         validation_alias=AliasChoices("product_id", "productId"),
+    )
+    # Optional batch scope: NULL/blank = general pricing (all lots).
+    batch_no: str | None = Field(
+        default=None,
+        max_length=120,
+        validation_alias=AliasChoices("batch_no", "batchNo", "batch"),
+    )
+    purchase_date: date | None = Field(
+        default=None,
+        validation_alias=AliasChoices("purchase_date", "purchaseDate"),
+    )
+    expiry_date: date | None = Field(
+        default=None,
+        validation_alias=AliasChoices("expiry_date", "expiryDate"),
+    )
+    # Per-UOM prices of THIS version; falls back to a single base-UOM row at
+    # `sale_price` when omitted (legacy single-price payload keeps working).
+    uom_prices: list[SalePriceUomIn] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("uom_prices", "uomPrices"),
     )
 
 

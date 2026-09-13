@@ -15,12 +15,14 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import NotFoundError, ValidationError
 from app.modules.auth.models import User
 from app.modules.stock.models import (
     Product,
     ProductSalePrice,
+    ProductSalePriceUom,
     StockTransaction,
     StockTransactionItem,
 )
@@ -32,6 +34,107 @@ TWO = Decimal("0.01")
 
 def _today() -> date:
     return datetime.now(timezone.utc).date()
+
+
+def _batch_scope(batch_no: str | None) -> str | None:
+    """Normalize the batch scope: blank/whitespace = general pricing (None)."""
+    text_value = str(batch_no or "").strip()
+    return text_value or None
+
+
+async def _deactivate_matching_scope(session: AsyncSession, *, product_id, batch_no: str | None) -> None:
+    """Retire the currently ACTIVE version of the SAME (product, batch scope)
+    — other scopes (e.g. a batch-specific price) stay active."""
+    scope = _batch_scope(batch_no)
+    scope_expr = func.coalesce(ProductSalePrice.batch_no, "")
+    await session.execute(
+        ProductSalePrice.__table__.update()
+        .where(
+            ProductSalePrice.product_id == product_id,
+            ProductSalePrice.is_active.is_(True),
+            scope_expr == (scope or ""),
+        )
+        .values(is_active=False)
+    )
+
+
+async def _validate_uom_prices(
+    session: AsyncSession,
+    rows: list[dict],
+    *,
+    base_uom_id,
+) -> list[dict]:
+    """Validate the version's UOM price rows: known ACTIVE UOMs, positive
+    factors/prices, unique UOM per version; snapshots missing symbols.
+    Marks the default-sale row (the flagged row, else the base-UOM row,
+    else the first row)."""
+    from app.modules.uoms.models import UOM
+
+    if not rows:
+        raise ValidationError(
+            "A price version needs at least one UOM price",
+            field_errors={"uom_prices": "At least one UOM price is required"},
+        )
+    seen: set[str] = set()
+    cleaned: list[dict] = []
+    default_index: int | None = None
+    for index, row in enumerate(rows):
+        uom_key = str(row.get("uom_id") or "")
+        if not uom_key:
+            raise ValidationError(
+                "Each UOM price needs a UOM",
+                field_errors={"uom_prices": "uom_id is required"},
+            )
+        if uom_key in seen:
+            raise ValidationError(
+                "Duplicate UOM in the price version",
+                field_errors={"uom_prices": "Duplicate UOM"},
+            )
+        seen.add(uom_key)
+        try:
+            factor = Decimal(str(row.get("factor_to_base", 1)))
+            price = Decimal(str(row.get("sale_price"))).quantize(TWO, rounding=ROUND_HALF_UP)
+        except Exception as exc:
+            raise ValidationError(
+                "Invalid UOM price row",
+                field_errors={"uom_prices": "Invalid factor or price"},
+            ) from exc
+        if factor <= 0:
+            raise ValidationError(
+                "Conversion qty must be greater than zero",
+                field_errors={"uom_prices": "factor_to_base must be > 0"},
+            )
+        if price <= 0:
+            raise ValidationError(
+                "Sale price must be greater than zero",
+                field_errors={"uom_prices": "sale_price must be > 0"},
+            )
+        uom = await session.get(UOM, uuid.UUID(uom_key))
+        if uom is None:
+            raise NotFoundError("UOM not found")
+        if uom.status != "ACTIVE":
+            raise ValidationError(
+                "Inactive UOMs cannot be used in price versions",
+                field_errors={"uom_prices": "UOM is inactive"},
+            )
+        if bool(row.get("is_default_sale")) and default_index is None:
+            default_index = index
+        cleaned.append(
+            {
+                "uom_id": uuid.UUID(uom_key),
+                "uom_symbol": str(row.get("uom_symbol") or "").strip() or uom.symbol,
+                "factor_to_base": factor,
+                "sale_price": price,
+                "is_default_sale": False,
+            }
+        )
+    if default_index is None:
+        default_index = next(
+            (i for i, row in enumerate(cleaned) if str(row["uom_id"]) == str(base_uom_id)),
+            0,
+        )
+    cleaned[default_index]["is_default_sale"] = True
+    return cleaned
 
 
 async def _lock_product(session: AsyncSession, product_id) -> Product:
@@ -47,7 +150,8 @@ async def _lock_product(session: AsyncSession, product_id) -> Product:
 
 
 async def seed_initial_sale_price(session: AsyncSession, product: Product, *, actor_id=None) -> ProductSalePrice:
-    """Version 1, POS-active, mirroring the created product's selling price."""
+    """Version 1, POS-active, mirroring the created product's selling price.
+    Ships with a single base-UOM price row (factor 1)."""
     row = ProductSalePrice(
         product_id=product.id,
         sale_price=Decimal(product.selling_price).quantize(TWO, rounding=ROUND_HALF_UP),
@@ -56,9 +160,74 @@ async def seed_initial_sale_price(session: AsyncSession, product: Product, *, ac
         version=1,
         created_by=actor_id,
     )
+    from app.modules.uoms.models import UOM
+
+    base_uom = await session.get(UOM, product.uom_id)
+    row.uom_prices.append(
+        ProductSalePriceUom(
+            uom_id=product.uom_id,
+            uom_symbol=base_uom.symbol if base_uom else None,
+            factor_to_base=Decimal("1"),
+            sale_price=row.sale_price,
+            is_default_sale=True,
+        )
+    )
     session.add(row)
     await session.flush()
     return row
+
+
+def _serialize_uom_price(row: ProductSalePriceUom) -> dict:
+    return {
+        "id": row.id,
+        "uom_id": row.uom_id,
+        "uomId": row.uom_id,
+        "uom_symbol": row.uom_symbol,
+        "uomSymbol": row.uom_symbol,
+        "factor_to_base": row.factor_to_base,
+        "factorToBase": row.factor_to_base,
+        "sale_price": row.sale_price,
+        "salePrice": row.sale_price,
+        "is_default_sale": row.is_default_sale,
+        "isDefaultSale": row.is_default_sale,
+    }
+
+
+def _serialize_version(
+    row: ProductSalePrice,
+    product_name: str | None = None,
+    *,
+    selling_price=None,
+) -> dict:
+    """Version payload: scope/dates + the UOM price rows inside it."""
+    data = {
+        "id": row.id,
+        "product_id": row.product_id,
+        "productId": row.product_id,
+        "sale_price": row.sale_price,
+        "salePrice": row.sale_price,
+        "effective_date": row.effective_date,
+        "effectiveDate": row.effective_date,
+        "date": row.effective_date,
+        "is_active": row.is_active,
+        "isActive": row.is_active,
+        "version": row.version,
+        "batch_no": row.batch_no,
+        "batchNo": row.batch_no,
+        "purchase_date": row.purchase_date,
+        "purchaseDate": row.purchase_date,
+        "expiry_date": row.expiry_date,
+        "expiryDate": row.expiry_date,
+        "created_by": row.created_by,
+        "created_at": row.created_at,
+        "uom_prices": [_serialize_uom_price(child) for child in row.uom_prices],
+        "uomPrices": [_serialize_uom_price(child) for child in row.uom_prices],
+    }
+    if product_name is not None:
+        data["product"] = product_name
+    if selling_price is not None:
+        data["selling_price"] = selling_price
+    return data
 
 
 async def list_sale_prices(
@@ -90,33 +259,18 @@ async def list_sale_prices(
     )
     total = (await session.execute(count_stmt)).scalar_one()
 
-    rows = await session.execute(
-        select(ProductSalePrice, Product.name)
-        .join(Product, Product.id == ProductSalePrice.product_id)
-        .where(*conditions)
-        .order_by(ProductSalePrice.effective_date.desc(), ProductSalePrice.version.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-    )
-    data = [
-        {
-            "id": price.id,
-            "product_id": price.product_id,
-            "productId": price.product_id,
-            "product": name,
-            "sale_price": price.sale_price,
-            "salePrice": price.sale_price,
-            "effective_date": price.effective_date,
-            "effectiveDate": price.effective_date,
-            "date": price.effective_date,
-            "is_active": price.is_active,
-            "isActive": price.is_active,
-            "version": price.version,
-            "created_by": price.created_by,
-            "created_at": price.created_at,
-        }
-        for price, name in rows.all()
-    ]
+    rows = (
+        await session.execute(
+            select(ProductSalePrice, Product.name)
+            .join(Product, Product.id == ProductSalePrice.product_id)
+            .options(selectinload(ProductSalePrice.uom_prices))
+            .where(*conditions)
+            .order_by(ProductSalePrice.effective_date.desc(), ProductSalePrice.version.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+    ).all()
+    data = [_serialize_version(price, name) for price, name in rows]
     return data, int(total)
 
 
@@ -127,13 +281,39 @@ async def add_sale_price(
     sale_price,
     effective_date: date | None,
     actor: User,
+    batch_no: str | None = None,
+    purchase_date: date | None = None,
+    expiry_date: date | None = None,
+    uom_prices: list[dict] | None = None,
 ) -> dict:
-    """Add version MAX(version)+1 and make it the ONLY POS-active row."""
+    """Add version MAX(version)+1 (per product) with its batch scope and
+    per-UOM price rows, and make it the ONLY active version of that scope."""
     amount = Decimal(sale_price).quantize(TWO, rounding=ROUND_HALF_UP)
     if amount <= 0:
         raise ValidationError("Sale price must be greater than zero", field_errors={"sale_price": "Must be > 0"})
+    scope = _batch_scope(batch_no)
 
     product = await _lock_product(session, product_id)
+
+    # UOM price rows inside the version; fall back to a single base-UOM row
+    # at `sale_price` when the caller sends none (legacy payload).
+    uom_rows = await _validate_uom_prices(
+        session,
+        [dict(row) for row in (uom_prices or [])],
+        base_uom_id=product.uom_id,
+    ) if uom_prices else [
+        {
+            "uom_id": product.uom_id,
+            "uom_symbol": product.uom_ref.symbol if product.uom_ref else None,
+            "factor_to_base": Decimal("1"),
+            "sale_price": amount,
+            "is_default_sale": True,
+        }
+    ]
+    default_price = next(
+        (row["sale_price"] for row in uom_rows if row["is_default_sale"]),
+        amount,
+    )
 
     max_version = (
         await session.execute(
@@ -144,23 +324,25 @@ async def add_sale_price(
     ).scalar_one()
     version = int(max_version) + 1
 
-    # Retire the current active row, then activate the new version.
-    await session.execute(
-        ProductSalePrice.__table__.update()
-        .where(ProductSalePrice.product_id == product.id, ProductSalePrice.is_active.is_(True))
-        .values(is_active=False)
-    )
+    # Retire the current active version of the SAME batch scope, then
+    # activate the new one (other scopes stay active).
+    await _deactivate_matching_scope(session, product_id=product.id, batch_no=scope)
     row = ProductSalePrice(
         product_id=product.id,
-        sale_price=amount,
+        sale_price=default_price,
         effective_date=effective_date or _today(),
         is_active=True,
         version=version,
+        batch_no=scope,
+        purchase_date=purchase_date,
+        expiry_date=expiry_date,
         created_by=actor.id,
     )
+    for uom_row in uom_rows:
+        row.uom_prices.append(ProductSalePriceUom(**uom_row))
     session.add(row)
 
-    product.selling_price = amount
+    product.selling_price = default_price
     await session.flush()
 
     await record_audit(
@@ -173,27 +355,18 @@ async def add_sale_price(
         new_values={
             "product_id": str(product.id),
             "version": version,
-            "sale_price": str(amount),
+            "sale_price": str(default_price),
+            "batch_no": scope,
+            "uom_prices": [str(r["sale_price"]) for r in uom_rows],
         },
     )
     await session.commit()
-    return {
-        "id": row.id,
-        "product_id": row.product_id,
-        "productId": row.product_id,
-        "sale_price": row.sale_price,
-        "salePrice": row.sale_price,
-        "effective_date": row.effective_date,
-        "effectiveDate": row.effective_date,
-        "is_active": row.is_active,
-        "isActive": row.is_active,
-        "version": row.version,
-        "selling_price": product.selling_price,
-    }
+    return _serialize_version(row, selling_price=product.selling_price)
 
 
 async def activate_sale_price(session: AsyncSession, *, price_id, actor: User) -> dict:
-    """Make exactly this version the POS-active one (rejects foreign rows)."""
+    """Make exactly this version the active one of its (product, batch
+    scope) — rejects foreign rows; other scopes keep their active version."""
     # Lock the product FIRST so concurrent activations serialize; the row is
     # re-read after the lock because another transaction may have committed a
     # newer is_active state while this one waited.
@@ -204,21 +377,22 @@ async def activate_sale_price(session: AsyncSession, *, price_id, actor: User) -
 
     product = await _lock_product(session, product_id)
 
-    result = await session.execute(select(ProductSalePrice).where(ProductSalePrice.id == price_id))
+    result = await session.execute(
+        select(ProductSalePrice)
+        .where(ProductSalePrice.id == price_id)
+        .options(selectinload(ProductSalePrice.uom_prices))
+    )
     row = result.scalar_one()
 
-    await session.execute(
-        ProductSalePrice.__table__.update()
-        .where(ProductSalePrice.product_id == row.product_id, ProductSalePrice.is_active.is_(True))
-        .values(is_active=False)
-    )
+    await _deactivate_matching_scope(session, product_id=row.product_id, batch_no=row.batch_no)
     # Explicit UPDATE: the ORM attribute may already read True from a stale
     # snapshot, which would skip the flush and leave zero active rows.
     await session.execute(
         ProductSalePrice.__table__.update().where(ProductSalePrice.id == row.id).values(is_active=True)
     )
     row.is_active = True
-    product.selling_price = Decimal(row.sale_price).quantize(TWO, rounding=ROUND_HALF_UP)
+    default_price = row.default_uom_price()
+    product.selling_price = Decimal(default_price).quantize(TWO, rounding=ROUND_HALF_UP)
     await session.flush()
 
     await record_audit(
@@ -231,23 +405,11 @@ async def activate_sale_price(session: AsyncSession, *, price_id, actor: User) -
         new_values={
             "product_id": str(row.product_id),
             "version": row.version,
-            "sale_price": str(row.sale_price),
+            "sale_price": str(default_price),
         },
     )
     await session.commit()
-    return {
-        "id": row.id,
-        "product_id": row.product_id,
-        "productId": row.product_id,
-        "sale_price": row.sale_price,
-        "salePrice": row.sale_price,
-        "effective_date": row.effective_date,
-        "effectiveDate": row.effective_date,
-        "is_active": row.is_active,
-        "isActive": row.is_active,
-        "version": row.version,
-        "selling_price": product.selling_price,
-    }
+    return _serialize_version(row, selling_price=product.selling_price)
 
 
 async def patch_sale_price(
@@ -255,7 +417,11 @@ async def patch_sale_price(
 ) -> dict:
     """PATCH with isActive=true runs the activate transaction; isActive=false
     deactivates that row (the caller then activates another version)."""
-    result = await session.execute(select(ProductSalePrice).where(ProductSalePrice.id == price_id))
+    result = await session.execute(
+        select(ProductSalePrice)
+        .where(ProductSalePrice.id == price_id)
+        .options(selectinload(ProductSalePrice.uom_prices))
+    )
     row = result.scalar_one_or_none()
     if row is None:
         raise NotFoundError("Sale price version not found")
@@ -276,19 +442,7 @@ async def patch_sale_price(
         new_values={"product_id": str(row.product_id), "is_active": row.is_active},
     )
     await session.commit()
-    return {
-        "id": row.id,
-        "product_id": row.product_id,
-        "productId": row.product_id,
-        "sale_price": row.sale_price,
-        "salePrice": row.sale_price,
-        "effective_date": row.effective_date,
-        "effectiveDate": row.effective_date,
-        "is_active": row.is_active,
-        "isActive": row.is_active,
-        "version": row.version,
-        "selling_price": product.selling_price,
-    }
+    return _serialize_version(row, selling_price=product.selling_price)
 
 
 async def product_active_price(session: AsyncSession, product_id) -> Decimal:
@@ -300,6 +454,45 @@ async def product_active_price(session: AsyncSession, product_id) -> Decimal:
     )
     value = result.scalar_one_or_none()
     return Decimal(value) if value is not None else Decimal("0.00")
+
+
+async def active_version_uom_prices(
+    session: AsyncSession,
+    product_id,
+    *,
+    batch_no: str | None = None,
+) -> dict[str, Decimal]:
+    """Per-UOM sale prices of the ACTIVE version, keyed by UOM id.
+
+    Batch-first resolution: when a batch is given, the batch-specific active
+    version wins; without one (or when no batch version exists) the general
+    active version (batch_no NULL) is used. POS picks the correct price by
+    the cart line's chosen UOM from this map.
+    """
+    scope = _batch_scope(batch_no)
+    base_conditions = [
+        ProductSalePrice.product_id == product_id,
+        ProductSalePrice.is_active.is_(True),
+    ]
+    conditions = [*base_conditions, ProductSalePrice.batch_no == scope if scope else ProductSalePrice.batch_no.is_(None)]
+    row = (
+        await session.execute(select(ProductSalePrice).where(*conditions).limit(1))
+    ).scalar_one_or_none()
+    if row is None and scope:
+        # Batch-specific version missing → fall back to the general one.
+        row = (
+            await session.execute(
+                select(ProductSalePrice)
+                .where(*base_conditions, ProductSalePrice.batch_no.is_(None))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return {}
+    children = await session.execute(
+        select(ProductSalePriceUom).where(ProductSalePriceUom.price_version_id == row.id)
+    )
+    return {str(child.uom_id): Decimal(child.sale_price) for child in children.scalars().all()}
 
 
 # ------------------------------------------------------------- cost history

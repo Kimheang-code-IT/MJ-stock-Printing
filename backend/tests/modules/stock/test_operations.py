@@ -608,3 +608,104 @@ async def test_fifo_costing_on_pos_sale(client):
     assert Decimal(sale_data["items"][0]["unit_cost"]) == Decimal("2.00"), (
         "FIFO product sale must be costed from the oldest lot"
     )
+
+
+async def test_stock_in_existing_batch_restocks_same_lot(client, db_session):
+    """Restocking a batch_no the product already has must NOT create a second
+    lot: quantity/cost accumulate into the SAME batch (identity preserved)."""
+    from sqlalchemy import select, func
+
+    from app.modules.stock.models import BatchStockBalance, StockMovement
+
+    headers = await admin_headers(client)
+    product = await _make_product(client, headers, sku="BRE-1", name="Restock Widget", expiry_tracking=True)
+
+    first = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "20.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00",
+                        "batch_no": "LOT-9", "expiry_date": "2030-06-30"}],
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    second = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "15.00",
+            "items": [{"product_id": product["id"], "quantity": "5", "unit_cost": "3.00",
+                        "batch_no": "LOT-9", "expiry_date": "2030-06-30"}],
+        },
+        headers=headers,
+    )
+    assert second.status_code == 201, second.text
+
+    lots = (await db_session.execute(
+        select(BatchStockBalance).where(BatchStockBalance.product_id == product["id"])
+    )).scalars().all()
+    assert len(lots) == 1  # no duplicate batch row for the same product+batch_no
+    lot = lots[0]
+    assert lot.batch_no == "LOT-9"
+    assert lot.received_quantity == Decimal("15.0000")
+    assert lot.remaining_quantity == Decimal("15.0000")
+    assert lot.unit_cost == Decimal("3.000000")  # latest purchase cost
+    assert str(lot.expiry_date) == "2030-06-30"
+
+    movements = (await db_session.execute(
+        select(StockMovement)
+        .where(StockMovement.product_id == product["id"], StockMovement.batch_no == "LOT-9")
+    )).scalars().all()
+    assert len(movements) == 2  # both stock movements reference the batch
+    assert all(m.quantity_delta > 0 for m in movements)
+    total_batches = (await db_session.execute(
+        select(func.count()).select_from(BatchStockBalance)
+        .where(BatchStockBalance.product_id == product["id"])
+    )).scalar_one()
+    assert total_batches == 1
+
+
+async def test_stock_in_new_batch_created_only_at_confirmation(client, db_session):
+    """A fresh batch_no lot is created BY the confirmed Stock In (never
+    before), with its expiry date stamped and the movement linked to it."""
+    from sqlalchemy import select
+
+    from app.modules.stock.models import BatchStockBalance, StockMovement
+
+    headers = await admin_headers(client)
+    product = await _make_product(client, headers, sku="BNEW-1", name="New Lot Widget", expiry_tracking=True)
+
+    # No batch exists before the purchase is submitted.
+    before = (await db_session.execute(
+        select(BatchStockBalance).where(BatchStockBalance.product_id == product["id"])
+    )).scalars().all()
+    assert len(before) == 0
+
+    response = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "30.00",
+            "items": [{"product_id": product["id"], "quantity": "12", "unit_cost": "2.50",
+                        "batch_no": "NEW-LOT-1", "expiry_date": "2031-01-15"}],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+
+    lots = (await db_session.execute(
+        select(BatchStockBalance).where(BatchStockBalance.product_id == product["id"])
+    )).scalars().all()
+    assert len(lots) == 1
+    lot = lots[0]
+    assert lot.batch_no == "NEW-LOT-1"
+    assert lot.received_quantity == Decimal("12.0000")
+    assert lot.remaining_quantity == Decimal("12.0000")
+    assert str(lot.expiry_date) == "2031-01-15"
+    assert lot.status == "ACTIVE"
+
+    movement = (await db_session.execute(
+        select(StockMovement).where(StockMovement.product_id == product["id"])
+    )).scalars().one()
+    assert movement.batch_no == "NEW-LOT-1"
+    assert movement.batch_id == lot.id

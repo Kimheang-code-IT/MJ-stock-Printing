@@ -181,6 +181,7 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         batchNo: row.batchNo != null ? String(row.batchNo) : null,
         purchaseDate: row.purchaseDate != null ? String(row.purchaseDate).slice(0, 10) : null,
         expiryDate: row.expiryDate != null ? String(row.expiryDate).slice(0, 10) : null,
+        purchaseCost: row.purchaseCost != null ? Number(row.purchaseCost) : null,
         uomPrices: Array.isArray(row.uomPrices)
           ? (row.uomPrices as Record<string, unknown>[]).map(uomRow => ({
               uomId: String(uomRow.uomId ?? ''),

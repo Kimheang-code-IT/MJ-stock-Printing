@@ -91,7 +91,10 @@ Authoritative store for all stock, sales, payments, debts, sequences, settings a
 PK `product_id` (FK CASCADE). `quantity NUMERIC(18,4)`, `average_cost NUMERIC(18,2)`, `updated_at`. **Materialized cache — written only by `apply_stock_movement` under row lock.**
 
 ### product_sale_prices
-`product_id` FK CASCADE, `sale_price`, `effective_date`, `is_active`, `version`, `created_by`. Constraints: UNIQUE (`product_id`,`version`); partial UNIQUE index on `product_id WHERE is_active` (exactly one active row); product's `selling_price` copied in the same transaction.
+`product_id` FK CASCADE, `sale_price` (default-sale/base UOM price), `effective_date`, `is_active`, `version`, `batch_no` (optional; NULL = general pricing scope), `purchase_date`, `expiry_date`, `created_by`. Constraints: UNIQUE (`product_id`,`version`); functional partial UNIQUE index on (`product_id`, `COALESCE(batch_no,'')`) `WHERE is_active` — exactly one active row per product + batch scope; the active version's default-sale UOM price is copied to the product's `selling_price` in the same transaction.
+
+### product_sale_price_uoms
+UOM price rows inside one price version: `price_version_id` FK CASCADE, `uom_id` FK RESTRICT, `uom_symbol` snapshot, `factor_to_base` NUMERIC(18,6), `sale_price` NUMERIC(18,2), `is_default_sale`. UNIQUE (`price_version_id`,`uom_id`). POS picks the price by the cart line's chosen UOM from the active version — batch-specific active version first, else the general active version.
 
 ### stock_transactions (header: Stock In / Adjustment / Damage / Expire)
 `document_no` UNIQUE (STI/STA/DMG/EXP), `transaction_type` varchar(30), `supplier_id` FK `SET NULL`, `transaction_date`, `reference_no`, `note`, `discount_amount` + `tax_amount` NUMERIC(18,2) (purchase header adjustments: total = line subtotal − discount + tax), `currency` (`USD`|`KHR`) + `exchange_rate` NUMERIC(18,6) (KHR per 1 USD; 1 for USD), `status` (`CONFIRMED` — documents are created confirmed), `created_by` FK RESTRICT, `confirmed_by`. Index on `transaction_date`.
@@ -159,7 +162,8 @@ roles ──< role_permissions >── permissions
 categories ──< products >── brands            (SET NULL)
 units_of_measure ──< products                 (RESTRICT)
 products 1──1 stock_balances
-products ──< product_sale_prices              (one active)
+products ──< product_sale_prices              (one active per batch scope)
+product_sale_prices ──< product_sale_price_uoms
 products ──< stock_transaction_items
 products ──< stock_movements
 products ──< sale_items

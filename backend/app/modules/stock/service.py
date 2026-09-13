@@ -583,7 +583,7 @@ class StockOperationService:
             # lands in a synthetic lot keyed on "".
             from app.modules.stock import batch_service
 
-            await batch_service.batch_in(
+            batch_lot = await batch_service.batch_in(
                 self.session,
                 product_id=item.product_id,
                 batch_no=item.batch_no,
@@ -604,6 +604,9 @@ class StockOperationService:
                 created_by=actor.id,
                 document_no=document_no,
                 batch_no=item.batch_no,
+                # Movement references the lot it stocked into (new or
+                # restocked — identity = product + batch_no).
+                batch_id=batch_lot.id if (item.batch_no or "").strip() else None,
                 expiry_date=item.expiry_date,
                 allow_negative=negative_ok,
                 uom_symbol=line_uom_symbol,
