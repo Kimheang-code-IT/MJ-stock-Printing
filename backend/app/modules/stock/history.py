@@ -154,7 +154,6 @@ async def product_batches(
     supplier and the opening purchase document. Lifecycle status is derived
     against the configured business date; no write path exists here.
     """
-    from decimal import Decimal
 
     from app.modules.stock.batch_service import business_today
     from app.modules.stock.models import BatchStockBalance

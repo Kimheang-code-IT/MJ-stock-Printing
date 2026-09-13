@@ -1,6 +1,6 @@
 # Business Logic — rules as implemented
 
-Every rule below is enforced in backend services (`backend/app/modules/*/service.py`); the frontend mirrors some of them purely for UX. Related diagrams: [SYSTEM_FLOW.md](SYSTEM_FLOW.md). Tables: [DATABASE.md](DATABASE.md). Endpoints: [API.md](API.md).
+Every rule below is enforced in backend services (`backend/app/modules/*/service.py`); the frontend mirrors some of them purely for UX. Architecture overview: [PROJECT.md](PROJECT.md). Tables: [DATABASE.md](DATABASE.md). Endpoints: [API.md](API.md).
 
 ## 1. Canonical stock mutation (`stock/service.py::apply_stock_movement`)
 
@@ -121,3 +121,34 @@ DRAFT ──confirm──► CONFIRMED ──out-for-delivery──► OUT_FOR_D
 ## 13. Audit coverage
 
 Actions recorded inside the same transaction as the change: `initial_setup`, `login`, `login_failed`, `sale`, `sale_return`, `customer_debt_payment`, `stock_in`, `purchase_return`, `stock_adjustment`, `stock_damage`, `stock_expire`, `price_changed`, role create/update, user create/update/reset, settings update, sequence update, delivery transitions, and generic module CRUD audited by the shared services. Rows are append-only; IP/UA captured from the request.
+
+## 14. Finance report formulas (`/reports/finance`, perm `report.finance`)
+
+Income is **derived read-only from POS data** (no duplicate income tables); the only user-managed rows are `expenses` (created via the Add Expense modal — no dedicated page, no `/expenses` route).
+
+| Metric | Formula (as implemented) |
+|---|---|
+| Total sales | Σ `sales.grand_total` in period − Σ `sale_returns.refund_amount` in period |
+| COGS | Σ `sale_items.unit_cost × quantity` − Σ (restocked sale-return qty × sold unit cost) |
+| **Gross profit** | Total sales − COGS |
+| Operating expenses | Σ `expenses.amount` in period (Stock In purchase cost is deliberately **not** an expense line) |
+| Stock damage loss | Σ −`quantity_delta × unit_cost` where movement_type = DAMAGE |
+| Stock expiry loss | same, movement_type = EXPIRE |
+| **Net result** | Gross profit − damage loss − expiry loss − operating expenses |
+| Total purchase cost | Σ Stock In `line_total` in period |
+| Total customer debt | Σ all `customer_debts.remaining_amount` (all time) |
+| Total supplier debt | Σ all `supplier_debts.remaining_amount` (all time) |
+
+- **`GET /reports/finance/entries`**: the income/expense ledger table (sales income rows, refund rows, expense rows) with filters — an income/expense **table** per the approved UI.
+- **`POST /reports/finance/expenses`** (perm `report.finance` **and** `expense.create`): `expense_date` (≤ today), category, description, optional reference, amount > 0, currency + exchange rate, optional payment method. Audited; appears immediately in the ledger and the next summary.
+- **Currency normalization**: every money document records `currency` + `exchange_rate` (KHR per 1 USD). Finance aggregates never mix raw amounts — a `_usd(expression, currency, rate)` helper passes USD rows through and divides KHR rows by their stored rate (applies to sales, refunds, COGS, purchases, debts, expenses). Damage/expiry losses come from the movement cost ledger (per-mutation base-unit cost, no document currency) and stay as recorded.
+
+## 15. Report grains & exports (`/reports/*`)
+
+All report endpoints accept the common list params (`q`, `page`, `limit`, `startDate`, `endDate`) plus report-specific filters and return the standard envelope; each has a CSV export twin (`…/export`) streamed server-side (no stored export files).
+
+- **Sales** (`report.sales`): one row per **sale item** joined to its sale (invoice no, date, customer, cashier, product, qty + UOM snapshot, unit price, discount, line total, payment method, payment status); totals in `meta`; UI adds the sale-return dialog and invoice print.
+- **Purchase** (`report.purchase`): `stock_transactions` type `STOCK_IN` CONFIRMED with items aggregated (STI-…, supplier, reference, item summary, total, paid vs debt); UI adds the full-page Create flow and per-document purchase-return dialog.
+- **Customer/Supplier Debt** (`report.customer_debt` / `report.supplier_debt`): debt rows joined to sales/stock-in documents (original, paid, remaining, due date, status; overdue highlight); UI adds DebtPaymentDialog (per-debt + pay-all) and export.
+- **Customer/Supplier Returns** (`report.sales` / `report.purchase`): read-only history of immutable `sale_returns` (SRT-…, restocked qty, refund, reason) and `purchase_returns` (PRT-…, refund split debt-reduction + credit, reason) documents. Returns themselves are created only from the Sales/Purchase report dialogs; `returned_quantity` on source lines stays the returnable-quantity source of truth.
+- **Dashboard** (`dashboard.view`, cached ~60 s in Redis): KPIs (today/this-month sales, pending delivery notes, operating expenses today, debt totals, damage/expiry loss, refunds, gross profit), daily sales chart series, low-stock (`quantity ≤ minimum_stock`) and expiring (90/7-day windows) alert counts, recent sales/activity, top products.

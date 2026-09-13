@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.permissions import (
-    ASSIGNABLE_PERMISSIONS,
     SUPER_ADMIN_PERMISSION,
     normalize_role_permissions,
     permission_catalog,

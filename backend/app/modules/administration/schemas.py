@@ -1,9 +1,8 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.core.permissions import ASSIGNABLE_PERMISSIONS, SUPER_ADMIN_PERMISSION
 
 # ---------------------------------------------------------------- users
 

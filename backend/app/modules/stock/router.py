@@ -13,7 +13,6 @@ from app.api.deps import (
 )
 from app.modules.auth.models import User
 from app.modules.stock.schemas import (
-    MovementOut,
     ProductCreate,
     ProductUpdate,
     PurchaseReturnRequest,

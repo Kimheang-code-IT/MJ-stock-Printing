@@ -60,7 +60,7 @@ Key settings (env-prefixed upper-case): `DATABASE_URL` (asyncpg), `REDIS_URL`, `
 
 ### stock (largest module)
 - **ProductService** — CRUD with barcode-first identity (barcode unique + required, auto-issued `BAR-…` when omitted; `sku` optional legacy code, unique when set), category/UOM/brand validation (UOM required + ACTIVE), `uom_conversions` normalization/validation, delete guards (no movements, zero balance), sale-price version creation on `selling_price` change, cost-price audit (`price_changed`).
-- **`apply_stock_movement`** — the canonical mutation (see SYSTEM_OVERVIEW §4): locks balance, optional negative-stock check (`pos.allow_negative_stock`), weighted-average cost on `STOCK_IN`, immutable movement row.
+- **`apply_stock_movement`** — the canonical mutation (see [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md) §1): locks balance, optional negative-stock check (`pos.allow_negative_stock`), weighted-average cost on `STOCK_IN`, immutable movement row.
 - **StockOperationService** — `stock_in` (UOM factor validation, base-UOM conversion, document currency `USD`\|`KHR` + exchange rate, header discount ≤ subtotal and tax → `total = subtotal − discount + tax`, supplier debt creation when underpaid — in the document currency, `SDP`/`STOCK_IN_PAYMENT` payment rows), `purchase_return`, `adjust` (system vs actual quantity; ADJUSTMENT_IN/OUT), `damage`, `expire` (requires `expiry_tracking`), `quick_operation` (single-product dialog on the Stock list), `list_operations` (purchase list read model), `list_movements` (read-only ledger for the Stock Movements page: q/product/type/date filters, pagination, `sort`; rows enrich the immutable movement with product barcode, qty in/out and balance before/after — the balances are computed from the ledger with a window function, never persisted), product history (`stock/history.py`), cost history.
 - **Sale prices** (`stock/sale_prices.py`) — versioned price list/add/patch/activate; the POS-active price is mirrored onto `products.selling_price` in the same transaction.
 
@@ -81,13 +81,13 @@ Key settings (env-prefixed upper-case): `DATABASE_URL` (asyncpg), `REDIS_URL`, `
 `GET /dashboard/summary?period=&startDate=&endDate=` — sales stats, this-month sales, pending deliveries, operating expenses (excludes purchase cost), customer/supplier debt totals, damage/expiry losses, refunds, COGS, chart series, low-stock + expiring counts (vs `minimum_stock` and expiry windows), recent sales/stock activity, top products. Cached briefly in Redis (60 s TTL).
 
 ### reports
-Sales / Purchase / Customer Debt / Supplier Debt / Sale-Return / Purchase-Return reports with server-side filters + CSV export; Finance report (summary + income/expense entries + `POST /finance/expenses` gated by `report.finance` **and** `expense.create`). Finance aggregates normalize document currency via `exchange_rate` (KHR rows ÷ rate; damage/expiry losses come from the movement cost ledger and stay as recorded). Formulas in [REPORTS.md](REPORTS.md).
+Sales / Purchase / Customer Debt / Supplier Debt / Sale-Return / Purchase-Return reports with server-side filters + CSV export; Finance report (summary + income/expense entries + `POST /finance/expenses` gated by `report.finance` **and** `expense.create`). Finance aggregates normalize document currency via `exchange_rate` (KHR rows ÷ rate; damage/expiry losses come from the movement cost ledger and stay as recorded). Formulas in [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md) §14.
 
 ### image
 `POST /images/upload` (multipart, 5 MB cap, image content types, per-folder object naming on local disk) and `GET /images/{object_key:path}` (path-traversal-guarded via `_safe_segment`/resolved-path check).
 
 ### telegram
-`ExpiryAlertService.scan_and_send` — daily in-process sweep (see SYSTEM_FLOW §7); `shared/telegram` holds the HTTP client, reset-code delivery, payment notify queue, and the view-only inquiry bot (`telegram_bot.py`, optional `telegram-bot` compose profile).
+`ExpiryAlertService.scan_and_send` — daily in-process sweep (settings windows 90/7 days, once-per-lot state, Redis NX lock); `shared/telegram` holds the HTTP client, reset-code delivery, payment notify queue, and the view-only inquiry bot (`telegram_bot.py`, optional `telegram-bot` compose profile).
 
 ## 5. Redis usage (transient only)
 
@@ -106,3 +106,30 @@ All errors return `{"error": {"code", "message", "field_errors?"}}`-style payloa
 ## 7. Scheduler
 
 `core/scheduler.py` starts an asyncio task inside the API process (gated by `SCHEDULER_ENABLED`); it sleeps until `EXPIRY_ALERT_SCAN_HOUR` UTC, takes a Redis NX lock, then runs `ExpiryAlertService.scan_and_send()`. No Docker scheduler, no Celery beat. Errors are logged and retried the next day; delivery failures leave alert state unwritten so the next sweep retries.
+
+## 8. RBAC — permission model (catalog, enforcement, known drift)
+
+**Model**: permission rows are catalog-driven `module.action` strings synced into the `permissions` table by `build_all_permissions()` (on setup, on `app.seed`, and on Administrator creation); one wildcard `ALL_PAGES`. Role 1—N RolePermission; users have exactly one role; `roles.is_system` protects Administrator (cannot rename, disable, or strip `ALL_PAGES`). Granting any non-view action auto-grants the module's `view` (`normalize_role_permissions`); an Administrator with `ALL_PAGES` collapses to the wildcard.
+
+**Backend catalog** (`app/core/permissions.py`):
+
+| Module | Actions |
+|---|---|
+| dashboard | view, view_profit |
+| category / uom / brand | view, create, update, delete |
+| stock | view, in, adjust, damage, expire |
+| product | create, update, delete |
+| supplier | view, create, update, delete, debt.pay |
+| pos | access, discount, debt_sale, print |
+| customer | view, create, update, delete, debt.pay |
+| delivery | view, create, update, confirm, deliver, cancel |
+| report | sales, purchase, customer_debt, supplier_debt, finance |
+| expense | create (Add Expense on the Finance report only) |
+| user / role / sequence | manage |
+| audit | view |
+| settings | manage |
+| service-only (non-assignable) | telegram.reset.send |
+
+**Enforcement**: every protected endpoint declares `Depends(require_permission("module.action"))` — see the permission column in [API.md](API.md). `require_permission` chains `get_current_user` (active account + token version) then `user_has_permission` (`ALL_PAGES` or exact code) → 403 `ACCESS_DENIED`. Read endpoints are also gated (e.g. `stock.view`, `report.*`, `audit.view`). Object-level IDOR guards: debts must belong to the path customer/supplier; included debts must belong to the sale's customer; delivery notes are only created from real sales; images are path-traversal-guarded; the last active admin cannot be demoted; the walk-in customer cannot take debt. Seeded presets: **Administrator** (`ALL_PAGES`, system), plus code-defined **Cashier** and **Stock Staff** presets used by tests/seeding helpers.
+
+**⚠️ Known frontend/backend permission-key drift** (documentation-first finding, no functional backend impact): the frontend role matrix and route guards use their own vocabulary that only partially matches the backend catalog — `categories.*` vs `category.*`, `products.*` vs `stock.view`/`product.*`, plural `suppliers.*`/`customers.*`, `pos.view/operate/export` vs `pos.access/discount/debt_sale`, `sales.*`/`reports.*` vs `report.*`, `admin.*`/`configuration.*`/`settings.app_config.*` vs `user.manage`/`role.manage`/`sequence.manage`/`audit.view`/`settings.manage`. Consequences: menu/page visibility for non-admin roles is unreliable (mismatched matrix rows are filtered out and fail closed; `useMenu` ids like `products.view` never match `stock.view`), and saving a role from the frontend matrix can be rejected (422 "Unknown permissions"). Only `ALL_PAGES` accounts experience full navigation today; backend enforcement is unaffected and remains authoritative. A fix would map matrix rows ↔ catalog codes (or regenerate the matrix from the catalog) and align `useMenu`/`definePageMeta` ids.

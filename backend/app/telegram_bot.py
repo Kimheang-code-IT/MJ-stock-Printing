@@ -224,12 +224,10 @@ def run() -> None:
         asyncio.run(_idle_forever())
         return
 
-    from telegram import Update
     from telegram.ext import (
         Application,
         CallbackQueryHandler,
         CommandHandler,
-        ContextTypes,
         MessageHandler,
         filters,
     )

@@ -578,7 +578,6 @@ class POSService:
 
     async def build_receipt(self, sale: Sale) -> dict:
         """Print-ready bilingual invoice payload (the frontend renders HTML)."""
-        from datetime import datetime
         from zoneinfo import ZoneInfo
 
         from app.modules.administration import get_setting_value

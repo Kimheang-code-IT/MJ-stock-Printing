@@ -126,7 +126,7 @@ CRUD (`supplier.*`), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/paymen
 | GET `/reports/purchase-returns` | `report.purchase` | Supplier-return history (immutable `purchase_returns` documents) — page `/reports/supplier-returns` |
 | GET `/reports/customer-debts` (+ export) | `report.customer_debt` | Customer debt report |
 | GET `/reports/supplier-debts` (+ export) | `report.supplier_debt` | Supplier debt report |
-| GET `/reports/finance` | `report.finance` | Finance summary (formulas in REPORTS.md) |
+| GET `/reports/finance` | `report.finance` | Finance summary (formulas in [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md) §14) |
 | GET `/reports/finance/summary` · `/finance/entries` | `report.finance` | Summary cards / income & expense ledger |
 | POST `/reports/finance/expenses` | `report.finance` **and** `expense.create` | Add Expense modal |
 
@@ -155,4 +155,3 @@ CRUD (`supplier.*`), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/paymen
 
 - Base URL resolves from `runtimeConfig` (`NUXT_PUBLIC_API_BASE`), same-origin in the nginx compose setup.
 - 401 handling: single-flight refresh (`createAuthRefresher`) then exactly one retry; on final failure the session is cleared. 403 triggers a re-fetch of `/auth/me` and the permission-denied dialog.
-- Legacy `frontend/app/utils/constants/api-v1-endpoints.ts` contains reserved-but-unused paths (`/api/v1/users`, `/api/v1/audit-events`, …) — the active constants live in `api-endpoints.ts`.

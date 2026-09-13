@@ -32,7 +32,6 @@ from app.modules.auth.repository import RoleRepository, UserRepository
 from app.modules.auth.schemas import (
     TokenPairResponse,
     UserOut,
-    auth_user_payload,
     token_pair_payload,
 )
 from app.shared.audit.service import record_audit
@@ -120,7 +119,7 @@ class AuthService:
                 settings.rate_limit_login_per_minute,
                 60,
             )
-        except RateLimited as exc:
+        except RateLimited:
             raise RateLimitedError("Too many login attempts. Try again later.")
 
         user = await self.users.get_by_email(payload.email)

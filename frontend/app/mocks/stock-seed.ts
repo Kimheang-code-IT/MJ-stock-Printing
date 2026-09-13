@@ -439,7 +439,7 @@ function buildStockMovements(): AppRecord[] {
   // 1) Stock In — receive into named lots (chronological, oldest first).
   const rows: AppRecord[] = []
   for (const purchase of stockIns) {
-    (purchase.items as AppRecord[]).forEach((item, i) => {
+    (purchase.items as AppRecord[]).forEach((item) => {
       const row = movementRow({
         ...baseRow(String(item.productId), String(purchase.date), String(purchase.createdAt)),
         type: 'Stock In',

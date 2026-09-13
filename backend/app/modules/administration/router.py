@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import ListParams, envelope, get_current_user, get_db_session, list_params, require_permission
+from app.api.deps import ListParams, envelope, get_db_session, list_params, require_permission
 from app.modules.administration.schemas import (
     AdminUserOut,
     RoleCreate,

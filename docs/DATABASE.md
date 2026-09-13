@@ -1,6 +1,6 @@
 # Database — PostgreSQL schema (as implemented)
 
-Authoritative store for all stock, sales, payments, debts, sequences, settings and audit data. SQLAlchemy 2 models define the schema; **every change goes through an Alembic migration** (`backend/alembic/versions/0001…0017`). Primary keys are `UUID` (`uuid.uuid4`); timestamps are `DateTime(timezone=True)` with `server_default=func.now()`; money is `NUMERIC(18,2)`, quantities `NUMERIC(18,4)`, UOM factors `NUMERIC(18,6)`.
+Authoritative store for all stock, sales, payments, debts, sequences, settings and audit data. SQLAlchemy 2 models define the schema; **every change goes through an Alembic migration** (`backend/alembic/versions/0001…0024`). Primary keys are `UUID` (`uuid.uuid4`); timestamps are `DateTime(timezone=True)` with `server_default=func.now()`; money is `NUMERIC(18,2)`, quantities `NUMERIC(18,4)`, UOM factors `NUMERIC(18,6)`.
 
 ## 1. Migration inventory
 
@@ -26,6 +26,9 @@ Authoritative store for all stock, sales, payments, debts, sequences, settings a
 | `0019_delivery_driver_currency` | delivery note driver name + currency |
 | `0020_delivery_fulfillment_fields` | delivery note date/vehicle/fee/receiver |
 | `0021_barcode_first_product` | `products.sku` nullable; `products.barcode` NOT NULL (backfilled from sku, else `BAR-` id); `sale_items.sku` nullable |
+| `0022_batch_fefo` | `batch_stock_balances` per (product, batch_no) remaining/received quantity, expiry, cost — written only by the canonical mutation service under row lock; FEFO sale allocation; outbound-line UOM entries |
+| `0023_batch_lifecycle` | `products.track_batch` (batched Stock In lines MUST carry batch_no + expiry); batch lifecycle status; ledger links |
+| `0024_batch_integrity` | DB check constraints: `batch_stock_balances.remaining_quantity >= 0` and `received_quantity >= remaining_quantity` |
 
 ## 2. Identity & access
 

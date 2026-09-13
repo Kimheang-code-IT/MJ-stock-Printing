@@ -7,7 +7,7 @@ Nuxt 4 (`nuxt generate` SSRG build), Vue 3 strict TypeScript, Nuxt UI v4 (+ `@ta
 ```
 frontend/app/
 ├── components/
-│   ├── common/        # field widgets (AppTextField, AppSelectField, AppMoneyField,
+│   ├── common/        # field widgets (AppTextField, AppSelectMenuField, AppMoneyField,
 │   │                  # AppDateField, AppImageUploadField, …), AppConfirmDialog/Host,
 │   │                  # AppRolePermissionMatrix, AppExportDialog, AppFilterMenu,
 │   │                  # AppLiveSearch, AppAccessAlertHost
@@ -35,8 +35,8 @@ frontend/app/
 ├── stores/            # auth.ts, preferences.ts, app-data.ts
 ├── types/stock-pos/   # shared domain types
 └── utils/             # auth (tokens/session/permissions), print (invoice/delivery
-                       # HTML printer), pos (cart/checkout math), format, export/csv,
-                       # role/permissions, security (csrf/files/url), uom-conversions
+                       # HTML printer), pos (cart/checkout math), format,
+                       # role/permissions, security (files/url), uom-conversions
 ```
 
 ## 2. Session, auth & routing
@@ -98,11 +98,11 @@ Config-driven CRUD pages (list + `new.vue` + `[id].vue`):
 - **Supplier Returns** (`supplier-returns/index.vue`): read-only history of purchase-return documents (`GET /reports/purchase-returns`) — return no, stock-in document, supplier, items, refund split (debt reduction + credit), reason.
 - **Customer Debts** (`customer-debts/index.vue`): open/partial/paid debts, remaining totals, DebtPaymentDialog (per-debt or customer-level), status chips; export.
 - **Supplier Debts** (`supplier-debts/index.vue`): same pattern against purchases; export.
-- **Finance** (`finance/index.vue`): income/expense **table (no chart on the ledger)** + summary cards (total sales, purchases, COGS, damage/expiry loss, gross profit, operating expenses, net result — formulas in [REPORTS.md](REPORTS.md)); ECharts trend where enabled; **Add Expense modal** gated by the expense permission (`POST /reports/finance/expenses`); expense rows editable in the ledger.
+- **Finance** (`finance/index.vue`): income/expense **table (no chart on the ledger)** + summary cards (total sales, purchases, COGS, damage/expiry loss, gross profit, operating expenses, net result — formulas in [BUSINESS_LOGIC.md](BUSINESS_LOGIC.md) §14); ECharts trend where enabled; **Add Expense modal** gated by the expense permission (`POST /reports/finance/expenses`); expense rows editable in the ledger.
 
 ### Administration — `/administration/*`
 - **Users** (`users/index.vue|new|[id]`): list (username, display name, email, role, Telegram, status, last login), form (password create-only, role select from options endpoint, Telegram linked automatically via bot), enable/disable, admin password reset. Perm `admin.users.view`.
-- **Roles & Permissions** (`roles/*`): list; `AppRolePermissionMatrix` renders rows per app page with action checkboxes — it fetches `GET /admin/permissions` and **filters matrix rows whose prefix matches a backend catalog module** (see [RBAC.md](RBAC.md) §5 for the drift impact). `ALL_PAGES` reserved for Administrator. Perm `admin.roles.view`.
+- **Roles & Permissions** (`roles/*`): list; `AppRolePermissionMatrix` renders rows per app page with action checkboxes — it fetches `GET /admin/permissions` and **filters matrix rows whose prefix matches a backend catalog module** (see [BACKEND.md](BACKEND.md) §8 for the drift impact). `ALL_PAGES` reserved for Administrator. Perm `admin.roles.view`.
 - **Document Sequences** (`document-sequences/*`): list of document types with prefix, next number, number length, status; editable (`PATCH /admin/document-sequences/{id}`); explanation of `PREFIX-000001` format. Perm `configuration.view`.
 - **Audit Logs** (`audit-logs/index.vue`): read-only table (time, user, module, action, entity, IP, old/new values expandable), filters module/action/user/date. Perm `admin.audit_logs.view`.
 - **Settings** (`settings/index.vue` → `SystemSettingsPage`): schema-driven groups from `config/settings-schemas.ts` — Shop (name/logo/phone/email/address), Currency, POS (default customer, allow discount, maximum discount %, allow negative stock, receipt footer), Stock (low-stock level, expiry alert 90/7-day windows, track expiry), Telegram (bot token secret, enable password reset, code expiry, max attempts, inquiry/notify toggles), Invoice (logo, footer, paper size, auto print), System (language en/km, date format, timezone). Secret fields masked. Perm `settings.app_config.view`.
@@ -110,7 +110,7 @@ Config-driven CRUD pages (list + `new.vue` + `[id].vue`):
 ## 5. Printing & exports
 
 - **Invoices & delivery notes print via the browser** (`utils/print/html.ts`): hidden iframe, `document.fonts.ready` wait, Noto Sans Khmer font stack, invoice heading `វិក្កយបត្រ / INVOICE`, filler rows to ~70% page height, A4/A5 (A5 scaled). The invoice print chooser also carries a USD/KHR print-currency switch: switching requires an exchange rate (1 USD = ? KHR), converts all printed amounts (KHR rounded to whole riel), and prints the applied rate in the meta block — recorded sale/payment/debt amounts are untouched.
-- **CSV exports** are streamed server-side (`/reports/*/export`) through `AppExportDialog` + `useServerExport`; local CSV utility exists for client-side fallbacks.
+- **CSV exports** are streamed server-side (`/reports/*/export`) through `AppExportDialog` — no stored export files and no client-side CSV utility.
 
 ## 6. State & i18n conventions
 

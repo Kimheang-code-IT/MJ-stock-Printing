@@ -49,7 +49,6 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db_session),
     credentials=Depends(_bearer_scheme),
 ):
-    from app.modules.auth.models import User
     from app.modules.auth.repository import UserRepository
 
     if credentials is None or not credentials.credentials:

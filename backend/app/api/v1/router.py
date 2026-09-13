@@ -1,6 +1,5 @@
 from fastapi import APIRouter
 
-from app.api.v1 import health
 from app.modules.administration.router import router as administration_router
 from app.modules.auth.router import router as auth_router
 from app.modules.brands.router import router as brands_router
