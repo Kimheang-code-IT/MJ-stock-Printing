@@ -17,12 +17,10 @@ import {
 
 const props = defineProps<{
   cart: PosCartLine[]
-  currency: string
-  /** Document currency of THIS sale (USD | KHR) + its applied rate. */
+  /** Inherited from the cart: the ONE sale currency (USD | KHR). */
   saleCurrency: 'USD' | 'KHR'
-  exchangeRate?: number
-  /** USD → document-currency multiplier (1 for USD sales). */
-  saleRate: number
+  /** Shop default currency — used for debt records (kept in their own currency). */
+  currency: string
   customerId?: string
   customerName: string
   customerPhone: string
@@ -51,8 +49,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'update:saleCurrency': [value: 'USD' | 'KHR']
-  'update:exchangeRate': [value: number | undefined]
   'update:customerId': [value: string | undefined]
   'update:customerName': [value: string]
   'update:customerPhone': [value: string]
@@ -70,18 +66,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-/** Display currency: the document currency for KHR sales, else the shop default. */
-const displayCurrency = computed(() => props.saleCurrency === 'KHR' ? 'KHR' : props.currency)
-/** Formats a USD-based amount (cart prices) in the document currency. */
-const money = (value: unknown) => formatMoney(Number(value || 0) * props.saleRate, displayCurrency.value)
-/** Formats an amount already expressed in the document currency. */
-const moneyDoc = (value: unknown) => formatMoney(value, displayCurrency.value)
+/** Every checkout amount is in the inherited sale currency — no conversion. */
+const money = (value: unknown) => formatMoney(Number(value || 0), props.saleCurrency)
 const fieldUi = { base: 'text-base' }
-
-const currencyOptions = [
-  { value: 'USD' as const, symbol: '$', labelKey: 'app.pos.currencyUsd' },
-  { value: 'KHR' as const, symbol: '៛', labelKey: 'app.pos.currencyKhr' },
-]
 
 const search = ref('')
 const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
@@ -194,16 +181,13 @@ const selectedDebts = computed(() =>
   props.debts.filter(row => props.includedDebtIds.includes(String(row.id))))
 const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(props.needsDelivery, props.deliveryPrice))
-// Cart amounts are USD-based and convert at the sale rate; delivery fee and
-// deposit are typed in the document currency.
+// All checkout amounts are in the sale currency; delivery fee and deposit
+// are typed in that same currency.
 const saleNet = computed(() =>
-  checkoutSaleNet(subtotal.value, discountTotal.value, 0) * props.saleRate
-    + appliedDeliveryPrice.value)
+  checkoutSaleNet(subtotal.value, discountTotal.value, 0) + appliedDeliveryPrice.value)
 const due = computed(() => checkoutDue(saleNet.value, Number(props.depositInput || 0)))
 const paidNow = computed(() => checkoutPaidNow(props.paidInput, due.value, props.paymentMethod === 'Credit'))
 const outstandingAmount = computed(() => checkoutOutstanding(due.value, paidNow.value))
-const khrRateMissing = computed(() =>
-  props.saleCurrency === 'KHR' && props.saleRate <= 0)
 const outstandingDisplay = computed(() =>
   selectedDebts.value.length
     ? selectedDebts.value.reduce((sum, row) => sum + Number(row.remainingAmount || 0), 0)
@@ -215,7 +199,6 @@ const canComplete = computed(() =>
   Boolean(props.cart.length)
   && props.canOperate
   && !props.disabled
-  && !khrRateMissing.value
   && (outstandingAmount.value <= 0 || Boolean(props.customerId)))
 
 const includedDebtIdsProxy = computed({
@@ -268,14 +251,6 @@ function emitDeliveryPrice(value: unknown) {
 function emitDeposit(value: unknown) {
   const amount = value == null || value === '' ? 0 : Number(value)
   emit('update:depositInput', Number.isFinite(amount) ? Math.max(0, amount) : 0)
-}
-
-function emitSaleCurrency(value: unknown) {
-  emit('update:saleCurrency', value === 'KHR' ? 'KHR' : 'USD')
-}
-function emitExchangeRate(value: unknown) {
-  const rate = value == null || value === '' ? undefined : Number(value)
-  emit('update:exchangeRate', rate != null && Number.isFinite(rate) && rate > 0 ? rate : undefined)
 }
 
 function emitPaid(value: unknown) {
@@ -411,7 +386,7 @@ function onNeedsDelivery(value: unknown) {
                 <span class="truncate text-xs text-muted">{{ deliveryLocation || t('app.pos.deliveryLocation') }}</span>
               </span>
               <span class="flex shrink-0 items-center gap-2">
-                <span class="tabular-nums">{{ moneyDoc(deliveryPrice) }}</span>
+                <span class="tabular-nums">{{ money(deliveryPrice) }}</span>
                 <UIcon
                   name="i-lucide-pencil"
                   class="size-4 text-muted"
@@ -424,52 +399,17 @@ function onNeedsDelivery(value: unknown) {
             :label="t('app.pos.depositTotal')"
             size="md"
           >
-            <UFieldGroup class="w-full">
-              <UInputNumber
-                :model-value="depositInput"
-                :min="0"
-                :step="0.01"
-                :increment="false"
-                :decrement="false"
-                class="w-full"
-                size="lg"
-                :ui="{ base: 'text-base tabular-nums' }"
-                :disabled="disabled || saleCurrency === 'KHR'"
-                @update:model-value="emitDeposit($event)"
-              />
-              <UButton
-                v-for="option in currencyOptions"
-                :key="option.value"
-                :label="option.symbol"
-                :color="saleCurrency === option.value ? 'primary' : 'neutral'"
-                :variant="saleCurrency === option.value ? 'soft' : 'outline'"
-                size="lg"
-                :disabled="disabled"
-                :title="t(option.labelKey)"
-                :aria-label="t(option.labelKey)"
-                :aria-pressed="saleCurrency === option.value"
-                @click="emitSaleCurrency(option.value)"
-              />
-            </UFieldGroup>
-          </UFormField>
-
-          <UFormField
-            v-if="saleCurrency === 'KHR'"
-            :label="t('app.pos.exchangeRate')"
-            size="md"
-          >
             <UInputNumber
-              :model-value="exchangeRate"
-              :min="1"
-              :step="1"
+              :model-value="depositInput"
+              :min="0"
+              :step="0.01"
               :increment="false"
               :decrement="false"
               class="w-full"
               size="lg"
               :ui="{ base: 'text-base tabular-nums' }"
-              :placeholder="t('app.pos.exchangeRatePlaceholder')"
-              :disabled="disabled"
-              @update:model-value="emitExchangeRate($event)"
+              :disabled="disabled || saleCurrency === 'KHR'"
+              @update:model-value="emitDeposit($event)"
             />
           </UFormField>
 
@@ -497,35 +437,20 @@ function onNeedsDelivery(value: unknown) {
             :label="t('app.pos.paidNow')"
             size="md"
           >
-            <UFieldGroup class="w-full">
-              <UInputNumber
-                :model-value="paidInput"
-                :min="0"
-                :max="due"
-                :step="0.01"
-                :increment="false"
-                :decrement="false"
-                class="w-full"
-                size="lg"
-                :ui="{ base: 'text-base tabular-nums' }"
-                :placeholder="String(due.toFixed(2))"
-                :disabled="disabled || paymentMethod === 'Credit'"
-                @update:model-value="emitPaid($event)"
-              />
-              <UButton
-                v-for="option in currencyOptions"
-                :key="option.value"
-                :label="option.symbol"
-                :color="saleCurrency === option.value ? 'primary' : 'neutral'"
-                :variant="saleCurrency === option.value ? 'soft' : 'outline'"
-                size="lg"
-                :disabled="disabled"
-                :title="t(option.labelKey)"
-                :aria-label="t(option.labelKey)"
-                :aria-pressed="saleCurrency === option.value"
-                @click="emitSaleCurrency(option.value)"
-              />
-            </UFieldGroup>
+            <UInputNumber
+              :model-value="paidInput"
+              :min="0"
+              :max="due"
+              :step="0.01"
+              :increment="false"
+              :decrement="false"
+              class="w-full"
+              size="lg"
+              :ui="{ base: 'text-base tabular-nums' }"
+              :placeholder="String(due.toFixed(2))"
+              :disabled="disabled || paymentMethod === 'Credit'"
+              @update:model-value="emitPaid($event)"
+            />
             <p
               v-if="paidInput == null"
               class="mt-1 text-xs text-muted"
@@ -536,7 +461,7 @@ function onNeedsDelivery(value: unknown) {
 
           <div class="flex justify-between border-t border-default pt-2 text-lg font-semibold">
             <span>{{ t('app.pos.outstandingAmount') }}</span>
-            <span class="tabular-nums">{{ moneyDoc(outstandingAmount) }}</span>
+            <span class="tabular-nums">{{ money(outstandingAmount) }}</span>
           </div>
 
           <p

@@ -5,16 +5,12 @@ import { lineNet } from '~/utils/pos/cart'
 
 const props = withDefaults(defineProps<{
   cart: PosCartLine[]
-  currency: string
   disabled?: boolean
-  /** Document currency of THIS sale (USD | KHR) — toggled from the price fields. */
+  /** ONE sale currency for the whole cart (USD | KHR) — header selector. */
   saleCurrency?: 'USD' | 'KHR'
-  /** USD → document-currency multiplier (1 for USD sales). */
-  saleRate?: number
 }>(), {
   disabled: false,
   saleCurrency: 'USD',
-  saleRate: 1,
 })
 
 const emit = defineEmits<{
@@ -34,22 +30,14 @@ const currencyOptions = [
   { value: 'KHR' as const, symbol: '៛', labelKey: 'app.pos.currencyKhr' },
 ]
 
-/** Display currency: the document currency for KHR sales, else the shop default. */
-const displayCurrency = computed(() => props.saleCurrency === 'KHR' ? 'KHR' : props.currency)
-const money = (value: unknown) => formatMoney(Number(value || 0) * props.saleRate, displayCurrency.value)
+const symbol = computed(() => props.saleCurrency === 'KHR' ? '៛' : '$')
 
-/** KHR unit prices are read/edited at the sale rate (falls back to USD
- *  display until the exchange rate is entered). */
-const converting = computed(() => props.saleCurrency === 'KHR' && props.saleRate > 0)
-
-function priceInputValue(line: PosCartLine) {
-  return converting.value ? line.unitPrice * props.saleRate : line.unitPrice
-}
+/** Cart amounts are stored in the sale currency — no conversion here. */
+const money = (value: unknown) => formatMoney(Number(value || 0), props.saleCurrency)
 
 function onPriceInput(line: PosCartLine, value: unknown) {
   const amount = Number(value ?? 0)
-  const unitPrice = converting.value ? amount / props.saleRate : amount
-  emit('updatePrice', line.productId, Number.isFinite(unitPrice) ? Math.max(0, unitPrice) : 0)
+  emit('updatePrice', line.productId, Number.isFinite(amount) ? Math.max(0, amount) : 0)
 }
 
 function padQty(qty: number) {
@@ -60,12 +48,30 @@ function padQty(qty: number) {
 <template>
   <section class="flex w-full min-h-0 flex-[3] flex-col overflow-hidden rounded-sm border border-default bg-default lg:max-w-md">
     <div class="flex items-center justify-between border-b border-default px-3 py-2.5">
-      <h2 class="text-sm font-semibold">
-        {{ t('app.pos.cart') }}
-        <span
+      <div class="flex items-center gap-2">
+        <h2 class="text-sm font-semibold">
+          {{ t('app.pos.cart') }}
+          <span
 v-if="cart.length"
 class="ml-1 text-muted">({{ cart.length }})</span>
-      </h2>
+        </h2>
+        <!-- Global sale-currency selector: drives every cart amount. -->
+        <UFieldGroup>
+          <UButton
+            v-for="option in currencyOptions"
+            :key="option.value"
+            size="xs"
+            :label="option.symbol"
+            :color="saleCurrency === option.value ? 'primary' : 'neutral'"
+            :variant="saleCurrency === option.value ? 'soft' : 'outline'"
+            :disabled="disabled"
+            :title="t(option.labelKey)"
+            :aria-label="t(option.labelKey)"
+            :aria-pressed="saleCurrency === option.value"
+            @click="emit('updateSaleCurrency', option.value)"
+          />
+        </UFieldGroup>
+      </div>
       <UButton
         size="xs"
         color="neutral"
@@ -161,9 +167,9 @@ class="size-5 opacity-40" />
                 :label="t('app.pos.unitPrice')"
                 size="xs"
               >
-                <UFieldGroup class="w-full">
+                <div class="relative">
                   <UInputNumber
-                    :model-value="priceInputValue(line)"
+                    :model-value="line.unitPrice"
                     :min="0"
                     :step="0.01"
                     :increment="false"
@@ -174,19 +180,8 @@ class="size-5 opacity-40" />
                     :disabled="disabled"
                     @update:model-value="onPriceInput(line, $event)"
                   />
-                  <UButton
-                    v-for="option in currencyOptions"
-                    :key="option.value"
-                    :label="option.symbol"
-                    :color="saleCurrency === option.value ? 'primary' : 'neutral'"
-                    :variant="saleCurrency === option.value ? 'soft' : 'outline'"
-                    :disabled="disabled"
-                    :title="t(option.labelKey)"
-                    :aria-label="t(option.labelKey)"
-                    :aria-pressed="saleCurrency === option.value"
-                    @click="emit('updateSaleCurrency', option.value)"
-                  />
-                </UFieldGroup>
+                  <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted">{{ symbol }}</span>
+                </div>
               </UFormField>
               <UFormField
                 :label="t('app.pos.lineDiscount')"

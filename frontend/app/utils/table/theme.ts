@@ -41,6 +41,15 @@ export const appTableUiLine = {
   td: 'border border-default bg-default px-3 py-2 align-middle text-xs text-default transition-colors',
 } as const
 
+/** Document line tables that fit the page width: full-width base (no
+ *  min-width / horizontal scroll on desktop) + denser cell padding. */
+export const appTableUiLineFit = {
+  ...appTableUiLine,
+  base: 'w-full border-separate border-spacing-0',
+  th: 'sticky top-0 z-10 border border-default bg-elevated px-2 py-1.5 text-left text-xs font-semibold text-highlighted whitespace-nowrap',
+  td: 'border border-default bg-default px-2 py-1.5 align-middle text-xs text-default transition-colors',
+} as const
+
 export const appTableUiCompactReadonly = {
   ...appTableUiCompact,
   tbody: 'bg-default text-default [&>tr:hover>td]:bg-muted',

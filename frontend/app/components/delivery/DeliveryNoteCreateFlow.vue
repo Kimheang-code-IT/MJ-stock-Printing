@@ -4,10 +4,11 @@ import type { ModuleTable } from '~/config/modules'
 import type { DocumentTabSchema } from '~/types/stock-pos/common'
 import { useDeliveryCommands } from '~/repositories/index'
 import { collectionOptionsEndpoint } from '~/utils/module/document-tabs'
+import { formatDate } from '~/utils/format/format-service'
 import {
+  invoiceDeliveryStatusLabelKey,
   normalizeDeliverableInvoice,
   type DeliverableInvoice,
-  type DeliverableInvoiceItem,
 } from '~/utils/delivery/notes'
 import { printDeliveryNoteDocument } from '~/utils/print/delivery-note'
 
@@ -15,20 +16,23 @@ import { printDeliveryNoteDocument } from '~/utils/print/delivery-note'
  * Reusable delivery-note create flow (spec §2.1.9 / §5.13) — built on the
  * same reusable document components as the purchase page:
  * DocumentAppDocumentPage + schema-driven AppDocumentForm sections +
- * the generic TableAppLineTable. Layout mirrors Purchase:
+ * the generic TableAppLineTable. Simplified invoice-level UI:
  *
- * - "Delivery Information" header section: phone (required), location
- *   (required), note.
- * - "Lines to deliver" line table: each row adds one invoice line —
- *   pick the Invoice (deliverable confirmed invoices, live options), then
- *   the Product line of that invoice; UOM / Ordered / Remaining are
- *   snapshots and Qty to deliver is editable (bounded by Remaining).
- *   Multiple invoices of the SAME customer can be added as rows.
+ * - "Delivery Information" header section: customer (required), phone
+ *   (required), address (required), delivery price, note. Driver / vehicle /
+ *   date / status stay backend-managed (not part of the visible form).
+ * - "Invoices to deliver" line table: each row adds ONE invoice — the
+ *   picker offers only the selected customer's deliverable invoices
+ *   (same-customer rule, searchable by invoice no), auto-fills the row's
+ *   Date + Status, and blocks duplicate selection. Multiple invoices of the
+ *   SAME customer can be added as rows. Every selected invoice expands to
+ *   its deliverable item lines (full remaining qty) on submit — the item
+ *   level delivery-note API contract (saleId / saleItemId / productId /
+ *   qtyToDeliver) is unchanged.
  *
  * POS auto-entry passes `autoSelectSaleId` (invoice that just completed,
- * all its lines prefilled) plus `initialPhone` / `initialLocation` from the
- * checkout snapshot. No driver/vehicle/schedule form; no stock mutation
- * (stock-out already happened at POS).
+ * row prefilled) plus `initialPhone` / `initialLocation` from the checkout
+ * snapshot. No stock mutation (stock-out already happened at POS).
  */
 const props = withDefaults(defineProps<{
   /** POS auto-entry: sale id whose lines are prefilled after invoices load. */
@@ -57,26 +61,18 @@ const deliveryCommands = useDeliveryCommands()
 const { t } = useI18n()
 const toast = useToast()
 
-type DeliveryRow = Record<string, unknown> & {
-  saleId: string
-  saleItemId: string
-  product: string
-  uomSymbol: string
-  qtyOrdered: number
-  qtyPreviouslyDelivered: number
-  qtyRemaining: number
-  qtyToDeliver: number
-}
-
 const model = reactive<Record<string, unknown>>({
   customerId: '',
   deliveryPhone: '',
   deliveryLocation: '',
+  deliveryFee: undefined,
+  note: '',
+  // Backend-managed fields (not part of the visible form): driver / vehicle
+  // stay unset and the note is dated today until the workflow advances.
   driverName: '',
   vehicleNo: '',
   deliveryDate: new Date().toISOString().slice(0, 10),
   status: 'Draft',
-  note: '',
   lines: [] as Array<Record<string, unknown>>,
 })
 
@@ -106,7 +102,7 @@ onMounted(async () => {
       const invoice = invoiceById.value.get(preselect)
       if (invoice) {
         model.customerId = invoice.customerId
-        model.lines = invoice.items.map(item => rowOf(preselect, item))
+        model.lines = [{ saleId: preselect, invoiceDate: '', invoiceStatus: '' }]
       }
       else toast.add({ title: t('app.delivery.noDeliverableSales'), color: 'warning' })
     }
@@ -119,39 +115,20 @@ onMounted(async () => {
 const invoiceById = computed(() =>
   new Map(invoices.value.map(invoice => [invoice.saleId, invoice])))
 
-function invoiceOptionsFor(): Array<{ label: string, value: string }> {
-  // Only the selected customer's invoices with remaining undelivered qty
-  // (same-customer rule, spec §2.1.9).
+/** Invoice picker of a row: only the selected customer's deliverable
+ *  invoices (same-customer rule, spec §2.1.9), minus invoices already
+ *  picked on other rows (no duplicates). Label = invoice no; searchable. */
+function invoiceOptionsFor(row: Record<string, unknown>): Array<{ label: string, value: string }> {
   const customerId = String(model.customerId || '')
+  const rows = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
+  const taken = new Set(rows
+    .filter(other => other !== row)
+    .map(other => String(other.saleId || ''))
+    .filter(Boolean))
   return invoices.value
     .filter(invoice => !customerId || invoice.customerId === customerId)
-    .map(invoice => ({
-      label: `${invoice.invoiceNo} — ${invoice.customer || t('app.pos.walkIn')}`,
-      value: invoice.saleId,
-    }))
-}
-
-/** Product lines of the row's invoice (deliverable remainder only). */
-function itemOptionsFor(row: Record<string, unknown>): Array<{ label: string, value: string }> {
-  const invoice = invoiceById.value.get(String(row.saleId || ''))
-  if (!invoice) return []
-  return invoice.items.map(item => ({
-    label: `${item.product} · ${t('app.delivery.qtyRemaining')} ${item.qtyRemaining}`,
-    value: item.saleItemId,
-  }))
-}
-
-function rowOf(saleId: string, item: DeliverableInvoiceItem): DeliveryRow {
-  return {
-    saleId,
-    saleItemId: item.saleItemId,
-    product: item.product,
-    uomSymbol: item.uomSymbol,
-    qtyOrdered: item.qtyOrdered,
-    qtyPreviouslyDelivered: Math.max(0, item.qtyOrdered - item.qtyRemaining),
-    qtyRemaining: item.qtyRemaining,
-    qtyToDeliver: item.qtyRemaining,
-  }
+    .filter(invoice => !taken.has(invoice.saleId))
+    .map(invoice => ({ label: invoice.invoiceNo, value: invoice.saleId }))
 }
 
 const linesTable = computed<ModuleTable>(() => ({
@@ -164,20 +141,14 @@ const linesTable = computed<ModuleTable>(() => ({
       label: t('app.delivery.selectInvoices'),
       type: 'select',
       required: true,
-      optionItems: () => invoiceOptionsFor(),
+      // Searchable invoice-no picker; wide column carries the dropdown.
+      searchable: true,
+      width: 'w-80 min-w-64',
+      optionItems: row => invoiceOptionsFor(row),
     },
-    {
-      key: 'saleItemId',
-      label: t('app.pos.product'),
-      type: 'select',
-      required: true,
-      optionItems: row => itemOptionsFor(row),
-    },
-    { key: 'uomSymbol', label: t('app.pos.uom'), type: 'text', computed: true },
-    { key: 'qtyOrdered', label: t('app.delivery.qtyOrdered'), type: 'number', computed: true },
-    { key: 'qtyPreviouslyDelivered', label: t('app.delivery.previouslyDelivered'), type: 'number', computed: true },
-    { key: 'qtyRemaining', label: t('app.delivery.qtyRemaining'), type: 'number', computed: true },
-    { key: 'qtyToDeliver', label: t('app.delivery.deliverNow'), type: 'number', required: true },
+    // Auto-filled snapshots of the selected invoice (display only).
+    { key: 'invoiceDate', label: t('app.fields.date'), type: 'text', computed: true, width: 'w-32 min-w-28' },
+    { key: 'invoiceStatus', label: t('app.fields.status'), type: 'text', computed: true, width: 'w-36 min-w-32' },
   ],
 }))
 
@@ -201,10 +172,7 @@ const tabs = computed<DocumentTabSchema[]>(() => [{
         },
         { key: 'deliveryPhone', labelKey: 'app.delivery.deliveryPhone', type: 'text', required: true },
         { key: 'deliveryLocation', labelKey: 'app.delivery.deliveryAddress', type: 'text', required: true },
-        { key: 'driverName', labelKey: 'app.delivery.driverName', type: 'text' },
-        { key: 'vehicleNo', labelKey: 'app.delivery.vehicleNo', type: 'text' },
-        { key: 'deliveryDate', labelKey: 'app.fields.date', type: 'date' },
-        { key: 'status', labelKey: 'app.fields.status', type: 'text', readOnly: true },
+        { key: 'deliveryFee', labelKey: 'app.delivery.deliveryPrice', type: 'number' },
         { key: 'note', labelKey: 'app.fields.note', type: 'textarea', colSpan: 2 },
       ],
     },
@@ -237,16 +205,14 @@ watch(() => model.customerId, (customerId) => {
 })
 
 /**
- * Keep rows coherent: resolve the invoice's customer (same-customer rule),
- * snapshot product/UOM/quantities from the selected sale line, drop
- * duplicate lines, and default Qty to deliver to the remaining qty.
+ * Keep rows coherent: every selected invoice must belong to the form's
+ * customer (same-customer rule), may appear on ONE row only (no duplicate
+ * selection), and auto-fills the row's Date + Status from the invoice.
  */
-const lastFilled = ref(new Set<string>())
-
 watch(() => model.lines, (rows) => {
   if (!Array.isArray(rows)) return
   let changed = false
-  let customerId = ''
+  const selectedCustomer = String(model.customerId || '')
   const seen = new Set<string>()
   const next: Array<Record<string, unknown>> = []
   for (const raw of rows as Array<Record<string, unknown>>) {
@@ -261,8 +227,7 @@ watch(() => model.lines, (rows) => {
       changed = true
       continue
     }
-    if (!customerId) customerId = invoice.customerId
-    if (invoice.customerId !== customerId) {
+    if (selectedCustomer && invoice.customerId !== selectedCustomer) {
       toast.add({
         title: t('app.delivery.mixedCustomer'),
         description: t('app.delivery.sameCustomerHint'),
@@ -271,39 +236,31 @@ watch(() => model.lines, (rows) => {
       changed = true
       continue
     }
-    const item = invoice.items.find(row => row.saleItemId === String(raw.saleItemId || ''))
-      || invoice.items[0]
-    if (!item) {
+    if (seen.has(saleId)) {
+      // Duplicate invoice selection — keep only the first row.
       changed = true
       continue
     }
-    if (seen.has(item.saleItemId)) {
-      changed = true
-      continue
+    seen.add(saleId)
+    const row = {
+      saleId,
+      invoiceDate: formatDate(invoice.date),
+      invoiceStatus: t(invoiceDeliveryStatusLabelKey(invoice.deliveryStatus)),
     }
-    seen.add(item.saleItemId)
-    const filledKey = `${item.saleItemId}`
-    const typed = Number(raw.qtyToDeliver ?? 0)
-    const qty = !lastFilled.value.has(filledKey) && typed <= 0
-      ? item.qtyRemaining
-      : Math.min(Math.max(0, typed), item.qtyRemaining)
-    lastFilled.value.add(filledKey)
-    const row = rowOf(saleId, item)
-    row.qtyToDeliver = qty
     if (JSON.stringify(row) !== JSON.stringify(raw)) changed = true
     next.push(row)
   }
   if (changed || next.length !== rows.length) model.lines = next
 }, { deep: true })
 
-const deliveryRows = computed<DeliveryRow[]>(() =>
-  (Array.isArray(model.lines) ? model.lines as DeliveryRow[] : []))
-
-const submitRows = computed(() => deliveryRows.value.filter(row =>
-  row.saleId && row.saleItemId && Number(row.qtyToDeliver) > 0))
+/** Invoices picked on the rows (order preserved). */
+const selectedInvoices = computed<DeliverableInvoice[]>(() =>
+  (Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : [])
+    .map(row => invoiceById.value.get(String(row.saleId || '')))
+    .filter((invoice): invoice is DeliverableInvoice => Boolean(invoice)))
 
 const canSubmit = computed(() => Boolean(
-  submitRows.value.length > 0
+  selectedInvoices.value.length > 0
   && String(model.customerId || '').trim()
   && String(model.deliveryPhone || '').trim()
   && String(model.deliveryLocation || '').trim()))
@@ -313,23 +270,27 @@ async function save(confirm: boolean) {
   if (confirm && !props.canConfirm) return
   saving.value = true
   try {
-    const first = invoiceById.value.get(submitRows.value[0]!.saleId)
+    const first = selectedInvoices.value[0]
     const record = await deliveryCommands.createDeliveryNote({
       customerId: String(model.customerId || '').trim() || first?.customerId || null,
       deliveryPhone: String(model.deliveryPhone || '').trim() || null,
       deliveryLocation: String(model.deliveryLocation || '').trim() || null,
+      // Backend-managed header fields kept intact (not part of the form).
       driverName: String(model.driverName || '').trim() || null,
       vehicleNo: String(model.vehicleNo || '').trim() || null,
       deliveryDate: String(model.deliveryDate || '').trim() || null,
+      deliveryFee: Number(model.deliveryFee ?? 0) > 0 ? Number(model.deliveryFee) : null,
       note: String(model.note || '').trim() || null,
       confirm,
-      lines: submitRows.value.map(row => ({
-        saleId: row.saleId,
-        saleItemId: row.saleItemId,
-        productId: String(invoiceById.value.get(row.saleId)?.items
-          .find(item => item.saleItemId === row.saleItemId)?.productId || ''),
-        qtyToDeliver: Number(row.qtyToDeliver),
-      })),
+      // Each selected invoice expands to ALL of its deliverable item lines
+      // at their full remaining qty (required saleItemId/productId intact).
+      lines: selectedInvoices.value.flatMap(invoice =>
+        invoice.items.map(item => ({
+          saleId: invoice.saleId,
+          saleItemId: item.saleItemId,
+          productId: item.productId,
+          qtyToDeliver: item.qtyRemaining,
+        }))),
     })
     toast.add({
       title: `${t('app.delivery.created')} · ${record.deliveryNo}`,

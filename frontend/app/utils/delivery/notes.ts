@@ -245,6 +245,10 @@ export interface DeliverableInvoice {
   phone: string
   location: string
   saleStatus: string
+  /** Invoice date (sale_date snapshot) — auto-filled in the create table. */
+  date: string
+  /** Derived delivery-fulfillment status (NOT_DELIVERED | PARTIALLY_DELIVERED). */
+  deliveryStatus: string
   qtyRemaining: number
   items: DeliverableInvoiceItem[]
 }
@@ -264,6 +268,8 @@ export function normalizeDeliverableInvoice(row: Record<string, unknown>): Deliv
     phone: String(row.phone ?? ''),
     location: String(row.location ?? row.address ?? ''),
     saleStatus: String(row.saleStatus ?? row.sale_status ?? ''),
+    date: String(row.date ?? row.saleDate ?? row.sale_date ?? ''),
+    deliveryStatus: String(row.deliveryStatus ?? row.delivery_status ?? 'NOT_DELIVERED'),
     qtyRemaining: num4(row.qtyRemaining ?? row.qty_remaining),
     items: rawItems.map(item => ({
       saleItemId: String(item.saleItemId ?? item.sale_item_id ?? item.id ?? ''),

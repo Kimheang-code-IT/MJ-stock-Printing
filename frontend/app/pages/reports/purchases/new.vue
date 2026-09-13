@@ -2,7 +2,8 @@
 import { PAYMENT_METHODS } from '~/config/pos-options'
 import type { ModuleTable } from '~/config/modules'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
-import { usePosCommands } from '~/repositories/index'
+import { usePosCommands, useStockQueries } from '~/repositories/index'
+import type { ProductBatchRow } from '~/repositories/contracts/entities'
 import type {
   DocumentFieldSchema,
   DocumentTabSchema,
@@ -19,8 +20,8 @@ import { conversionForUom, multiplyDecimalSafe } from '~/utils/stock/uom-convers
  * balance, the payment row, stock movements, the document number and the
  * audit entry all happen in that single backend transaction.
  *
- * Entry points: Purchase Report Create action, and the Stock In history
- * dialog Add button (routes here with ?productId= preselected).
+ * Entry points: Purchase Report Create action, and the Stock Products row
+ * action "Purchase Stock" (routes here with ?productId= preselected).
  */
 definePageMeta({
   titleKey: 'app.pages.purchaseReport',
@@ -98,6 +99,105 @@ function blankLine(): Record<string, unknown> {
   return { productId: '', uomId: '', quantity: 0, unitAmount: 0, amount: 0, batchNo: '', expiryDate: '' }
 }
 
+// ------------------------------------------------------- batch picking
+
+/** Sentinel option in the Batch picker: generates the next batch no (latest
+ *  batch + 1, preserving prefix and zero padding). The lot itself is only
+ *  created when the purchase is submitted. */
+const NEW_BATCH = '__new__'
+
+const stockQueries = useStockQueries()
+/** Existing batch lots per product (batch cache; [] while loading). */
+const batchCache = ref(new Map<string, ProductBatchRow[]>())
+
+async function ensureBatches(productId: string): Promise<ProductBatchRow[]> {
+  const cached = batchCache.value.get(productId)
+  if (cached) return cached
+  batchCache.value.set(productId, [])
+  try {
+    const result = await stockQueries.listProductBatches(productId)
+    batchCache.value.set(productId, result.items)
+    return result.items
+  }
+  catch {
+    return []
+  }
+}
+
+/** Latest usable lot of the product (newest receipt that is not expired).
+ *  This is the Batch No. default after selecting a product. */
+function latestBatch(batches: ProductBatchRow[]): ProductBatchRow | null {
+  const usable = batches.filter(batch => batch.batchNo && batch.status !== 'Expired')
+  if (!usable.length) return null
+  return [...usable].sort((a, b) => b.createdDate.localeCompare(a.createdDate))[0] ?? null
+}
+
+/** Next batch number: latest batch + 1 — increment the numeric suffix,
+ *  preserving the prefix and zero padding (BATCH-001 → BATCH-002), skipping
+ *  numbers already taken. No previous batch → BATCH-001. */
+function generateBatchNo(batches: ProductBatchRow[]): string {
+  const taken = new Set(batches.map(batch => batch.batchNo).filter(Boolean))
+  const latest = [...batches]
+    .filter(batch => batch.batchNo)
+    .sort((a, b) => b.createdDate.localeCompare(a.createdDate))[0]?.batchNo
+  if (!latest) return 'BATCH-001'
+  const match = latest.match(/^(.*?)(\d+)$/)
+  if (!match) return `${latest}-1`
+  const prefix = match[1]!
+  const width = match[2]!.length
+  let candidate = latest
+  let seq = Number(match[2])
+  do {
+    seq += 1
+    candidate = `${prefix}${String(seq).padStart(width, '0')}`
+  } while (taken.has(candidate))
+  return candidate
+}
+
+/** Batch picker options of a row: the product's existing lots (stocking into
+ *  one preserves its identity/history), the row's generated new batch no
+ *  while it is selected, and the "+ New Batch" option. */
+function batchOptionsFor(row: Record<string, unknown>): Array<{ label: string, value: string }> {
+  const productId = String(row.productId || '')
+  const product = productFor(productId)
+  if (!product || !tracksBatch(product)) return []
+  const items = (batchCache.value.get(productId) || [])
+    .filter(batch => batch.batchNo)
+    .map(batch => ({ label: batch.batchNo, value: batch.batchNo }))
+  const picked = String(row.batchNo || '')
+  if (picked && picked !== NEW_BATCH && !items.some(item => item.value === picked)) {
+    items.push({ label: picked, value: picked })
+  }
+  items.push({ label: t('app.purchase.newBatch'), value: NEW_BATCH })
+  return items
+}
+
+/** After selecting a product: default the Batch No. to its latest lot
+ *  (+ expiry). Re-validates against the live row: product unchanged, batch
+ *  untouched. */
+async function autofillLatestBatch(row: Record<string, unknown>, productId: string) {
+  const batches = await ensureBatches(productId)
+  if (!(model.lines as Array<Record<string, unknown>>).includes(row)) return
+  if (String(row.productId || '') !== productId) return
+  if (String(row.batchNo || '')) return
+  const product = productFor(productId)
+  if (!product || !tracksBatch(product)) return
+  const latest = latestBatch(batches)
+  if (!latest) return
+  row.batchNo = latest.batchNo
+  if (latest.expiryDate) row.expiryDate = latest.expiryDate
+}
+
+/** "+ New Batch" picked: resolve the generated number once the product's
+ *  batches are loaded, then show it as the row's selected batch. */
+async function applyNewBatch(row: Record<string, unknown>, productId: string) {
+  const batches = await ensureBatches(productId)
+  if (!(model.lines as Array<Record<string, unknown>>).includes(row)) return
+  if (String(row.productId || '') !== productId) return
+  if (String(row.batchNo || '') !== NEW_BATCH) return
+  row.batchNo = generateBatchNo(batches)
+}
+
 const supplierOptions = computed(() => store.list('suppliers').map(row => ({
   label: String(row.name || ''),
   value: String(row.id),
@@ -108,7 +208,8 @@ function productFor(productId: string) {
 }
 
 /** Products not already on another line (one line per product; the backend
- *  rejects duplicates on the same stock-in document). */
+ *  rejects duplicates on the same stock-in document). The picker shows the
+ *  product NAME only and searches it (barcode/SKU stay out of the dropdown). */
 function availableProductOptions(row: Record<string, unknown>) {
   const lines = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
   const excluded = new Set(lines
@@ -117,11 +218,7 @@ function availableProductOptions(row: Record<string, unknown>) {
     .filter(Boolean))
   return store.list('products')
     .filter(row => !excluded.has(String(row.id)))
-    .map(row => ({
-      label: [String(row.barcode || ''), String(row.name || '')]
-        .filter(Boolean).join(' · '),
-      value: String(row.id),
-    }))
+    .map(row => ({ label: String(row.name || ''), value: String(row.id) }))
 }
 
 /** Batch tracking is per product toggle (spec §5.9 Stock Costing). */
@@ -137,25 +234,6 @@ function tracksExpiry(product: Record<string, unknown> | null): boolean {
     || (product.trackExpiry == null && product.expiryTracking === true)
 }
 
-/** Pricing Original UOMs of the row's product (base UOM included). */
-function rowUomOptions(row: Record<string, unknown>) {
-  const product = productFor(String(row.productId || ''))
-  if (!product) return []
-  const conversions = Array.isArray(product.uomConversions)
-    ? product.uomConversions as Array<Record<string, unknown>>
-    : []
-  const rows = conversions
-    .filter(row => row.uomId)
-    .map(row => ({ label: String(row.uomSymbol || row.uomId || ''), value: String(row.uomId) }))
-  if (!rows.some(row => row.value === String(product.uomId || ''))) {
-    rows.unshift({
-      label: String(product.uomSymbol || product.uom || ''),
-      value: String(product.uomId || ''),
-    })
-  }
-  return rows
-}
-
 /** Cost per the selected UOM from the product Pricing rows. */
 function suggestedCost(productId: string, uomId: string): number {
   const product = productFor(productId)
@@ -167,17 +245,18 @@ function suggestedCost(productId: string, uomId: string): number {
   return suggested > 0 ? suggested : 0
 }
 
-// Keep rows coherent: valid UOM for the row's product + suggested cost when
-// empty + base-qty readout + batch/expiry clearing for unbatched products
+// Keep rows coherent: the row's UOM follows the product's default UOM (no
+// visible UOM column, but the conversion still feeds stock-in math) +
+// suggested cost when empty + batch/expiry clearing for unbatched products
 // (the generic line table cannot derive cross-column defaults itself).
 watch(() => model.lines, (rows) => {
   if (!Array.isArray(rows)) return
-  const next = (rows as Array<Record<string, unknown>>).map((row) => {
+  const next = (rows as Array<Record<string, unknown>>).map((row, index) => {
     const product = productFor(String(row.productId || ''))
     if (!product) return row
-    const uomId = String(row.uomId || '')
-    const validUom = uomId && conversionForUom(product, uomId)
-    const nextUomId = validUom ? uomId : String(product.uomId || '')
+    // Internal UOM: the product's default/base UOM (hidden column, conversion
+    // logic preserved — ledger math happens server-side from factorToBase).
+    const nextUomId = String(product.uomId || '')
     const unitAmount = Number(row.unitAmount || 0)
     const nextCost = unitAmount > 0 ? unitAmount : suggestedCost(String(row.productId), nextUomId)
     const nextRow: Record<string, unknown> = { ...row, uomId: nextUomId, unitAmount: nextCost }
@@ -185,8 +264,28 @@ watch(() => model.lines, (rows) => {
     // happens server-side from factorToBase).
     nextRow.baseQuantity = multiplyDecimalSafe(Number(row.quantity || 0), conversionForUom(product, nextUomId)?.factorToBase ?? 1)
     // Batch/expiry columns only when the product tracks them.
-    if (!tracksBatch(product)) nextRow.batchNo = ''
+    if (!tracksBatch(product)) {
+      nextRow.batchNo = ''
+    }
     if (!tracksExpiry(product)) nextRow.expiryDate = ''
+    // Product changed → default the Batch No. to the product's latest lot.
+    const prevRow = (rows as Array<Record<string, unknown>>)[index]
+    if (String(nextRow.productId || '') !== String(prevRow?.productId || '')) {
+      void autofillLatestBatch(nextRow, String(nextRow.productId || ''))
+    }
+    else if (nextRow.batchNo !== prevRow?.batchNo) {
+      const picked = String(nextRow.batchNo || '')
+      if (picked === NEW_BATCH) {
+        // Generate the next batch number (shown as the selected value).
+        void applyNewBatch(nextRow, String(nextRow.productId || ''))
+      }
+      else if (picked) {
+        // Picking an existing lot stamps the row's expiry from that lot.
+        const lot = (batchCache.value.get(String(nextRow.productId || '')) || [])
+          .find(batch => batch.batchNo === picked)
+        if (lot?.expiryDate) nextRow.expiryDate = lot.expiryDate
+      }
+    }
     if (JSON.stringify(nextRow) !== JSON.stringify(row)) return nextRow
     return row
   })
@@ -199,24 +298,31 @@ const linesTable = computed<ModuleTable>(() => ({
   key: 'lines',
   title: t('app.purchase.lines'),
   addLabelKey: 'app.ui.addRow',
+  // Stretch to the page width (no horizontal scroll on desktop); the Product
+  // column flex-fills the remainder. Narrow screens scroll via the wrapper.
+  fitWidth: true,
   columns: [
     {
       key: 'productId',
       label: t('app.pos.product'),
       type: 'select',
       required: true,
+      // Searchable by product name; flex-fill = widest column.
+      searchable: true,
+      width: 'min-w-40',
       optionItems: row => availableProductOptions(row),
     },
-    { key: 'batchNo', label: t('app.stock.batchNo'), type: 'text' },
-    { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date' },
     {
-      key: 'uomId',
-      label: t('app.pos.uom'),
+      key: 'batchNo',
+      label: t('app.stock.batchNo'),
       type: 'select',
-      optionItems: row => rowUomOptions(row),
+      // Select-only: existing lots + "+ New Batch" (auto-generated number).
+      searchable: true,
+      width: 'w-44 min-w-36',
+      optionItems: row => batchOptionsFor(row),
     },
+    { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date', width: 'w-32' },
     { key: 'quantity', label: t('app.fields.quantity'), type: 'number', required: true },
-    { key: 'baseQuantity', label: t('app.stock.baseQty'), type: 'number', computed: true },
     { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number' },
     { key: 'amount', label: t('app.fields.lineTotal'), type: 'number', computed: true },
   ],
@@ -300,7 +406,8 @@ const lines = computed<PurchaseRow[]>(() =>
   (Array.isArray(model.lines) ? model.lines as PurchaseRow[] : []))
 
 /** Lines ready to save: product + quantity + cost are all set, and the
- *  batch/expiry requirements of the row's product are satisfied. */
+ *  batch/expiry requirements of the row's product are satisfied. A row still
+ *  on the "+ New Batch" sentinel (generation in flight) is not ready yet. */
 const completedLines = computed(() => lines.value.filter((row) => {
   if (!row.productId) return false
   if (!(Number(row.quantity) > 0)) return false
@@ -308,7 +415,7 @@ const completedLines = computed(() => lines.value.filter((row) => {
   const product = productFor(row.productId)
   // Spec: batch no required when the product tracks batches; expiry date
   // required when it tracks expiry (expiry implies batch).
-  if (tracksBatch(product) && !String(row.batchNo ?? '').trim()) return false
+  if (tracksBatch(product) && (!String(row.batchNo ?? '').trim() || String(row.batchNo) === NEW_BATCH)) return false
   if (tracksExpiry(product) && !String(row.expiryDate ?? '').trim()) return false
   return true
 }))
@@ -349,7 +456,9 @@ async function save() {
           uomId: String(row.uomId || product?.uomId || '') || undefined,
           uomSymbol: String(conversion?.uomSymbol || product?.uomSymbol || product?.uom || '') || undefined,
           factorToBase: conversion?.factorToBase ?? 1,
-          // Batch traceability: receive into the named lot with its expiry.
+          // Batch traceability: receive into the named lot with its expiry —
+          // an existing lot is restocked (identity preserved), the generated
+          // "+ New Batch" number creates the lot at confirmation only.
           batchNo: String(row.batchNo || '').trim() || null,
           expiryDate: String(row.expiryDate || '').trim() || null,
         }

@@ -761,6 +761,8 @@
     },
     "purchase": {
       "newTitle": "New Purchase",
+      "newBatch": "+ New Batch",
+      "batchInvalid": "Batch numbers must be unique — pick an existing lot or enter a new batch no.",
       "selectSupplier": "Select supplier",
       "lines": "Products",
       "unitCost": "Unit cost",
@@ -935,6 +937,10 @@
       "priceHistoryActivated": "Price version activated.",
       "priceHistoryFailed": "Could not save the price version.",
       "priceHistoryHint": "Exactly one version is POS-active; activating copies the price onto the product. Old sales keep their historical price.",
+      "purchaseDate": "Purchase Date",
+      "priceVersionUomPrices": "UOM Prices (within this version)",
+      "priceVersionBatchHint": "Batch/Lot is optional — blank means general pricing for every lot.",
+      "priceHistoryAllLots": "All lots",
       "inStock": "In Stock",
       "batchSalePriceHint": "Amount = Qty × Cost Price. Sale Price is the Product + UOM price (never the batch cost)."
     },

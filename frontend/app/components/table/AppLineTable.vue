@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import { h, type Component } from 'vue'
-import { CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputNumber, USelect } from '#components'
+import { CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputMenu, UInputNumber, USelect } from '#components'
 import type { ModuleLineColumn, ModuleTable } from '~/config/modules'
 import { useModuleLabel } from '~/composables/module/useModule'
 import type { DatePickerGranularity } from '~/utils/date-picker'
 import { fileTableRowBy, fileTableRowCreated, fileTableRowName, filePreviewHref, revokeFilePreview, useFileAttachments } from '~/utils/module/attachments'
 import { fileTypeIcon } from '~/utils/file-icon'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
-import { appTableUiCompactReadonly, appTableUiLine } from '~/utils/table/theme'
+import { appTableUiCompactReadonly, appTableUiLine, appTableUiLineFit } from '~/utils/table/theme'
 
 const props = withDefaults(defineProps<{
   table: ModuleTable
@@ -51,18 +51,31 @@ const TableCheckbox = UCheckbox as Component
 const TableDate = CommonAppInputDate as Component
 const TableIcon = UIcon as Component
 const TableInput = UInput as Component
+const TableInputMenu = UInputMenu as Component
 const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
 const TableSelect = USelect as Component
 
 const isFileTable = computed(() => props.table.kind === 'files' || props.table.key === 'attachments')
 const cellSize = computed(() => props.compact ? 'xs' : 'sm')
-const tableUi = computed(() => props.compact ? appTableUiCompactReadonly : appTableUiLine)
+const tableUi = computed(() => {
+  if (props.table.fitWidth) return appTableUiLineFit
+  return props.compact ? appTableUiCompactReadonly : appTableUiLine
+})
+/** fitWidth: table stretches to the page width (flex columns absorb the
+ *  remainder); otherwise min-w-max keeps every input readable and scrolls. */
+const tableClass = computed(() => [
+  'app-table',
+  props.compact ? 'app-table-compact' : '',
+  props.table.fitWidth ? 'w-full' : 'min-w-max',
+])
 
 const moneyKeys = new Set(['unitPrice', 'discountPercent', 'taxPercent', 'discountAmount', 'discount', 'taxAmount', 'lineTotal', 'total', 'amount'])
 const numericKeys = new Set(['quantity', 'actualQuantity', 'remaining', 'netWeightKg', 'grossWeightKg', 'weightKg', 'taxRate', ...moneyKeys])
 
 function columnCellClass(column: ModuleLineColumn) {
+  // Explicit per-column width override wins (schema opt-in).
+  if (column.width) return column.width
   if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') return 'w-36 min-w-28'
   if (column.key === 'productId' || column.key === 'productName') return 'w-72 min-w-56'
   if (column.key === 'quantity' || column.key === 'actualQuantity' || column.key === 'remaining') return 'w-20 min-w-20 text-right tabular-nums'
@@ -315,6 +328,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
     {
       id: 'rowNumber',
       header: '#',
+      meta: { class: { th: 'w-8', td: 'w-8' } },
       cell: ({ row }) => h('span', { class: props.compact ? 'text-[11px] tabular-nums text-muted' : 'text-xs tabular-nums text-muted' }, Number(row.original._rowIndex || 0) + 1),
       enableSorting: false,
     },
@@ -350,6 +364,19 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           const items = resolvedItems?.length
             ? resolvedItems
             : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
+          if (column.searchable) {
+            // Searchable picker (e.g. product by name): UInputMenu with value-key.
+            return h(TableInputMenu, {
+              'modelValue': String(row.original[column.key] || '') || undefined,
+              'items': items,
+              'valueKey': 'value',
+              'labelKey': 'label',
+              'disabled': props.disabled || column.computed,
+              'size': cellSize.value,
+              'class': ['w-full', columnCellClass(column)],
+              'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
+            })
+          }
           return h(TableSelect, {
             'modelValue': String(row.original[column.key] || '') || undefined,
             'items': items,
@@ -396,6 +423,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
     cols.push({
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),
+      meta: { class: { th: 'w-10', td: 'w-10' } },
       enableSorting: false,
       cell: ({ row }) => {
         const items: Array<Array<{ label: string, icon: string, color?: 'error', onSelect: () => void }>> = [[]]
@@ -435,6 +463,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
     cols.push({
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),
+      meta: { class: { th: 'w-10', td: 'w-10' } },
       enableSorting: false,
       cell: ({ row }) => h(TableButton, {
         label: 'View',
@@ -495,7 +524,7 @@ class="hidden"
 :data="tableRows"
 :columns="columns"
         :get-row-id="(row: Record<string, unknown>) => String(row._rowIndex ?? '')"
-        :class="['app-table min-w-max', compact ? 'app-table-compact' : '']"
+        :class="tableClass"
 :ui="tableUi" />
     </div>
   </section>

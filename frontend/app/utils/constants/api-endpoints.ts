@@ -70,6 +70,8 @@ export const ApiEndpoints = {
   STOCK_MOVEMENTS: '/api/v1/stock/movements',
   /** Product-scoped movement history (spec: GET /stock/products/{id}/history). */
   PRODUCT_HISTORY: (id: string) => `/api/v1/stock/products/${id}/history`,
+  /** Batch lots of one product (spec: GET /stock/products/{id}/batches). */
+  PRODUCT_BATCHES: (id: string) => `/api/v1/stock/products/${id}/batches`,
   /** Stock In cost lots for one product (spec: GET /stock/products/{id}/cost-history). */
   PRODUCT_COST_HISTORY: (id: string) => `/api/v1/stock/products/${id}/cost-history`,
   /** Nested sale-price versions of one product (spec: /products/{id}/sale-prices). */

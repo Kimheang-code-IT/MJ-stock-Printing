@@ -41,7 +41,10 @@ export type ModuleLineColumn = {
   options?: readonly string[] | string[]
   /** Static items, or a per-row resolver (e.g. UOM options of the row's product). */
   optionItems?: ModuleLineOptionItem[] | ((row: Record<string, unknown>) => ModuleLineOptionItem[])
+  /** Cell/input width override (e.g. 'w-80 min-w-64'); defaults per key. */
   width?: string
+  /** Render select columns with a searchable input menu (e.g. product picker). */
+  searchable?: boolean
   computed?: boolean
   required?: boolean
   labelKey?: string
@@ -58,6 +61,9 @@ export type ModuleTable = {
   presets?: Array<Record<string, unknown>>
   lockedPresets?: boolean
   kind?: 'files'
+  /** Fit the enclosing page width (no min-width / horizontal scroll on
+   *  desktop) with denser cell padding; narrow screens still scroll. */
+  fitWidth?: boolean
 }
 
 export const FILE_ATTACHMENT_COLUMNS: ModuleLineColumn[] = [

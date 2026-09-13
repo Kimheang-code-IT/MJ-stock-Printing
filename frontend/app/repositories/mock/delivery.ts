@@ -204,6 +204,12 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
           phone: '',
           location: '',
           saleStatus: String(sale.saleStatus || sale.status || ''),
+          // Create-table autofill: invoice date + derived fulfillment status.
+          sale_date: String(sale.date ?? sale.saleDate ?? ''),
+          delivery_status: items.some(item =>
+            Number(item.qtyRemaining) === Number(item.qtyOrdered))
+            ? 'PENDING'
+            : 'PARTIALLY_DELIVERED',
           qtyRemaining: items.reduce((sum, item) => {
             const remaining = Number(item.quantity || 0)
               - Number(item.returnedQuantity || 0)

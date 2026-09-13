@@ -100,6 +100,8 @@ export interface DeliveryNoteCreateInput {
   vehicleNo?: string | null
   /** Planned delivery date (fulfillment header). */
   deliveryDate?: string | null
+  /** Delivery fee charged on this note (backend delivery_fee alias). */
+  deliveryFee?: number | null
   note?: string | null
   lines: DeliveryNoteLineInput[]
   /** Save directly as Confirmed instead of Draft. */
@@ -157,11 +159,28 @@ export interface ProductSalePriceRow {
   id: string
   productId: string
   product: string
+  /** Default-sale/base UOM price of the version (products.salePrice mirror). */
   salePrice: number
+  /** Effective date of the version. */
   date: string
-  /** Exactly one version per product is POS-active. */
+  /** Exactly one version per product + batch scope is POS-active. */
   isActive: boolean
   version: number
+  /** Optional batch/lot scope; blank = general pricing (all lots). */
+  batchNo?: string | null
+  purchaseDate?: string | null
+  expiryDate?: string | null
+  /** UOM price rows inside the version (pcs / pack / box…). */
+  uomPrices?: SalePriceUomRow[]
+}
+
+/** One UOM sale price inside a price version. */
+export interface SalePriceUomRow {
+  uomId: string
+  uomSymbol?: string | null
+  factorToBase: number
+  salePrice: number
+  isDefaultSale?: boolean
 }
 
 /** Query accepted by the product-scoped history / price dialogs. */
@@ -210,8 +229,17 @@ export interface StockQueryRepository {
   listSalePrices(productId: string, query?: ProductScopedQuery): Promise<EntityListResult<ProductSalePriceRow>>
   /** Invoice detail behind one SALE movement (Stock Out dialog click-through); null when not a sale. */
   getMovementInvoice(movementId: string): Promise<SaleReceipt | null>
-  /** Add a new POS-active version (version = MAX+1; copies onto products.salePrice). */
-  addSalePrice(productId: string, input: { date: string, salePrice: number }): Promise<ProductSalePriceRow>
+  /** Add a new price version (per-UOM price rows, optional batch scope;
+   *  deactivates the previous matching scope, copies the default-sale UOM
+   *  price onto products.salePrice). */
+  addSalePrice(productId: string, input: {
+    date: string
+    salePrice: number
+    batchNo?: string | null
+    purchaseDate?: string | null
+    expiryDate?: string | null
+    uomPrices?: Array<{ uomId: string, uomSymbol?: string | null, factorToBase: number, salePrice: number, isDefaultSale?: boolean }>
+  }): Promise<ProductSalePriceRow>
   /** Activate one version — exactly one stays active; copies onto products.salePrice. */
   activateSalePrice(productId: string, priceId: string): Promise<ProductSalePriceRow>
 }

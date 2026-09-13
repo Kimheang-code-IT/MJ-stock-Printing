@@ -68,21 +68,29 @@ const deliveryLocation = ref('')
 const needsDelivery = ref(false)
 const depositInput = ref(0)
 const completing = ref(false)
-// Document currency of THIS sale: USD prices convert at the entered rate
-// when the cashier checks out in KHR (all amounts recorded in KHR).
+// ONE document currency for the whole sale (cart → checkout → invoice):
+// cart line unitPrice is stored in the sale currency; switching the global
+// cart currency converts the stored prices exactly once at the entered rate.
 const saleCurrency = ref<'USD' | 'KHR'>('USD')
 const exchangeRateInput = ref<number | undefined>()
 const saleRate = computed(() =>
   saleCurrency.value === 'KHR' ? Math.max(0, Number(exchangeRateInput.value || 0)) : 1)
-/** USD-based cart amounts converted to the document currency. */
-const docFromUsd = (value: number) => value * saleRate.value
+/** Convert every stored cart price between currencies — once per switch, so
+ *  toggling repeatedly never double-converts an amount. */
+function convertCartLines(from: 'USD' | 'KHR', to: 'USD' | 'KHR', rate: number) {
+  if (from === to || !(Number(rate) > 0)) return
+  const factor = to === 'KHR' ? rate : 1 / rate
+  cart.value.forEach((line) => {
+    line.unitPrice = roundMoney(line.unitPrice * factor)
+  })
+}
 /** Shared toggle logic: switching to KHR asks for the exchange rate through
  *  the shared dialog; cancelling keeps the previous currency. Switching
  *  currency also invalidates debt settling (debts keep their own currency). */
 const {
   dialogOpen: exchangeRateDialogOpen,
   toggle: onSaleCurrencyChange,
-  confirm: confirmSaleExchangeRate,
+  confirm: applySaleExchangeRate,
 } = useCurrencyRateDialog({
   currency: saleCurrency,
   rate: exchangeRateInput,
@@ -91,6 +99,29 @@ const {
     depositInput.value = 0
   },
 })
+
+/** Global cart currency switch (cart header selector): runs the shared
+ *  rate-dialog flow, then converts the stored cart prices once. */
+function onSaleCurrencyRequested(value: 'USD' | 'KHR') {
+  if (value === saleCurrency.value) return
+  const from = saleCurrency.value
+  if (value === 'KHR' && saleRate.value <= 0) {
+    // No rate yet — the shared dialog collects it; convert on confirm.
+    onSaleCurrencyChange('KHR')
+    return
+  }
+  const rate = saleRate.value
+  onSaleCurrencyChange(value)
+  convertCartLines(from, value, rate)
+}
+
+/** Shared rate dialog confirmed: record the rate, switch to KHR, convert. */
+function onConfirmSaleRate(rate: number) {
+  const parsed = Number(rate)
+  if (!Number.isFinite(parsed) || parsed <= 0) return
+  applySaleExchangeRate(parsed)
+  convertCartLines('USD', 'KHR', parsed)
+}
 const lastSaleNo = ref('')
 const lastSaleId = ref('')
 
@@ -195,11 +226,9 @@ const selectedDeposit = computed(() => checkoutDepositTotal(
 ))
 const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(needsDelivery.value, deliveryPrice.value))
-// Delivery fee / deposit are typed in the document currency; cart prices are
-// USD-based and convert at the sale rate.
+// Cart prices, delivery fee and deposit are all in the sale currency.
 const due = computed(() => checkoutDue(
-  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value, 0) * saleRate.value
-    + appliedDeliveryPrice.value,
+  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value, 0) + appliedDeliveryPrice.value,
   Number(depositInput.value || 0),
 ))
 const isCredit = computed(() => paymentMethod.value === 'Credit')
@@ -258,7 +287,9 @@ function addProduct(row: Record<string, unknown>) {
   // spec §2.1.3 POS cart rule 2): price = that row's sale price, remaining
   // stock shown in the selected UOM (base stock ÷ conversion qty).
   const lineUom = defaultLineUomFor(row)
-  const price = salePriceForUom(row, lineUom.uomId) ?? Number(row.salePrice || 0)
+  // Product master prices are USD; the cart stores prices in the sale currency.
+  const usdPrice = salePriceForUom(row, lineUom.uomId) ?? Number(row.salePrice || 0)
+  const price = saleCurrency.value === 'KHR' ? usdPrice * saleRate.value : usdPrice
   cart.value.push({
     productId: id,
     name: String(row.name || ''),
@@ -285,8 +316,10 @@ function changeUom(productId: string, uomId: string) {
   if (!line || !uomId || line.uomId === uomId) return
   const product = products.value.find(row => String(row.id) === productId)
   if (!product) return
-  const price = salePriceForUom(product, uomId)
-  if (price == null) return
+  const usdPrice = salePriceForUom(product, uomId)
+  if (usdPrice == null) return
+  // Product master prices are USD; the cart stores prices in the sale currency.
+  const price = saleCurrency.value === 'KHR' ? usdPrice * saleRate.value : usdPrice
   const conversion = conversionForUom(product, uomId)
   const factor = conversion ? conversion.factorToBase : 1
   const symbol = conversion ? conversion.uomSymbol : String(product.uomSymbol || product.uom || '')
@@ -436,8 +469,8 @@ async function completeSale() {
       items: cart.value.map(line => ({
         productId: line.productId,
         quantity: line.quantity,
-        // Line prices are sent in the document currency (KHR sale uses rate).
-        unitPrice: docFromUsd(line.unitPrice),
+        // Line prices are already stored in the sale currency.
+        unitPrice: line.unitPrice,
         discountPercent: line.discountPercent,
         uomId: line.uomId || undefined,
         uomSymbol: line.uom || undefined,
@@ -445,7 +478,7 @@ async function completeSale() {
       })),
       paymentMethod: paymentMethod.value,
       paidAmount: paidAmount.value,
-      discount: docFromUsd(discountTotal.value),
+      discount: discountTotal.value,
       deliveryPrice: appliedDeliveryPrice.value,
       deposit: depositInput.value,
       includedDebtIds: includedDebtIds.value,
@@ -480,7 +513,8 @@ async function completeSale() {
       dateLabel: dateLabel.value,
       customerName: customerName.value || String(sale.customer || t('app.pos.walkIn')),
       cashier: cashierName.value,
-      currency: currency.value,
+      // Everything in the print payload is in the sale currency.
+      currency: saleCurrency.value,
       lines: printLines,
       deliveryPrice: appliedDeliveryPrice.value,
       previousDebtAmount: previousDebtTotal.value,
@@ -569,15 +603,13 @@ async function completeSale() {
       />
       <PosCartPanel
         :cart="cart"
-        :currency="currency"
         :sale-currency="saleCurrency"
-        :sale-rate="saleRate"
         :disabled="!canOperate"
         @change-qty="changeQty"
         @change-uom="changeUom"
         @update-price="updatePrice"
         @update-discount="updateDiscount"
-        @update-sale-currency="onSaleCurrencyChange"
+        @update-sale-currency="onSaleCurrencyRequested"
         @remove="removeLine"
         @clear="clearCart"
       />
@@ -595,32 +627,30 @@ async function completeSale() {
       v-model:needs-delivery="needsDelivery"
       v-model:deposit-input="depositInput"
       v-model:included-debt-ids="includedDebtIds"
-      v-model:exchange-rate="exchangeRateInput"
       :customer-phone="customerPhone"
       :customer-location="customerLocation"
       :sale-currency="saleCurrency"
       :cart="cart"
       :currency="currency"
-      :sale-rate="saleRate"
       :debts="openDebts"
       :customer-options="customerOptions"
       :can-operate="canOperate"
       :completing="completing"
-      @update:sale-currency="onSaleCurrencyChange"
       @back="goBack"
       @complete="completeSale"
     />
 
     <PosPrintSizeDialog
       v-model:open="printSizeOpen"
-      :document-currency="currency"
+      :document-currency="saleCurrency"
       @confirm="onPrintSizeConfirm"
     />
 
-    <!-- Shared KHR exchange-rate dialog: opened by any USD/KHR price toggle. -->
+    <!-- Shared KHR exchange-rate dialog: opened when the cart currency
+         switches to KHR without a known rate. -->
     <CommonAppExchangeRateDialog
       v-model:open="exchangeRateDialogOpen"
-      @confirm="confirmSaleExchangeRate"
+      @confirm="onConfirmSaleRate"
     />
   </div>
 </template>

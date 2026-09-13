@@ -178,6 +178,18 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         date: String(row.date ?? '').slice(0, 10),
         isActive: row.isActive === true || row.isActive === 'Yes',
         version: Number(row.version ?? 0),
+        batchNo: row.batchNo != null ? String(row.batchNo) : null,
+        purchaseDate: row.purchaseDate != null ? String(row.purchaseDate).slice(0, 10) : null,
+        expiryDate: row.expiryDate != null ? String(row.expiryDate).slice(0, 10) : null,
+        uomPrices: Array.isArray(row.uomPrices)
+          ? (row.uomPrices as Record<string, unknown>[]).map(uomRow => ({
+              uomId: String(uomRow.uomId ?? ''),
+              uomSymbol: uomRow.uomSymbol != null ? String(uomRow.uomSymbol) : null,
+              factorToBase: Number(uomRow.factorToBase ?? 1),
+              salePrice: Number(uomRow.salePrice ?? 0),
+              isDefaultSale: uomRow.isDefaultSale === true,
+            }))
+          : [],
       }))
       .sort((a, b) => b.version - a.version || b.date.localeCompare(a.date))
   }
@@ -367,29 +379,43 @@ export function createMockStockQueryRepository(): StockQueryRepository {
       const product = mockRecords('products').find(row => String(row.id) === String(productId))
       if (!product) throw new Error(`Unknown product: ${productId}`)
       const existing = productSalePriceRows(productId)
-      // Spec: exactly one POS-active version per product — retire the current one.
+      const batchNo = String(input.batchNo ?? '').trim() || null
+      // Spec: exactly one POS-active version per product + batch scope —
+      // retire the current active version of the SAME scope only.
       for (const row of mockRecords('productSalePrices')) {
-        if (String(row.productId) === String(productId) && row.isActive) row.isActive = false
+        if (String(row.productId) !== String(productId) || !row.isActive) continue
+        if (String(row.batchNo ?? '') === String(batchNo ?? '')) row.isActive = false
       }
+      // UOM price rows inside the version (fall back to one base row).
+      const uomPrices = (input.uomPrices?.length ? input.uomPrices : [{
+        uomId: String(product.uomId ?? ''),
+        uomSymbol: String(product.uom ?? ''),
+        factorToBase: 1,
+        salePrice,
+        isDefaultSale: true,
+      }]).map(row => ({
+        uomId: String(row.uomId),
+        uomSymbol: row.uomSymbol ?? null,
+        factorToBase: Number(row.factorToBase) || 1,
+        salePrice: round2(Number(row.salePrice)),
+        isDefaultSale: row.isDefaultSale === true,
+      }))
+      const defaultPrice = uomPrices.find(row => row.isDefaultSale)?.salePrice ?? round2(salePrice)
       const nextVersion = existing.reduce((max, row) => Math.max(max, row.version), 0) + 1
       const created = mockInsert('productSalePrices', {
         productId: String(productId),
         product: String(product.name ?? ''),
-        salePrice: round2(salePrice),
+        salePrice: defaultPrice,
         date: String(input.date).slice(0, 10),
         isActive: true,
         version: nextVersion,
+        batchNo,
+        purchaseDate: input.purchaseDate ? String(input.purchaseDate).slice(0, 10) : null,
+        expiryDate: input.expiryDate ? String(input.expiryDate).slice(0, 10) : null,
+        uomPrices,
       })
-      copyActivePriceOntoProduct(productId, salePrice)
-      return mockLatency({
-        id: String(created.id),
-        productId: String(created.productId),
-        product: String(created.product ?? ''),
-        salePrice: Number(created.salePrice ?? 0),
-        date: String(created.date ?? '').slice(0, 10),
-        isActive: created.isActive === true,
-        version: Number(created.version ?? 0),
-      })
+      copyActivePriceOntoProduct(productId, defaultPrice)
+      return mockLatency(productSalePriceRows(productId).find(row => String(row.id) === String(created.id))!)
     },
 
     async activateSalePrice(productId, priceId): Promise<ProductSalePriceRow> {
@@ -399,19 +425,13 @@ export function createMockStockQueryRepository(): StockQueryRepository {
       if (!target) throw new Error(`Sale price ${priceId} not found for product ${productId}`)
       for (const row of rows) {
         if (String(row.productId ?? '') !== String(productId)) continue
-        row.isActive = String(row.id) === String(priceId)
+        // Only the same batch scope switches (batch-first resolution rule).
+        row.isActive = String(row.batchNo ?? '') === String(target.batchNo ?? '')
+          && String(row.id) === String(priceId)
       }
       target.isActive = true
       copyActivePriceOntoProduct(productId, Number(target.salePrice ?? 0))
-      return mockLatency({
-        id: String(target.id),
-        productId: String(target.productId),
-        product: String(target.product ?? ''),
-        salePrice: Number(target.salePrice ?? 0),
-        date: String(target.date ?? '').slice(0, 10),
-        isActive: true,
-        version: Number(target.version ?? 0),
-      })
+      return mockLatency(productSalePriceRows(productId).find(row => String(row.id) === String(priceId))!)
     },
   }
 }

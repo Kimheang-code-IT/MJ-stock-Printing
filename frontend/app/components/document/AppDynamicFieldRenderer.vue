@@ -365,13 +365,13 @@ watch(() => props.field.key, () => {
     />
     <div
       v-if="showPricingTotals"
-      class="ms-auto grid w-full max-w-sm gap-1 px-1 py-1.5 text-xs"
+      class="ms-auto grid w-full max-w-md gap-2.5 rounded-sm border border-default bg-elevated/50 p-4 text-sm"
     >
-      <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center justify-between gap-6">
         <span class="text-muted">{{ $t('app.fields.subtotal') }}</span>
-        <span class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('subtotal')) }}</span>
+        <span class="font-medium text-highlighted tabular-nums">{{ moneyLabel(moneyAmount('subtotal')) }}</span>
       </div>
-      <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center justify-between gap-6">
         <span class="text-muted">{{ $t('app.fields.discount') }}</span>
         <UInputNumber
           v-if="editableTotals"
@@ -380,20 +380,20 @@ watch(() => props.field.key, () => {
           :step="0.01"
           :increment="false"
           :decrement="false"
-          size="xs"
-          class="w-24"
+          size="sm"
+          class="w-32"
           :ui="{ base: 'text-right tabular-nums' }"
           :aria-label="$t('app.fields.discount')"
           @update:model-value="setMoney('discount', $event)"
         />
         <span
           v-else
-          class="font-medium text-highlighted"
+          class="font-medium text-highlighted tabular-nums"
         >− {{ moneyLabel(moneyAmount('discount')) }}</span>
       </div>
       <div
         v-if="includeTaxTotal"
-        class="flex items-center justify-between gap-4"
+        class="flex items-center justify-between gap-6"
       >
         <span class="text-muted">{{ $t('app.fields.tax') }}</span>
         <UInputNumber
@@ -403,23 +403,23 @@ watch(() => props.field.key, () => {
           :step="0.01"
           :increment="false"
           :decrement="false"
-          size="xs"
-          class="w-24"
+          size="sm"
+          class="w-32"
           :ui="{ base: 'text-right tabular-nums' }"
           :aria-label="$t('app.fields.tax')"
           @update:model-value="setMoney('tax', $event)"
         />
         <span
           v-else
-          class="font-medium text-highlighted"
+          class="font-medium text-highlighted tabular-nums"
         >{{ moneyLabel(moneyAmount('tax')) }}</span>
       </div>
-      <div class="mt-1 flex items-center justify-between gap-4 border-t border-default pt-2 text-base">
+      <div class="mt-1 flex items-center justify-between gap-6 border-t border-default pt-3 text-lg">
         <span class="font-semibold text-highlighted">{{ $t('app.fields.total') }}</span>
-        <span class="font-bold text-primary">{{ moneyLabel(moneyAmount('total')) }}</span>
+        <span class="font-bold text-primary tabular-nums">{{ moneyLabel(moneyAmount('total')) }}</span>
       </div>
       <template v-if="showPaidRemaining">
-        <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center justify-between gap-6">
           <span class="text-muted">{{ $t('app.pos.paidNow') }}</span>
           <UInputNumber
             v-if="editableTotals"
@@ -429,20 +429,20 @@ watch(() => props.field.key, () => {
             :step="0.01"
             :increment="false"
             :decrement="false"
-            size="xs"
-            class="w-24"
+            size="sm"
+            class="w-32"
             :ui="{ base: 'text-right tabular-nums' }"
             :aria-label="$t('app.pos.paidNow')"
             @update:model-value="setMoney('paidNow', $event)"
           />
           <span
             v-else
-            class="font-medium text-highlighted"
+            class="font-medium text-highlighted tabular-nums"
           >{{ moneyLabel(moneyAmount('paidNow')) }}</span>
         </div>
-        <div class="flex items-center justify-between gap-4">
+        <div class="flex items-center justify-between gap-6">
           <span class="text-muted">{{ $t('app.pos.outstandingAmount') }}</span>
-          <span class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('remaining')) }}</span>
+          <span class="font-medium text-highlighted tabular-nums">{{ moneyLabel(moneyAmount('remaining')) }}</span>
         </div>
       </template>
     </div>
