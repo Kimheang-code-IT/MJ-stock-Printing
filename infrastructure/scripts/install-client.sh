@@ -47,12 +47,12 @@ export IMAGE_TAG=local
 export PULL_POLICY=build
 
 echo "Building and starting from source (no app image pull)..."
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build --pull missing
+docker compose -f docker-compose.yml up -d --build --pull missing
 
 frontend_port="$(awk -F= '/^FRONTEND_PORT=/{print $2}' .env | tr -d '\r' || true)"
 frontend_port="${frontend_port:-80}"
 
-docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+docker compose -f docker-compose.yml ps
 echo
 echo "Stock & POS is starting on this computer."
 echo "  App:   http://localhost:${frontend_port}"

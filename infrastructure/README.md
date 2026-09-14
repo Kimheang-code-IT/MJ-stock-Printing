@@ -5,9 +5,7 @@ the Compose files, the `.env` templates, the Windows launchers, and the helper
 scripts. The application code stays in `../backend` and `../frontend`; the
 Compose files build from those folders.
 
-- `docker-compose.yml` — the base stack (PostgreSQL, Redis, API, frontend).
-- `docker-compose.local.yml` — **local-only** overlay for a single Windows PC.
-- `docker-compose.prod.yml` — remote-host overlay that pulls prebuilt GHCR images.
+- `docker-compose.yml` — the **single** stack (PostgreSQL, Redis, API, frontend, Telegram bot).
 - `.env.local.example` — template for the local-only run (recommended).
 - `Start Stock POS.bat` / `Stop Stock POS.bat` — one-click daily use.
 - `First Time Setup.bat` — first run (creates `.env`, builds, starts).
@@ -85,7 +83,7 @@ Get-Content backup.sql | docker compose exec -T db psql -U stock_pos stock_pos
 Uploaded images are in the `stock_pos_mediadata` volume. To erase everything and
 start over (destructive):
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+docker compose -f docker-compose.yml down -v
 ```
 
 ## 5. Upgrade
@@ -121,9 +119,14 @@ apply automatically and existing data is preserved.
 
 Advanced Compose usage (run from this folder, where `.env` lives):
 ```powershell
-docker compose up -d --build                                    # development
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d   # local-only
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d    # remote prod
-docker compose --profile telegram up -d                         # optional Telegram bot
-docker compose config --quiet                                   # validate config
+docker compose up -d --build        # build images and start
+docker compose up -d                # start (images already built)
+docker compose down                 # stop (volumes preserved)
+docker compose logs -f api frontend # follow logs
+docker compose config --quiet       # validate config
 ```
+
+There is one Compose file — `docker-compose.yml`. It runs only `db`, `redis`,
+`api`, `frontend` and `telegram-bot` (no RabbitMQ, no Celery workers: scheduled
+jobs run inside the API process). To use prebuilt registry images instead of a
+local build, set `IMAGE_REGISTRY`, `IMAGE_TAG` and `PULL_POLICY=always` in `.env`.

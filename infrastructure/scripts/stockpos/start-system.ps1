@@ -4,7 +4,7 @@
   Start the Stock & POS stack detached (no rebuild unless images are missing).
 
 .DESCRIPTION
-  Runs: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+  Runs: docker compose -f docker-compose.yml up -d
   Production images are reused; nothing is rebuilt unnecessarily.
   Exits non-zero when Docker is unavailable so callers (wait-and-open) can retry.
 #>
@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 $root = Get-DeployRoot
 if (-not (Test-ComposeStack $root)) {
   Write-Host "Deployment folder $root is not complete." -ForegroundColor Red
-  Write-Host "It must contain docker-compose.yml, docker-compose.local.yml and .env"
+  Write-Host "It must contain docker-compose.yml and .env"
   Write-Host "(see infrastructure\README.md, 'First installation')."
   exit 1
 }

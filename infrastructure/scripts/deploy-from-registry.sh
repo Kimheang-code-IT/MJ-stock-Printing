@@ -11,8 +11,9 @@ fi
 
 export IMAGE_TAG="${IMAGE_TAG:-latest}"
 export IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/kimheang-code-it/stock_pos}"
+export PULL_POLICY="${PULL_POLICY:-always}"
 
-compose=(docker compose -f docker-compose.yml -f docker-compose.prod.yml)
+compose=(docker compose -f docker-compose.yml)
 
 if [[ "${SKIP_LOGIN:-}" != "1" ]]; then
   echo "Logging in to ghcr.io (GitHub username + PAT with read:packages)..."
@@ -20,7 +21,7 @@ if [[ "${SKIP_LOGIN:-}" != "1" ]]; then
 fi
 
 echo "Pulling images from ${IMAGE_REGISTRY} (tag ${IMAGE_TAG})..."
-"${compose[@]}" pull
+"${compose[@]}" pull --policy always
 echo "Starting production stack..."
 "${compose[@]}" up -d
 "${compose[@]}" ps

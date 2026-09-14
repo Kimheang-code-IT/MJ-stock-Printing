@@ -16,7 +16,7 @@
 $ErrorActionPreference = "Stop"
 
 # Deployment folder: the `infrastructure/` folder that contains
-# docker-compose.yml, docker-compose.local.yml and `.env`.
+# docker-compose.yml and `.env`.
 # Autodetected from this script's location; override with STOCKPOS_DIR.
 function Get-DeployRoot {
   if ($env:STOCKPOS_DIR) { return $env:STOCKPOS_DIR }
@@ -56,12 +56,11 @@ function Assert-Docker([switch]$Quiet) {
 }
 
 function Get-ComposeArgs {
-  return @("-f", "docker-compose.yml", "-f", "docker-compose.local.yml")
+  return @("-f", "docker-compose.yml")
 }
 
 function Test-ComposeStack($Root) {
   return (Test-Path (Join-Path $Root "docker-compose.yml")) -and
-         (Test-Path (Join-Path $Root "docker-compose.local.yml")) -and
          (Test-Path (Join-Path $Root ".env"))
 }
 
@@ -94,7 +93,7 @@ function Start-Stack {
   $root = Get-DeployRoot
   if (-not (Test-ComposeStack $root)) {
     Write-Host "Deployment folder $root is not complete." -ForegroundColor Red
-    Write-Host "It must contain docker-compose.yml, docker-compose.local.yml and .env"
+    Write-Host "It must contain docker-compose.yml and .env"
     Write-Host "(run infrastructure\scripts\init-env.ps1 to create .env, then see"
     Write-Host " infrastructure\README.md for the first installation)."
     return 1

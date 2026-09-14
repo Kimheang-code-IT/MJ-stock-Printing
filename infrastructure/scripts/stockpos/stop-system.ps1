@@ -14,7 +14,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Get-DeployRoot
 if (-not (Test-ComposeStack $root)) {
-  Write-Host "Deployment folder $root is not complete (docker-compose.yml + docker-compose.local.yml + .env)." -ForegroundColor Red
+  Write-Host "Deployment folder $root is not complete (docker-compose.yml + .env)." -ForegroundColor Red
   exit 1
 }
 if (-not (Assert-Docker)) { exit 1 }

@@ -4,7 +4,7 @@
   Pull Stock & POS images from GitHub Container Registry and start production.
 
 .DESCRIPTION
-  Uses docker-compose.yml + docker-compose.prod.yml from the infrastructure/
+  Uses docker-compose.yml from the infrastructure/
   folder. Does not build images locally. Requires `.env` (copy from
   `.env.production.example`) and docker login to ghcr.io.
 #>
@@ -27,8 +27,9 @@ if ($Tag) { $env:IMAGE_TAG = $Tag }
 if ($Registry) { $env:IMAGE_REGISTRY = $Registry }
 if (-not $env:IMAGE_TAG) { $env:IMAGE_TAG = "latest" }
 if (-not $env:IMAGE_REGISTRY) { $env:IMAGE_REGISTRY = "ghcr.io/kimheang-code-it/stock_pos" }
+if (-not $env:PULL_POLICY) { $env:PULL_POLICY = "always" }
 
-$compose = @("-f", "docker-compose.yml", "-f", "docker-compose.prod.yml")
+$compose = @("-f", "docker-compose.yml")
 
 if (-not $SkipLogin) {
   Write-Host "Logging in to ghcr.io (GitHub username + PAT with read:packages)..." -ForegroundColor Cyan
@@ -37,7 +38,7 @@ if (-not $SkipLogin) {
 }
 
 Write-Host "Pulling images from $env:IMAGE_REGISTRY (tag $env:IMAGE_TAG)..." -ForegroundColor Cyan
-docker compose @compose pull
+docker compose @compose pull --policy always
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Starting production stack..." -ForegroundColor Cyan

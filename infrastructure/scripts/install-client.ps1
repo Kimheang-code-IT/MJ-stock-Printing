@@ -4,7 +4,7 @@
   Clone the repository from GitHub and build it on this computer (no GHCR image pull).
 
 .DESCRIPTION
-  Builds the local-only production stack (docker-compose.yml + docker-compose.local.yml)
+  Builds the local-only production stack (docker-compose.yml)
   from source, so no GitHub Container Registry account is required. Creates
   infrastructure\.env with strong random secrets when it is missing.
 
@@ -62,7 +62,7 @@ $env:IMAGE_TAG = "local"
 $env:PULL_POLICY = "build"
 
 Write-Host "Building and starting from source (no app image pull)..." -ForegroundColor Cyan
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build --pull missing
+docker compose -f docker-compose.yml up -d --build --pull missing
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $frontendPort = "80"
@@ -70,7 +70,7 @@ Get-Content (Join-Path $infra ".env") | ForEach-Object {
   if ($_ -match '^\s*FRONTEND_PORT\s*=\s*(.+)\s*$') { $frontendPort = $Matches[1].Trim() }
 }
 
-docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+docker compose -f docker-compose.yml ps
 Write-Host ""
 Write-Host "Stock & POS is starting on this computer." -ForegroundColor Green
 Write-Host "  App:  http://localhost:$frontendPort"
