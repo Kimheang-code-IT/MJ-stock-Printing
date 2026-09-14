@@ -45,8 +45,16 @@ class UserOut(BaseModel):
 
 def auth_user_payload(user) -> dict:
     """`user` payload for /auth/me and login: snake_case keys (existing API
-    contract) plus the camelCase/alias keys the SPA reads (AuthUser)."""
-    data = user.model_dump(mode="json") if isinstance(user, UserOut) else UserOut.model_validate(user).model_dump(mode="json")
+    contract) plus the camelCase/alias keys the SPA reads (AuthUser).
+
+    Accepts either a `UserOut` or an ORM `User`; the ORM object has no
+    `role`/`permissions` attributes, so it is projected first.
+    """
+    if not isinstance(user, UserOut):
+        from app.modules.auth.service import user_to_out
+
+        user = user_to_out(user)
+    data = user.model_dump(mode="json")
     data.update(
         {
             "name": data["full_name"],

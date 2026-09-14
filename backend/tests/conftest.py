@@ -3,6 +3,9 @@ import tempfile
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://stock_pos:stock_pos@localhost:55432/stock_pos_test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:56379/5")
+os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@gmail.com")
+os.environ.setdefault("SEED_ADMIN_PASSWORD", "123456")
+os.environ.setdefault("SEED_ADMIN_ENABLED", "true")
 os.environ.setdefault("RATE_LIMIT_LOGIN_PER_MINUTE", "1000")
 os.environ.setdefault("RATE_LIMIT_REFRESH_PER_MINUTE", "1000")
 os.environ.setdefault("RATE_LIMIT_RESET_PER_HOUR", "1000")

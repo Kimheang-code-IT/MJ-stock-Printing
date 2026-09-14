@@ -1,5 +1,7 @@
 import { useAccessAlert } from '~/composables/common/useAccessAlert'
 import { safeInternalPath } from '~/utils/auth/session'
+import { resolveApiBase } from '~/utils/api/base-url'
+import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 
 const PERMITTED_LANDING_ROUTES = [
   ['/', 'dashboard.view'],
@@ -15,7 +17,35 @@ const PERMITTED_LANDING_ROUTES = [
   ['/administration/settings', 'settings.manage'],
 ] as const
 
-export default defineNuxtRouteMiddleware((to, from) => {
+// Public `GET /auth/setup/status`, cached only once completed (it never flips
+// back). Fail-open so a transient API error still shows the login page.
+let setupCompletedCache = false
+
+async function isSetupCompleted(): Promise<boolean> {
+  if (setupCompletedCache) return true
+  try {
+    const config = useRuntimeConfig()
+    const base = resolveApiBase({
+      configured: String(config.public.apiBase || ''),
+      requireHttps: import.meta.env.PROD,
+    })
+    const response = await $fetch<{ data?: { setup_completed?: boolean } }>(
+      ApiEndpoints.AUTH_SETUP_STATUS,
+      {
+        baseURL: base || undefined,
+        timeout: Number(config.public.apiTimeoutMs) || 30000,
+      },
+    )
+    const completed = response?.data?.setup_completed !== false
+    if (completed) setupCompletedCache = true
+    return completed
+  }
+  catch {
+    return true
+  }
+}
+
+export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
   const { showPermissionDenied } = useAccessAlert()
 
@@ -39,6 +69,18 @@ export default defineNuxtRouteMiddleware((to, from) => {
       path: '/auth/login',
       query: { redirect: to.fullPath },
     }, { replace: true })
+  }
+
+  // First run (no user yet): the SPA must create the administrator before any
+  // sign-in page can be used, and Initial Setup is hidden once completed.
+  if (!auth.isLoggedIn && isPublicPage) {
+    const completed = await isSetupCompleted()
+    if (!completed && path !== '/auth/setup') {
+      return navigateTo('/auth/setup', { replace: true })
+    }
+    if (completed && path === '/auth/setup') {
+      return navigateTo('/auth/login', { replace: true })
+    }
   }
 
   if (auth.isLoggedIn && isPublicPage) {

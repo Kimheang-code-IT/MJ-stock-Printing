@@ -2,6 +2,8 @@
 
 - syncs the permission catalog and the Administrator system role
 - bootstraps the initial administrator from SEED_ADMIN_* when no user exists
+  (only when SEED_ADMIN_ENABLED=true; otherwise the SPA Initial Setup page
+  creates the first administrator)
 
 Local Docker convenience only; production must supply strong SEED_ADMIN_*
 values (validated against the same rules as the API config).
@@ -47,7 +49,7 @@ async def seed() -> None:
                 "Administrator", "Full system access", [SUPER_ADMIN_PERMISSION]
             )
 
-        if not await users.any_user_exists():
+        if settings.seed_admin_enabled and not await users.any_user_exists():
             session.add(
                 User(
                     full_name=settings.seed_admin_name,
@@ -154,7 +156,7 @@ async def _seed_sample_master_data(session) -> None:
 
 
 def main() -> None:
-    if settings.is_production:
+    if settings.is_production and settings.seed_admin_enabled:
         weak = (
             not settings.seed_admin_password
             or len(settings.seed_admin_password) < 12

@@ -1,6 +1,7 @@
 export const ApiEndpoints = {
   AUTH_LOGIN: '/api/v1/auth/login',
   AUTH_SETUP: '/api/v1/auth/setup',
+  AUTH_SETUP_STATUS: '/api/v1/auth/setup/status',
   AUTH_LOGOUT: '/api/v1/auth/logout',
   AUTH_ME: '/api/v1/auth/me',
   AUTH_REFRESH: '/api/v1/auth/refresh',

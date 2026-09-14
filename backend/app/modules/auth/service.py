@@ -61,6 +61,7 @@ def user_to_out(user: User) -> UserOut:
         role=user.role_ref.name if user.role_ref else None,
         permissions=effective_permissions(user),
         last_login_at=user.last_login_at,
+        avatar=user.avatar,
     )
 
 

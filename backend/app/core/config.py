@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     rate_limit_refresh_per_minute: int = 30
     rate_limit_reset_per_hour: int = 5
 
+    # Bootstrap the first administrator from SEED_ADMIN_* on startup. Disabled
+    # by default so a fresh install shows the Initial Setup page and the first
+    # registered user becomes the Administrator.
+    seed_admin_enabled: bool = False
     seed_admin_email: str = "admin@gmail.com"
     seed_admin_password: str = _DEV_SEED_PASSWORD
     seed_admin_name: str = "System Administrator"
@@ -94,7 +98,11 @@ class Settings(BaseSettings):
             problems.append("JWT_SECRET_KEY is missing, too short, or still a development placeholder")
         if self.telegram_bot_client_secret == _DEV_TELEGRAM_SECRET or _is_placeholder_secret(self.telegram_bot_client_secret):
             problems.append("TELEGRAM_BOT_CLIENT_SECRET is still a development placeholder")
-        if self.seed_admin_password == _DEV_SEED_PASSWORD or _is_placeholder_secret(self.seed_admin_password) or len(self.seed_admin_password) < 12:
+        if self.seed_admin_enabled and (
+            self.seed_admin_password == _DEV_SEED_PASSWORD
+            or _is_placeholder_secret(self.seed_admin_password)
+            or len(self.seed_admin_password) < 12
+        ):
             problems.append("SEED_ADMIN_PASSWORD is too weak or still a development placeholder")
         if self.debug:
             problems.append("DEBUG must be false in production")

@@ -106,6 +106,7 @@ services:
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:80,http://127.0.0.1:80,http://localhost:3000,http://127.0.0.1:3000}
       CORS_ALLOW_PRIVATE_NETWORKS: ${CORS_ALLOW_PRIVATE_NETWORKS:-true}
+      SEED_ADMIN_ENABLED: ${SEED_ADMIN_ENABLED:-false}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@gmail.com}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-123456}
       SEED_ADMIN_NAME: ${SEED_ADMIN_NAME:-System Administrator}

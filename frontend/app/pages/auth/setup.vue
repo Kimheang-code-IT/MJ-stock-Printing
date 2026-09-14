@@ -25,7 +25,6 @@ usePageSeo({
 })
 
 const schema = z.object({
-  shopName: z.string().min(1, { error: t('pages.auth.shopNameRequired') }),
   email: z.email({ error: t('pages.auth.emailRequired') }),
   password: z.string().min(8, { error: t('pages.auth.passwordRequired') }),
   passwordConfirmation: z.string().min(8, { error: t('pages.auth.passwordRequired') }),
@@ -37,7 +36,6 @@ const schema = z.object({
 type Schema = z.output<typeof schema>
 
 const state = reactive({
-  shopName: '',
   email: '',
   password: '',
   passwordConfirmation: '',
@@ -47,9 +45,11 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitting.value = true
   try {
+    const email = payload.data.email.trim()
+    const fullName = email.split('@')[0]?.trim() || 'Administrator'
     const result = await setupAdministrator({
-      fullName: payload.data.shopName,
-      email: payload.data.email,
+      fullName,
+      email,
       password: payload.data.password,
       passwordConfirmation: payload.data.passwordConfirmation,
     })
@@ -82,18 +82,8 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
       <div class="text-center">
         <LayoutAppBrandLogo img-class="mx-auto size-24 object-contain" />
         <h1 class="mt-3 text-xl font-semibold text-highlighted">{{ t('core.brand.name') }}</h1>
-        <p class="mt-1 text-sm font-medium text-highlighted">{{ t('pages.auth.setupTitle') }}</p>
-        <p class="mt-1 text-sm text-muted">{{ t('pages.auth.setupDesc') }}</p>
       </div>
 
-      <UFormField :label="t('pages.auth.shopName')" name="shopName" required>
-        <UInput
-name="shopName"
-type="text"
-size="lg"
-class="w-full"
-:placeholder="t('pages.auth.shopNamePlaceholder')" />
-      </UFormField>
       <UFormField :label="t('pages.auth.email')" name="email" required>
         <UInput
 name="email"
