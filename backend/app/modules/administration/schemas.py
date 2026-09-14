@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 
 
 # ---------------------------------------------------------------- users
@@ -73,10 +73,36 @@ class RoleOut(BaseModel):
 # ---------------------------------------------------------------- sequences
 
 
+class SequenceCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    document_type: str = Field(
+        min_length=1,
+        max_length=50,
+        validation_alias=AliasChoices("document_type", "documentType"),
+    )
+    prefix: str = Field(min_length=1, max_length=20)
+    number_length: int = Field(
+        default=6,
+        ge=1,
+        le=12,
+        validation_alias=AliasChoices("number_length", "paddingLength"),
+    )
+    reset_type: str | None = Field(default=None, max_length=20)
+    status: str = Field(default="ACTIVE", pattern="^(ACTIVE|INACTIVE)$")
+
+
 class SequenceUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     prefix: str | None = Field(default=None, min_length=1, max_length=20)
     next_number: int | None = Field(default=None, ge=1)
-    number_length: int | None = Field(default=None, ge=1, le=12)
+    number_length: int | None = Field(
+        default=None,
+        ge=1,
+        le=12,
+        validation_alias=AliasChoices("number_length", "paddingLength"),
+    )
     reset_type: str | None = Field(default=None, max_length=20)
     status: str | None = Field(default=None, pattern="^(ACTIVE|INACTIVE)$")
 

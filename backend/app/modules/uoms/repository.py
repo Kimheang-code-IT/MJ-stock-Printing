@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.stock.models import Product
+from app.modules.stock.models import Product, ProductSalePriceUom
 from app.modules.uoms.models import UOM
 
 
@@ -38,6 +38,15 @@ class UOMRepository:
     async def count_products(self, uom_id: uuid.UUID) -> int:
         result = await self.session.execute(
             select(func.count()).select_from(Product).where(Product.uom_id == uom_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_sale_price_uoms(self, uom_id: uuid.UUID) -> int:
+        """Pricing history rows that reference the UOM (FK is RESTRICT)."""
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(ProductSalePriceUom)
+            .where(ProductSalePriceUom.uom_id == uom_id)
         )
         return int(result.scalar_one())
 

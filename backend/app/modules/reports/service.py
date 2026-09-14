@@ -245,6 +245,9 @@ class ReportsService:
                 StockTransaction.status,
                 StockTransaction.currency,
                 StockTransaction.exchange_rate,
+                StockTransaction.note,
+                StockTransaction.discount_amount,
+                StockTransaction.tax_amount,
             )
             .select_from(StockTransactionItem)
             .join(StockTransaction, StockTransaction.id == StockTransactionItem.stock_transaction_id)
@@ -333,6 +336,11 @@ class ReportsService:
                     "status": debt.status if debt else "PAID",
                     "currency": row.currency,
                     "exchange_rate": row.exchange_rate,
+                    # Header fields the purchase Edit form reloads (repeated
+                    # per line; the SPA groups rows client-side).
+                    "note": row.note,
+                    "discount_amount": Decimal(row.discount_amount or 0),
+                    "tax_amount": Decimal(row.tax_amount or 0),
                 }
             )
         return data, int(total)

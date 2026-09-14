@@ -1,6 +1,6 @@
 """Delivery Notes — /status Update Status endpoint + camelCase create body (§5.13).
 
-The unified POST /delivery-notes/{id}/status enforces the §2.1.9 transition
+The unified POST /delivery/{id}/status enforces the §2.1.9 transition
 table, per-target permissions and the cancel reason requirement. Legacy verb
 aliases (confirm / deliver / cancel) map onto the same transition service.
 """
@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 
-from tests.modules.delivery_notes.test_delivery_notes import _sale_two_lines
+from tests.modules.delivery.test_delivery_notes import _sale_two_lines
 from tests.utils import admin_headers, create_user_with_role, login
 
 
@@ -22,7 +22,7 @@ async def test_create_accepts_camel_case_body(client):
     product_a, product_b, _customer, sale, line_a, _line_b = await _sale_two_lines(client, headers, tag)
 
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -44,7 +44,7 @@ async def test_status_transitions_follow_the_allowed_table(client):
     _product_a, _product_b, _customer, sale, line_a, _line_b = await _sale_two_lines(client, headers, tag)
 
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -57,19 +57,19 @@ async def test_status_transitions_follow_the_allowed_table(client):
 
     # Draft → Delivered is NOT a legal transition (§2.1.9 table).
     jump = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "DELIVERED"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "DELIVERED"}, headers=headers
     )
     assert jump.status_code == 409
 
     confirm = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert confirm.status_code == 200, confirm.text
     assert confirm.json()["data"]["status"] == "PREPARING"
 
     # Confirmed → Delivered is legal (Delivery OK shortcut).
     early_deliver = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "DELIVERED"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "DELIVERED"}, headers=headers
     )
     assert early_deliver.status_code == 200, early_deliver.text
     body = early_deliver.json()["data"]
@@ -79,7 +79,7 @@ async def test_status_transitions_follow_the_allowed_table(client):
 
     # Delivered is terminal — no further transitions.
     late_cancel = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status",
+        f"/api/v1/delivery/{note_id}/status",
         json={"status": "RETURNED", "cancel_reason": "wrong address"},
         headers=headers,
     )
@@ -93,7 +93,7 @@ async def test_status_out_for_delivery_path_and_audit(client, db_session):
     _product_a, _product_b, _customer, sale, line_a, _line_b = await _sale_two_lines(client, headers, tag)
 
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -104,18 +104,18 @@ async def test_status_out_for_delivery_path_and_audit(client, db_session):
     note_id = created.json()["data"]["id"]
 
     confirmed = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert confirmed.status_code == 200
 
     out = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "OUT_FOR_DELIVERY"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "OUT_FOR_DELIVERY"}, headers=headers
     )
     assert out.status_code == 200, out.text
     assert out.json()["data"]["status"] == "OUT_FOR_DELIVERY"
 
     delivered = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "DELIVERED"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "DELIVERED"}, headers=headers
     )
     assert delivered.status_code == 200
     assert delivered.json()["data"]["delivered_at"] is not None
@@ -135,7 +135,7 @@ async def test_status_cancel_requires_reason(client):
     tag = uuid.uuid4().hex[:6]
     _product_a, _product_b, _customer, sale, line_a, _line_b = await _sale_two_lines(client, headers, tag)
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -146,17 +146,17 @@ async def test_status_cancel_requires_reason(client):
     note_id = created.json()["data"]["id"]
 
     missing_reason = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "RETURNED"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "RETURNED"}, headers=headers
     )
     assert missing_reason.status_code == 422
 
     confirmed = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert confirmed.status_code == 200
 
     cancelled = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status",
+        f"/api/v1/delivery/{note_id}/status",
         json={"status": "RETURNED", "cancel_reason": "customer moved"},
         headers=headers,
     )
@@ -166,7 +166,7 @@ async def test_status_cancel_requires_reason(client):
 
     # Cancelled is terminal.
     reopen = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"status": "PREPARING"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert reopen.status_code == 409
 
@@ -189,7 +189,7 @@ async def test_status_legacy_action_aliases_and_permissions(client, db_session):
     tag = uuid.uuid4().hex[:6]
     _product_a, _product_b, _customer, sale, line_a, _line_b = await _sale_two_lines(client, headers, tag)
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -201,18 +201,18 @@ async def test_status_legacy_action_aliases_and_permissions(client, db_session):
 
     # Viewer lacks delivery.confirm → legacy alias still rejected.
     forbidden = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"action": "confirm"}, headers=viewer
+        f"/api/v1/delivery/{note_id}/status", json={"action": "confirm"}, headers=viewer
     )
     assert forbidden.status_code == 403
 
     confirm = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"action": "confirm"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"action": "confirm"}, headers=headers
     )
     assert confirm.status_code == 200, confirm.text
     assert confirm.json()["data"]["status"] == "PREPARING"
 
     # Confirming an already-confirmed note is an illegal transition.
     again = await client.post(
-        f"/api/v1/delivery-notes/{note_id}/status", json={"action": "confirm"}, headers=headers
+        f"/api/v1/delivery/{note_id}/status", json={"action": "confirm"}, headers=headers
     )
     assert again.status_code == 409

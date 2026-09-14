@@ -23,6 +23,12 @@ import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/lis
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/module/audit-logs'
+import {
+  isRecordInactive,
+  statusValueFor,
+  supportsHardDelete,
+  supportsStatusToggle,
+} from '~/utils/module/row-actions'
 import { selectedDebtsShareScope } from '~/utils/reports/debts'
 import { usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
@@ -135,7 +141,12 @@ const canPaySupplierDebt = computed(() =>
   auth.canAccessPage('supplier.debt.pay')
   || auth.canAccessPage('report.supplier_debt'),
 )
-const deactivationOnly = computed(() => current.value?.group === 'master' || current.value?.collection === 'documentSequences')
+/** Bulk toolbar: deactivate is offered wherever a status toggle is supported. */
+const canBulkDeactivate = computed(() => Boolean(
+  current.value
+  && canEdit.value
+  && supportsStatusToggle(current.value.collection),
+))
 const dateField = computed(() => {
   const fields = current.value?.fields || []
   return fields.find(field => field.type === 'date' || field.type === 'datetime' || field.key === 'date' || /date$/i.test(field.key))?.key
@@ -310,9 +321,8 @@ watch([q, filters, dateFrom, dateTo], () => {
   pagination.value = { ...pagination.value, pageIndex: 0 }
 }, { deep: true })
 
-// Client-only: reload list data after mount and when filters change. Mock
-// mode fetches too â€” the mock repository serves the in-memory seed cheaply,
-// so loading/error stays repository-driven in every mode.
+// Client-only: reload list data after mount and when filters change. Loading
+// and error state stays repository-driven.
 function reloadModuleData() {
   if (!import.meta.client || !current.value) return
   void store.fetchList(current.value.collection, {
@@ -422,24 +432,22 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       onSelect: () => openDebtPayment(kind, debtRow),
     }]]
   }
-  const items: DropdownMenuItem[] = [
-    {
+  const items: DropdownMenuItem[] = []
+  // Master/admin records own a detail page: Open views it, Edit opens the same
+  // combined view/edit surface (kept as two entries for a consistent order).
+  if (!isTableOnly.value) {
+    items.push({
       label: t('app.ui.open'),
       icon: 'i-lucide-eye',
       onSelect: () => openRow(row),
-    },
-  ]
-  if (collection === 'documentSequences') {
+    })
     if (canEdit.value) {
-      const active = String(row.status || '').toUpperCase() === 'ACTIVE'
       items.push({
-        label: active ? t('core.rowActions.deactivate') : t('core.rowActions.activate'),
-        icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-        color: active ? 'warning' : 'success',
-        onSelect: () => setDocumentSequenceStatus(row, active ? 'INACTIVE' : 'ACTIVE'),
+        label: t('core.rowActions.edit'),
+        icon: 'i-lucide-pencil',
+        onSelect: () => openRow(row),
       })
     }
-    return [items]
   }
   if (collection === 'products' && canOperate.value) {
     for (const type of STOCK_OPERATION_TYPES) {
@@ -454,26 +462,25 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       })
     }
   }
-  if (collection === 'users') {
-    const status = String(row.status || 'Active')
-    if (canEdit.value && status === 'Active') {
-      items.push({
-        label: t('core.rowActions.deactivate'),
-        icon: 'i-lucide-circle-off',
-        color: 'warning',
-        onSelect: () => { void setUserStatus(row, 'Inactive') },
-      })
-    }
-    if (canEdit.value && status === 'Inactive') {
-      items.push({
-        label: t('core.rowActions.activate'),
-        icon: 'i-lucide-circle-check',
-        color: 'success',
-        onSelect: () => { void setUserStatus(row, 'Active') },
-      })
-    }
+  if (canEdit.value && supportsStatusToggle(collection)) {
+    const inactive = isRecordInactive(row.status)
+    items.push(inactive
+      ? {
+          label: t('core.rowActions.activate'),
+          icon: 'i-lucide-circle-check',
+          color: 'success',
+          onSelect: () => { void setRowStatus(row, true) },
+        }
+      : {
+          label: t('core.rowActions.deactivate'),
+          icon: 'i-lucide-circle-off',
+          color: 'warning',
+          onSelect: () => { void setRowStatus(row, false) },
+        })
   }
-  if (canDelete.value && !deactivationOnly.value) {
+  // Hard delete is offered only where the backend supports it; the backend
+  // rejects records that are still referenced with a 409 conflict.
+  if (canDelete.value && supportsHardDelete(collection)) {
     items.push({
       label: t('app.ui.delete'),
       icon: 'i-lucide-trash-2',
@@ -481,15 +488,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       onSelect: () => { void deleteIds([String(row.id)]) },
     })
   }
-  if (canEdit.value && deactivationOnly.value) {
-    items.push({
-      label: t('app.ui.deactivate'),
-      icon: 'i-lucide-circle-off',
-      color: 'warning',
-      onSelect: () => { void deactivateIds([String(row.id)]) },
-    })
-  }
-  return [items]
+  return items.length ? [items] : []
 }
 
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
@@ -727,8 +726,20 @@ function onRowSelect(event: Event, row: TableRow<Record<string, unknown>>) {
 }
 
 async function deleteIds(ids: string[]) {
-  if (!current.value || !canDelete.value || !ids.length) return
-  const ok = await confirm({ kind: 'delete', count: ids.length })
+  if (!current.value || !canDelete.value || !ids.length || busyId.value) return
+  const found = result.value.all.find(row => String(row.id) === ids[0])
+  const name = ids.length === 1 && found
+    ? String((found as unknown as Record<string, unknown>)[current.value.titleField] ?? '')
+    : ''
+  const ok = await confirm(name
+    ? {
+        kind: 'delete',
+        titleKey: 'core.confirm.deleteTitle',
+        description: t('core.actions.deleteConfirmNamed', { name }),
+        confirmLabelKey: 'core.rowActions.delete',
+        confirmColor: 'error',
+      }
+    : { kind: 'delete', count: ids.length })
   if (!ok) return
   busyId.value = ids[0] || ''
   try {
@@ -738,7 +749,7 @@ async function deleteIds(ids: string[]) {
   }
   catch (error: unknown) {
     toast.add({
-      title: t('api.errorTitle', { status: (error as { statusCode?: number })?.statusCode || 400 }),
+      title: t('app.ui.deleteFailed'),
       description: error instanceof Error ? error.message : String(error),
       color: 'error',
     })
@@ -749,11 +760,11 @@ async function deleteIds(ids: string[]) {
 }
 
 async function deactivateIds(ids: string[]) {
-  if (!current.value || !canEdit.value || !ids.length) return
+  if (!current.value || !canEdit.value || !ids.length || busyId.value) return
   busyId.value = ids[0] || ''
   try {
+    const status = statusValueFor(current.value.collection, false)
     for (const id of ids) {
-      const status = current.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive'
       await store.updateRemote(current.value.collection, id, { status })
     }
     rowSelection.value = {}
@@ -764,15 +775,23 @@ async function deactivateIds(ids: string[]) {
   }
 }
 
-async function setUserStatus(row: Record<string, unknown>, status: 'Active' | 'Inactive') {
-  if (!current.value || current.value.collection !== 'users') return
-  const id = String(row.id || '')
+async function setRowStatus(row: Record<string, unknown>, active: boolean) {
+  const module = current.value
+  if (!module || !row.id || busyId.value) return
+  const id = String(row.id)
   busyId.value = id
   try {
-    await store.updateRemote('users', id, { status })
+    await store.updateRemote(module.collection, id, { status: statusValueFor(module.collection, active) })
     toast.add({
-      title: t(status === 'Active' ? 'core.common.activated' : 'core.common.deactivated'),
+      title: t(active ? 'core.common.activated' : 'core.common.deactivated'),
       color: 'success',
+    })
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.ui.operationFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
     })
   }
   finally {
@@ -780,20 +799,8 @@ async function setUserStatus(row: Record<string, unknown>, status: 'Active' | 'I
   }
 }
 
-async function setDocumentSequenceStatus(row: Record<string, unknown>, status: 'ACTIVE' | 'INACTIVE') {
-  if (!current.value || !canEdit.value) return
-  busyId.value = String(row.id || '')
-  try {
-    await store.updateRemote(current.value.collection, String(row.id || ''), { status })
-    toast.add({ title: t(status === 'ACTIVE' ? 'core.common.activated' : 'core.common.deactivated'), color: 'success' })
-  }
-  finally {
-    busyId.value = ''
-  }
-}
-
 function refresh() {
-  // Always reload through the repository (mock mode re-reads the in-memory seed).
+  // Always reload through the repository.
   if (current.value) {
     void store.reloadCollection(current.value.collection)
     return
@@ -945,15 +952,15 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
             @click="rowSelection = {}"
           />
         </template>
-        <template v-if="selectedIds.length && (canEdit || canDelete)">
+        <template v-if="selectedIds.length && canBulkDeactivate">
           <UButton
-            :color="deactivationOnly ? 'warning' : 'error'"
+            color="warning"
             variant="soft"
             size="sm"
-            :icon="deactivationOnly ? 'i-lucide-circle-off' : 'i-lucide-trash-2'"
+            icon="i-lucide-circle-off"
             class="shrink-0"
-            :label="`${deactivationOnly ? t('app.ui.deactivate') : t('app.ui.delete')} (${selectedIds.length})`"
-            @click="deactivationOnly ? deactivateIds(selectedIds) : deleteIds(selectedIds)"
+            :label="`${t('app.ui.deactivate')} (${selectedIds.length})`"
+            @click="deactivateIds(selectedIds)"
           />
           <UButton
             color="neutral"

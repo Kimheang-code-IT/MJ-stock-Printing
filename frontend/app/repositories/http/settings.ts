@@ -26,18 +26,34 @@ export function createHttpAppConfigRepository(): AppConfigRepository {
     update: async (input) => {
       // Persist Stock & POS settings through the canonical grouped endpoint.
       const adminValues = toAdminSettingsValues(input)
+      let model: AppConfig = { ...(input as AppConfig) }
       if (Object.keys(adminValues).length > 0) {
-        const groups = unwrapApiData(
+        const response = unwrapApiData(
           await api.patch<Record<string, Record<string, unknown>> | ApiResponse<Record<string, Record<string, unknown>>>>(
             ApiEndpoints.ADMIN_SETTINGS,
             { values: adminValues },
           ),
-        )
+        ) as (Record<string, Record<string, unknown>> & { groups?: Record<string, Record<string, unknown>> })
+        // SettingsOut wraps the groups under `groups`; unwrap before applying.
+        const groups = response?.groups ?? response
         // Server truth for the mapped groups; the rest of the form model is
         // kept as submitted (sections without a backend settings group).
-        return applyAdminSettingsGroups({ ...(input as AppConfig) }, groups)
+        model = applyAdminSettingsGroups(model, groups)
       }
-      return input as AppConfig
+      // Localization lives on the App Config document (system + currency groups).
+      if (input.localization) {
+        const updated = unwrapApiData(
+          await api.patch<AppConfig | ApiResponse<AppConfig>>(
+            ApiEndpoints.APP_CONFIG,
+            { localization: input.localization },
+          ),
+        ) as AppConfig
+        model = {
+          ...model,
+          localization: { ...model.localization, ...(updated?.localization ?? {}) },
+        }
+      }
+      return model
     },
     resetAllData: async () => unwrapApiData(
       await api.post<ResetAllDataResult | ApiResponse<ResetAllDataResult>>(ApiEndpoints.RESET_ALL_DATA, {}),

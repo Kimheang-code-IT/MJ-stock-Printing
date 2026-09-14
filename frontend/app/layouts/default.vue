@@ -59,8 +59,8 @@ const {
               :label="t('core.search.modeKeyword')"
               @click="setMode('keyword')"
             />
-            <!-- Semantic mode is a mock-only ranking feature; the connected
-                 backend implements keyword search only, so the control is hidden. -->
+            <!-- Semantic ranking is not implemented by the backend, so the
+                 control is hidden; keyword search only. -->
             <UButton
               v-if="!isHttpMode"
               size="xs"

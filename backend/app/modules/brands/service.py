@@ -59,6 +59,9 @@ class BrandService:
     async def delete(self, brand_id: uuid.UUID) -> None:
         brand = await self.get(brand_id)
         if await self.repo.count_products(brand_id) > 0:
-            raise ConflictError("Cannot delete a brand that still has products; disable it instead")
+            raise ConflictError(
+                "Cannot delete this brand because products reference it. "
+                "Deactivate it instead."
+            )
         await self.session.delete(brand)
         await self.session.commit()

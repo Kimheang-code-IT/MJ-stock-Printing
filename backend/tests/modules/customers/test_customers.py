@@ -1,3 +1,4 @@
+from tests.modules.pos.helpers import make_customer, make_stocked_product
 from tests.utils import admin_headers
 
 
@@ -35,3 +36,34 @@ async def test_customer_crud_auto_code_and_walkin_protection(client):
 
     deleted = await client.delete(f"/api/v1/customers/{customer['id']}", headers=headers)
     assert deleted.status_code == 200
+
+
+async def test_customer_delete_blocked_by_sale_history_then_deactivate(client):
+    """A customer with sales history must not be hard-deleted; deactivate instead."""
+    headers = await admin_headers(client)
+
+    customer = await make_customer(client, headers, code="CUS-HIST", name="History Customer")
+    product = await make_stocked_product(
+        client, headers, sku="CUSH-1", name="Customer History Product", qty="10"
+    )
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": customer["id"],
+            "amount_received": "0.00",
+            "items": [{"product_id": product["id"], "quantity": "1"}],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+
+    blocked = await client.delete(f"/api/v1/customers/{customer['id']}", headers=headers)
+    assert blocked.status_code == 409
+    assert "deactivate" in blocked.json()["detail"]["message"].lower()
+
+    deactivated = await client.patch(
+        f"/api/v1/customers/{customer['id']}", json={"status": "INACTIVE"}, headers=headers
+    )
+    assert deactivated.status_code == 200
+    assert deactivated.json()["data"]["status"] == "INACTIVE"

@@ -186,7 +186,7 @@ describe('http POS/stock command endpoints (spec §7)', () => {
     await commands.createStockOperation({ type: 'expiry', productId: 'prd-1', quantity: 2 })
     expect(captured.map(request => request.url)).toEqual([
       '/api/v1/stock/in',
-      '/api/v1/stock/adjust',
+      '/api/v1/stock/operations',
       '/api/v1/stock/damage',
       '/api/v1/stock/expire',
     ])
@@ -205,6 +205,11 @@ describe('http POS/stock command endpoints (spec §7)', () => {
         unit_cost: 6,
       }],
     })
+    // Adjustment is a signed delta handled by the quick-operation endpoint.
+    expect(captured[1]?.body).toMatchObject({ type: 'adjustment', product_id: 'prd-1', quantity: 3 })
+    // Damage/Expiry are absolute quantities inside an items[] envelope.
+    expect(captured[2]?.body).toMatchObject({ items: [{ product_id: 'prd-1', quantity: 1 }] })
+    expect(captured[3]?.body).toMatchObject({ items: [{ product_id: 'prd-1', quantity: 2 }] })
   })
 
   it('pays debts through the nested spec paths when the debt id is known', async () => {
@@ -214,7 +219,7 @@ describe('http POS/stock command endpoints (spec §7)', () => {
     await commands.paySupplierDebt({ supplierId: 'sup-1', debtId: 'debt-8', amount: 6, paymentMethod: 'Cash' })
     expect(captured[0]?.url).toBe('/api/v1/customers/cus-1/debts/debt-7/payments')
     expect(captured[1]?.url).toBe('/api/v1/suppliers/sup-1/debts/debt-8/payments')
-    expect(captured[0]?.body).toMatchObject({ amount: 5, payment_method: 'Cash' })
+    expect(captured[0]?.body).toMatchObject({ amount: 5, payment_method: 'CASH' })
   })
 })
 
@@ -313,7 +318,7 @@ describe('http finance endpoints (spec §7 reports)', () => {
       paymentMethod: 'Cash',
     })
     expect(captured[0]?.url).toBe('/api/v1/reports/finance/expenses')
-    expect(captured[0]?.body).toMatchObject({ date: '2026-02-01', payment_method: 'Cash', amount: 90 })
+    expect(captured[0]?.body).toMatchObject({ date: '2026-02-01', payment_method: 'CASH', amount: 90 })
     expect(created).toMatchObject({ type: 'expense', paymentMethod: 'Cash', user: 'Sokha' })
   })
 })

@@ -757,6 +757,7 @@ async function save() {
       taxAmount: tax.value,
       currency: String(model.currency || 'USD') as 'USD' | 'KHR',
       exchangeRate: Number(model.exchangeRate || 1),
+      transactionDate: String(model.transactionDate || '').trim() || null,
       note: String(model.note || '').trim() || null,
     })
     toast.add({ title: t('app.purchase.created'), color: 'success' })

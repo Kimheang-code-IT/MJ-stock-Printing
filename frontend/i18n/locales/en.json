@@ -122,10 +122,12 @@
       "more": "More actions",
       "viewAll": "View all",
       "deleteConfirm": "Delete {n} selected item(s)? This cannot be undone.",
+      "deleteConfirmNamed": "Delete \"{name}\"? This cannot be undone.",
       "deletedItems": "Deleted {n} item(s)"
     },
     "rowActions": {
       "detail": "View detail",
+      "edit": "Edit",
       "delete": "Delete",
       "activate": "Activate",
       "deactivate": "Deactivate"
@@ -1035,6 +1037,10 @@
       "reopenPeriod": "Reopen Period",
       "delete": "Delete",
       "deactivate": "Deactivate",
+      "deleteFailed": "Could not delete",
+      "deleted": "Deleted successfully",
+      "cannotDeleteInUse": "Cannot delete because this record is in use",
+      "deactivateInstead": "Deactivate instead",
       "save": "Saved",
       "addRow": "Add row",
       "addRoute": "Add Route",

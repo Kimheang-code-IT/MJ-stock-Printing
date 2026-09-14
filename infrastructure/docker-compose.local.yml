@@ -1,13 +1,14 @@
 # Local-only production overlay for Stock & POS on a Windows PC.
 #
-# Used together with the base compose file:
+# Run from this `infrastructure/` folder (where `.env` lives):
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+# Or double-click "Start Stock POS.bat" in this folder.
 #
 # Differences from the development defaults:
 # - ENVIRONMENT=production / DEBUG=false (boot refuses dev secrets)
 # - db / redis / api are NOT published to the host: internal Docker network only
-# - frontend is published on 127.0.0.1:80 by default (FRONTEND_BIND in .env is
-#   configurable for LAN access later; never 0.0.0.0 by default)
+# - frontend binds to FRONTEND_BIND (set to 127.0.0.1 in .env.local.example so
+#   the app is reachable from this PC only; set it to a LAN IP or 0.0.0.0 later)
 # - no dev bind mounts, no hot reload — images are built once or pulled
 # - API health gate: compose waits for GET /health/ready (DB + Redis checks)
 #   before the frontend starts
@@ -36,8 +37,10 @@ services:
       start_period: 60s
 
   frontend:
-    # The host binding comes from the base file's FRONTEND_BIND variable
-    # (127.0.0.1 by default in .env.local.example). Nothing to override here.
+    # Local-only guarantee: replace the base port list so the app binds to
+    # FRONTEND_BIND (127.0.0.1 by default) even if .env is incomplete.
+    ports: !override
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-80}:80"
     depends_on:
       api:
         condition: service_healthy

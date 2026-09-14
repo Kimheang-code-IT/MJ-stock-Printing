@@ -89,7 +89,7 @@ function rememberFilePreview(key: string, source: Blob) {
 function cacheKeyFor(row: Record<string, unknown>) {
   const previewKey = String(row.previewKey || '').trim()
   if (previewKey) return previewKey
-  return `mock:${fileTableRowName(row)}:${fileTableRowCreated(row)}`
+  return `attachment:${fileTableRowName(row)}:${fileTableRowCreated(row)}`
 }
 
 function pdfEscape(value: string) {
@@ -108,8 +108,8 @@ function htmlEscape(value: string) {
     .replace(/"/g, '&quot;')
 }
 
-/** Minimal PDF so the browser’s native PDF viewer can open seeded mock files. */
-export function mockPdfBytes(title: string, body: string) {
+/** Minimal PDF so the browser’s native PDF viewer can open a metadata-only file. */
+export function placeholderPdfBytes(title: string, body: string) {
   const heading = pdfEscape(title.slice(0, 90))
   const line = pdfEscape(body.replace(/\s+/g, ' ').slice(0, 220))
   const content = `BT /F1 16 Tf 48 740 Td (${heading}) Tj 0 -26 Td /F1 11 Tf (${line}) Tj ET`
@@ -143,7 +143,7 @@ export function filePreviewBlob(row: Record<string, unknown>): Blob | null {
   const ext = extensionOf(name)
 
   if (mime === 'application/pdf' || ext === 'pdf') {
-    return new Blob([mockPdfBytes(name, body)], { type: 'application/pdf' })
+    return new Blob([placeholderPdfBytes(name, body)], { type: 'application/pdf' })
   }
   if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
     const svg = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640"><rect fill="#f8fafc" width="960" height="640"/><rect x="48" y="48" width="864" height="544" fill="#fff" stroke="#e2e8f0"/><text x="80" y="140" font-family="sans-serif" font-size="28" fill="#0f172a">${htmlEscape(name)}</text><text x="80" y="190" font-family="sans-serif" font-size="16" fill="#64748b">${htmlEscape(body.slice(0, 180))}</text></svg>`

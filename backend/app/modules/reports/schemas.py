@@ -59,6 +59,11 @@ class PurchaseReportRow(BaseModel):
     # Document currency + saved rate (returns keep the stored snapshot).
     currency: str = "USD"
     exchange_rate: Decimal = Decimal("1")
+    # Header fields the purchase Edit form reloads (repeated per line; the SPA
+    # groups rows client-side).
+    note: str | None = None
+    discount_amount: Decimal = Decimal("0")
+    tax_amount: Decimal = Decimal("0")
 
 
 class CustomerDebtReportRow(BaseModel):

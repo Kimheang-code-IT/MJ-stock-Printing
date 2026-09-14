@@ -1,71 +1,63 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Prepare Stock & POS for a clean production-ready local/prod start.
+  Prepare Stock & POS for a clean local-only start on this PC.
 
 .DESCRIPTION
-  - Resets PostgreSQL business data (keeps SuperAdmin bootstrap)
-  - Clears objects in the MinIO files bucket
-  - Removes local Python/Node/tooling caches
+  - Creates infrastructure\.env with strong random secrets when missing
+  - Removes local Python/Node/tooling caches and build output
+  - Prints the image-build / start steps
 
-  Does NOT rewrite .env secrets. Fill .env.production.example manually before a real deploy.
+  Does NOT touch database volumes or rewrite an existing `.env`.
 #>
 
 param(
-  [switch]$SkipMinio,
-  [switch]$SkipDbReset,
+  [switch]$SkipEnv,
   [switch]$SkipCacheClean
 )
 
 $ErrorActionPreference = "Stop"
-$root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-Set-Location $root
+$infra = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$repoRoot = (Resolve-Path (Join-Path $infra "..")).Path
 
-Write-Host "== Stock & POS production prepare ==" -ForegroundColor Cyan
+Write-Host "== Stock & POS local prepare ==" -ForegroundColor Cyan
 
-if (-not $SkipDbReset) {
-  Write-Host "Resetting database to bootstrap-only..." -ForegroundColor Yellow
-  docker compose exec -T api python scripts/reset_db.py
-}
-
-if (-not $SkipMinio) {
-  Write-Host "Clearing MinIO objects..." -ForegroundColor Yellow
-  $user = if ($env:MINIO_ROOT_USER) { $env:MINIO_ROOT_USER } else { "minioadmin" }
-  $pass = if ($env:MINIO_ROOT_PASSWORD) { $env:MINIO_ROOT_PASSWORD } else { "minioadmin123" }
-  $bucket = if ($env:MINIO_BUCKET) { $env:MINIO_BUCKET } else { "stock-pos-files" }
-  docker run --rm --entrypoint /bin/sh --network stockmanagement_default `
-    minio/mc:RELEASE.2025-08-13T08-35-41Z `
-    -c "mc alias set local http://minio:9000 $user $pass >/dev/null; mc rm --recursive --force --dangerous local/$bucket/ >/dev/null 2>&1; echo MinIO cleared"
+if (-not $SkipEnv) {
+  if (Test-Path (Join-Path $infra ".env")) {
+    Write-Host "infrastructure\.env already exists — leaving it unchanged." -ForegroundColor Yellow
+  } else {
+    & (Join-Path $infra "scripts\init-env.ps1")
+  }
 }
 
 if (-not $SkipCacheClean) {
   Write-Host "Cleaning local caches..." -ForegroundColor Yellow
   $paths = @(
     "tmp",
-    "backend/.pytest_cache",
-    "backend/.ruff_cache",
-    "frontend/.nuxt",
-    "frontend/.output",
-    "frontend/.cache",
+    "backend\.pytest_cache",
+    "backend\.ruff_cache",
+    "frontend\.nuxt",
+    "frontend\.output",
+    "frontend\.cache",
     ".ruff_cache",
     ".pytest_cache"
   )
   foreach ($path in $paths) {
-    $full = Join-Path $root $path
+    $full = Join-Path $repoRoot $path
     if (Test-Path $full) {
       Remove-Item -Recurse -Force $full
       Write-Host "  removed $path"
     }
   }
-  Get-ChildItem -Path (Join-Path $root "backend") -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+  Get-ChildItem -Path (Join-Path $repoRoot "backend") -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
 Write-Host "Next:"
-Write-Host "  1. Copy .env.production.example -> .env and set strong secrets"
-Write-Host "  2. docker login ghcr.io"
-Write-Host "  3. .\infrastructure\scripts\deploy-from-registry.ps1"
-Write-Host "  4. Follow docs/PRODUCTION_CHECKLIST.md when available"
-Write-Host "Login after reset uses SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD from .env"
+Write-Host "  1. (Optional) add TELEGRAM_BOT_TOKEN to infrastructure\.env for Telegram"
+Write-Host "  2. Build and start: .\infrastructure\scripts\install-client.ps1"
+Write-Host "     or for GHCR images: .\infrastructure\scripts\deploy-from-registry.ps1"
+Write-Host "  3. Daily use: double-click infrastructure\Start Stock POS.bat"
+Write-Host "Login uses SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD from infrastructure\.env"

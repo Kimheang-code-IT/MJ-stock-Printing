@@ -12,8 +12,8 @@ Run the **smallest affected area first**, then related areas, then the full suit
 Needs the Compose db/redis (host ports 55432 / 56379); `tests/conftest.py` creates `stock_pos_test` and runs all migrations. Suite map and coverage gaps: see `docs/PROJECT.md` §7.
 
 ```bash
-docker compose up -d db redis
-python -m pytest backend/tests/modules/<area> -q   # stock, pos, delivery_notes, reports, auth, administration, telegram…
+docker compose -f infrastructure/docker-compose.yml up -d db redis   # from the repo root
+python -m pytest backend/tests/modules/<area> -q   # stock, pos, delivery, reports, auth, administration, telegram…
 python -m pytest backend/tests/modules/pos/test_sale.py -q   # single file
 python -m pytest backend/tests -q                  # full suite (~4 min)
 ```
@@ -34,8 +34,10 @@ pnpm --dir frontend build             # only before reporting a frontend task do
 ## Infrastructure
 
 ```bash
-docker compose -f docker-compose.yml config --quiet
-docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+docker compose -f infrastructure/docker-compose.yml config --quiet
+docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml config --quiet
 ```
+
+Run these from the repo root (Compose finds `infrastructure/.env` automatically).
 
 Never report a check as passing unless you ran it and saw it succeed.

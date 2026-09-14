@@ -337,7 +337,7 @@ async def daily_summary_totals(session: AsyncSession, *, day: date | None = None
     document currency and the summary reports both columns separately.
     """
     from app.modules.customers.models import CustomerDebt
-    from app.modules.delivery_notes.models import DeliveryNote
+    from app.modules.delivery.models import DeliveryNote
     from app.modules.pos.models import Sale
     from app.modules.stock.models import Product, StockBalance, StockTransaction, StockTransactionItem
     from app.modules.suppliers.models import SupplierDebt

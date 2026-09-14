@@ -76,7 +76,7 @@ Permissions: list/get/options require `category.view` / `uom.view` / `brand.view
 | PATCH `/pos/sales/{id}` | `pos.access` | **Edit a completed sale** (guarded: only `COMPLETED` with no returns). Reverses the original stock (compensating `SALE_RETURN` movements restored to the original batches) and re-applies the new lines/prices/discounts; customer and immutable payments stay, the customer debt is recalculated. Body: `items[]`, `discount`, `delivery_price`, `currency`, `exchange_rate`, `note?`, `sale_date?` |
 | GET `/pos/sales/{id}` | `pos.access` | Sale detail + items; loaded into POS **edit mode** (`/pos?editSaleId=<id>`) and legacy **return mode** (`/pos?returnSaleId=<id>`) |
 | POST `/pos/sales/{id}/return` | `pos.access` | Sale return (SRT), optional restock (endpoint kept; not linked from the UI) |
-| POST `/pos/sales/{id}/delivery-notes` | `delivery.create` | Create delivery note from the sale |
+| POST `/pos/sales/{id}/delivery` | `delivery.create` | Create delivery note from the sale |
 | GET `/pos/sales/{id}/receipt` | `pos.access` | JSON print payload for the HTML printer (no PDF endpoint exists — invoices print from the browser only). Carries invoice no, date, customer + phone/address, cashier, payment method, document `currency` + `exchange_rate` (preserved from sale time), items (UOM/qty/unit price/discount/line total), subtotal/discount/delivery fee/grand total/paid/debt/change, shop info, paper size, exchange-rate display flag, footer |
 
 Sale payload essentials: `items[{productId, uomId?, factorToBase?, quantity, unitPrice?, discountPercent?|discountAmount?}]`, `discount` (header), `deliveryPrice`, `customerId?` (walk-in when omitted), `currency` (`USD`\|`KHR`) + `exchangeRate` (KHR per 1 USD; every amount on the sale is in this currency), `amountReceived`, `paymentMethod` (`CASH`/`BANK_QR`/`CUSTOMER_DEBT`), `depositMethod?`, `includedDebtIds[]`, `dueDate?`, `note?`. Walk-in default: the frontend sends `amountReceived = amount due` when **Paid now** is left untouched, so `POST /pos/sales` with no `customerId` completes a fully paid walk-in cash sale; underpayment (`amountReceived < total`) on a walk-in is rejected 422.
@@ -86,6 +86,7 @@ Sale payload essentials: `items[{productId, uomId?, factorToBase?, quantity, uni
 | Method & path | Permission | Purpose |
 |---|---|---|
 | GET/POST `/customers`, GET/PATCH/DELETE `/customers/{id}` | list/get: current user; mutations: `customer.create/update/delete` | CRUD; delete 409 when referenced |
+| GET `/customers/options` | `customer.view` | Lightweight active-customer select options |
 | GET `/customers/{id}/debts` | current user | Debt list w/ sale info |
 | GET `/customers/{id}/purchase-history` | current user | Paginated sales |
 | GET `/customers/{id}/payments` | current user | All payments |
@@ -94,23 +95,23 @@ Sale payload essentials: `items[{productId, uomId?, factorToBase?, quantity, uni
 
 ## 7. Suppliers (`/suppliers`) — mirrors customers
 
-CRUD (`supplier.*`), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/payments` (`supplier.debt.pay`, oldest-first), `GET/POST /{id}/debts/{debtId}/payments`, `GET /{id}/history` (Stock In history).
+CRUD (`supplier.*`), `GET /options` (lightweight active-supplier options), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/payments` (`supplier.debt.pay`, oldest-first), `GET/POST /{id}/debts/{debtId}/payments`, `GET /{id}/history` (Stock In history).
 
-## 8. Delivery Notes (`/delivery-notes`, nested aliases)
+## 8. Delivery Notes (`/delivery`, nested aliases)
 
 | Method & path | Permission | Purpose |
 |---|---|---|
-| GET `/delivery-notes` | `delivery.view` | List (q, status, customer, date range) |
-| POST `/delivery-notes` | `delivery.create` | Create (from one or more sales of one customer) |
-| GET `/delivery-notes/deliverable-invoices` | `delivery.view` | Invoices with undelivered quantities |
-| GET/PATCH `/delivery-notes/{id}` | view / `delivery.update` | Detail / edit DRAFT |
+| GET `/delivery` | `delivery.view` | List (q, status, customer, date range) |
+| POST `/delivery` | `delivery.create` | Create (from one or more sales of one customer) |
+| GET `/delivery/deliverable-invoices` | `delivery.view` | Invoices with undelivered quantities |
+| GET/PATCH `/delivery/{id}` | view / `delivery.update` | Detail / edit DRAFT |
 | POST `…/{id}/confirm` `…/out-for-delivery` `…/deliver` | `delivery.confirm` / `delivery.deliver` | Status machine (Confirm requires `delivery.confirm`; Out/Deliver require `delivery.deliver`) |
 | POST `…/{id}/cancel` | `delivery.cancel` | Requires reason |
 | POST `…/{id}/status` | `delivery.update` | Legacy single-step transition endpoint |
 | GET `…/{id}/print` | `delivery.view` | Print payload for HTML print |
 | GET `/sales/{saleId}/deliverable-items` | `delivery.view` | Undelivered quantities per sale item |
-| POST `/pos/sales/{saleId}/delivery-notes` | `delivery.create` | Alias creation route from POS |
-| GET `/customers/{customerId}/delivery-notes` | `delivery.view` | Customer's notes |
+| POST `/pos/sales/{saleId}/delivery` | `delivery.create` | Alias creation route from POS |
+| GET `/customers/{customerId}/delivery` | `delivery.view` | Customer's notes |
 
 ## 9. Dashboard (`/dashboard`)
 
@@ -139,11 +140,26 @@ CRUD (`supplier.*`), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/paymen
 | GET/POST `/admin/users`, PATCH `/admin/users/{id}` | `user.manage` | User management; last-active-admin guard |
 | POST `/admin/users/{id}/reset-password` | `user.manage` | Admin reset (bumps token_version) |
 | GET `/admin/roles`, POST `/admin/roles`, PATCH `/admin/roles/{id}` | `role.manage` | Role matrix; unknown permission codes → 422 |
+| GET `/admin/roles/options` | `role.manage` | Lightweight active-role select options |
 | GET `/admin/permissions` | `role.manage` (catalog read) | Permission catalog for the matrix |
 | GET `/admin/document-sequences`, PATCH `/admin/document-sequences/{id}` | `sequence.manage` | Prefix / next number / length / status |
 | GET `/admin/audit-logs` | `audit.view` | Filtered audit trail (module, action, user, dates) |
 | GET/PATCH `/admin/settings` | `settings.manage` | Grouped settings; secrets masked |
 | POST `/admin/settings/telegram-test` | `settings.manage` | Send a Telegram test notification; soft result `{enabled, sent, recipients}` |
+
+## 11a. Settings surface (`/settings`)
+
+SPA-facing projection of the grouped settings catalogue. Reads require an authenticated user; writes require `settings.manage`.
+
+| Method & path | Permission | Purpose |
+|---|---|---|
+| GET `/settings/app-config` | current user | Full App Config document (general/localization/email/telegram/stock/notifications/security/system); bot token masked |
+| PATCH `/settings/app-config` | `settings.manage` | Partial App Config write, mapped onto known groups only |
+| GET/PATCH `/settings/app-info` | view: current user · update: `settings.manage` | Shop identity/branding projection (`shop` group) |
+| POST `/settings/app-info/reset` | `settings.manage` | Restore the `shop` group defaults |
+| POST `/settings/app-config/email/test-connection` · `/email/send-test` | `settings.manage` | Returns `status: disabled` (no email subsystem) |
+| POST `/settings/app-config/telegram/test-connection` · `/telegram/send-test` | `settings.manage` | Telegram connectivity/delivery test → `{status, message}` |
+| POST `/settings/reset-data` | `settings.manage` | Refused with `FEATURE_DISABLED`; resets go through DB maintenance |
 
 ## 12. Images & health
 
@@ -152,6 +168,12 @@ CRUD (`supplier.*`), `GET /{id}/debts`, `GET /{id}/payments`, `POST /{id}/paymen
 | POST `/images/upload` | current user | Multipart image upload → `{objectKey, url}` (5 MB cap) |
 | GET `/images/{object_key:path}` | Public (static media) | Serve stored image (traversal-guarded) |
 | GET `/health` · `/api/v1/health` | Public | Liveness + DB/Redis status |
+
+## 12a. Search (`/search`)
+
+| Method & path | Permission | Purpose |
+|---|---|---|
+| GET `/search?q=&limit=` | current user | Global command-palette search. Returns `{hits, total}`; each type (product/customer/supplier/sale) is included only when the caller holds `stock.view` / `customer.view` / `supplier.view` / `report.sales`. Blank `q` → empty result. |
 
 ## 13. Frontend endpoint notes
 

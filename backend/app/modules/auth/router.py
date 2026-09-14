@@ -2,6 +2,9 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import envelope, get_current_user, get_db_session
+from app.core.config import settings
+from app.core.exceptions import RateLimitedError
+from app.core.rate_limit import RateLimited, enforce_rate_limit
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
     ChangePasswordRequest,
@@ -33,9 +36,18 @@ _GENERIC_RESET_MESSAGE = (
 
 
 def _client_ip(request: Request) -> str | None:
+    # Prefer the header our own reverse proxy sets ($remote_addr). Do NOT trust
+    # the first X-Forwarded-For entry: nginx appends the real client to any
+    # client-supplied value, so the first entry is spoofable and would let an
+    # attacker rotate the rate-limit key. The last entry is the closest peer.
+    real = (request.headers.get("x-real-ip") or "").strip()
+    if real:
+        return real
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else None
 
 
@@ -70,7 +82,15 @@ async def login(
 
 
 @router.post("/refresh", response_model=None)
-async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db_session)) -> dict:
+async def refresh(payload: RefreshRequest, request: Request, db: AsyncSession = Depends(get_db_session)) -> dict:
+    try:
+        await enforce_rate_limit(
+            f"refresh:{_client_ip(request)}",
+            settings.rate_limit_refresh_per_minute,
+            60,
+        )
+    except RateLimited:
+        raise RateLimitedError("Too many refresh attempts. Try again later.")
     service = AuthService(db)
     return envelope(await service.refresh(payload.refresh_token))
 

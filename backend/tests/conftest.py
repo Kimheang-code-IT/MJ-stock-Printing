@@ -56,7 +56,7 @@ def _prepare_database() -> None:
         import app.modules.brands.models  # noqa: F401
         import app.modules.categories.models  # noqa: F401
         import app.modules.customers.models  # noqa: F401
-        import app.modules.delivery_notes.models  # noqa: F401
+        import app.modules.delivery.models  # noqa: F401
         import app.modules.pos.models  # noqa: F401
         import app.modules.reports.models  # noqa: F401
         import app.modules.stock.models  # noqa: F401

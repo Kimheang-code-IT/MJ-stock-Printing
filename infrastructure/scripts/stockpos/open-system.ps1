@@ -26,7 +26,7 @@ if (-not (Test-AppHealthy $root)) {
   }
   if (-not (Test-AppHealthy $root)) {
     Write-Host "The system did not become healthy within 90 seconds." -ForegroundColor Yellow
-    Write-Host "Try restart-system.bat, or see docs\LOCAL_DEPLOYMENT.md > Troubleshooting."
+    Write-Host "Try restart-system.bat, or see infrastructure\README.md > Troubleshooting."
     # Still try to open so the user sees the browser's own connection error.
     Start-Process "http://localhost"
     exit 1

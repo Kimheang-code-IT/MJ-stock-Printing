@@ -70,5 +70,3 @@ export function applyPasswordResetHandoff(email: string, resetToken: string) {
   })
 }
 
-export const MOCK_RESET_CODE = '123456'
-

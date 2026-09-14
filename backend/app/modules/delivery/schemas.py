@@ -97,7 +97,7 @@ class DeliveryNoteCreate(BaseModel):
 
 
 class DeliveryNoteFromSaleCreate(BaseModel):
-    """POST /pos/sales/{sale_id}/delivery-notes (POS auto-entry).
+    """POST /pos/sales/{sale_id}/delivery (POS auto-entry).
 
     Everything is optional: with no lines the note covers every sale line's
     remaining undelivered qty; phone/location default from the customer."""
@@ -167,7 +167,7 @@ class DeliveryNoteCancelRequest(BaseModel):
 
 
 class DeliveryNoteStatusRequest(BaseModel):
-    """Body of POST /delivery-notes/{id}/status (spec §5.13 Update Status).
+    """Body of POST /delivery/{id}/status (spec §5.13 Update Status).
 
     `status` is the canonical field from the extended vocabulary (PREPARING /
     OUT_FOR_DELIVERY / PARTIALLY_DELIVERED / DELIVERED / FAILED / RETURNED);

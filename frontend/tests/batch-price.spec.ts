@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { stockModules } from '../app/config/stock-modules'
 import { moduleDocumentTabs } from '../app/utils/module/document-tabs'
-import { createMockStockQueryRepository } from '../app/repositories/mock/entities'
-import { mockRecords } from '../app/mocks/db'
+import { createMockStockQueryRepository } from './support/repositories-mock/entities'
+import { mockRecords } from './support/mocks/db'
 import { salePriceVersionSelection } from '../app/utils/stock/uom-conversions'
 
 /**

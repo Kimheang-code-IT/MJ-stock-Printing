@@ -75,10 +75,19 @@ async function loadServerSummary() {
   summaryError.value = null
   try {
     const { start, end } = monthBounds()
-    serverSummary.value = await financeRepository.dashboard(start, end)
+    const summary = await financeRepository.dashboard(start, end)
+    serverSummary.value = summary
+    // The chart's default range equals the month-to-date summary range, so
+    // reuse the same payload instead of firing a second identical request on
+    // first load. When the ranges differ the caller fetches the chart range.
+    if (chartRange.value.start === start && chartRange.value.end === end) {
+      chartSummary.value = summary
+    }
+    return { start, end }
   }
   catch (error: unknown) {
     summaryError.value = error instanceof Error ? error.message : String(error)
+    return null
   }
   finally {
     summaryLoading.value = false
@@ -96,9 +105,24 @@ async function loadChartSummary() {
   }
 }
 
+/** First-load path: one dashboard request covers both the KPI/summary panel and
+ *  the chart. A second request only happens when the chart range was changed
+ *  before load finished. */
+async function loadDashboard() {
+  chartLoading.value = true
+  const serverRange = await loadServerSummary()
+  const matched = serverRange
+    && chartRange.value.start === serverRange.start
+    && chartRange.value.end === serverRange.end
+  if (matched) {
+    chartLoading.value = false
+    return
+  }
+  await loadChartSummary()
+}
+
 onMounted(() => {
-  void loadServerSummary()
-  void loadChartSummary()
+  void loadDashboard()
 })
 
 const chartRange = computed(() => {
@@ -198,8 +222,7 @@ const summaryGroups = computed<Array<{ key: string, label: string, rows: Summary
 })
 
 function refresh() {
-  void loadServerSummary()
-  void loadChartSummary()
+  void loadDashboard()
 }
 </script>
 

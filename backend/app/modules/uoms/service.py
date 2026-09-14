@@ -75,7 +75,10 @@ class UOMService:
 
     async def delete(self, uom_id: uuid.UUID) -> None:
         uom = await self.get(uom_id)
-        if await self.repo.count_products(uom_id) > 0:
-            raise ConflictError("Cannot delete a UOM that is linked to products; disable it instead")
+        if await self.repo.count_products(uom_id) > 0 or await self.repo.count_sale_price_uoms(uom_id) > 0:
+            raise ConflictError(
+                "Cannot delete this unit of measure because products or pricing history "
+                "reference it. Deactivate it instead."
+            )
         await self.session.delete(uom)
         await self.session.commit()

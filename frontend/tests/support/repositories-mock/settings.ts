@@ -13,7 +13,7 @@ import type {
   StorageRepository,
 } from '~/repositories/contracts/settings'
 import { DEFAULT_FORMAT_CONFIG } from '~/utils/format/format-service'
-import { createId, mockLatency, nowIso } from '~/mocks/query'
+import { createId, mockLatency, nowIso } from '../mocks/query'
 
 const status = (value: ConnectionStatus) => value
 

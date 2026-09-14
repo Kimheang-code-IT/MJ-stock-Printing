@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     telegram_bot_client_id: str = "stock-pos-telegram"
     telegram_bot_client_secret: str = _DEV_TELEGRAM_SECRET
     telegram_bot_token: str = ""
+    telegram_bot_mode: str = "polling"
     telegram_enabled: bool = True
     telegram_reset_code_expire_minutes: int = 5
     telegram_reset_max_attempts: int = 5
@@ -63,7 +64,9 @@ class Settings(BaseSettings):
     seed_admin_name: str = "System Administrator"
 
     default_page_size: int = 20
-    max_page_size: int = 100
+    # Report list endpoints group line-level rows into documents client-side,
+    # so they request a wide page; keep the server-side cap generous.
+    max_page_size: int = 500
 
     # Product / shop / brand images on local disk (not S3/MinIO).
     local_storage_dir: str = "var/media"

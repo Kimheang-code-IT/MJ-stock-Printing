@@ -8,7 +8,7 @@ import {
   sales,
   stockIns,
   stockMovements,
-} from '../app/mocks/stock-seed'
+} from './support/mocks/stock-seed'
 
 const APPROVED_MOVEMENT_TYPES = [
   'Stock In',

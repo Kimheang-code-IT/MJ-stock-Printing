@@ -102,7 +102,7 @@ async def test_uom_safe_delete_prefer_disable_when_linked(client):
 
     blocked = await client.delete(f"/api/v1/uoms/{uom['id']}", headers=headers)
     assert blocked.status_code == 409
-    assert "disable" in blocked.json()["detail"]["message"].lower()
+    assert "deactivate" in blocked.json()["detail"]["message"].lower()
 
     disabled = await client.patch(
         f"/api/v1/uoms/{uom['id']}", json={"status": "INACTIVE"}, headers=headers

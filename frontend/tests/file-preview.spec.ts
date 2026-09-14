@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filePreviewBlob, mimeFromFileName, mockPdfBytes } from '../app/utils/module/attachments'
+import { filePreviewBlob, mimeFromFileName, placeholderPdfBytes } from '../app/utils/module/attachments'
 import { safeExternalUrl, safeFilePreviewUrl } from '../app/utils/security/url'
 
 describe('file preview', () => {
@@ -11,7 +11,7 @@ describe('file preview', () => {
   })
 
   it('builds a PDF the browser can open for seeded .pdf rows', async () => {
-    const pdf = mockPdfBytes('BL-8821.pdf', 'Bill of lading')
+    const pdf = placeholderPdfBytes('BL-8821.pdf', 'Bill of lading')
     expect(pdf.startsWith('%PDF-1.4')).toBe(true)
     expect(pdf).toContain('%%EOF')
     const blob = filePreviewBlob({ fileName: 'BL-8821.pdf' })

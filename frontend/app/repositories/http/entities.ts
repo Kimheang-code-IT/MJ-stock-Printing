@@ -68,52 +68,47 @@ function asRecordId(value: unknown): string {
   return value == null ? '' : String(value)
 }
 
-function asRoleId(value: unknown): number | undefined {
-  if (value == null || value === '') return undefined
-  const parsed = typeof value === 'number' ? value : Number(value)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
-}
-
 /** Map backend user fields to the UI column keys (no fabricated data). */
 function adaptUserOut(user: Record<string, unknown>): Record<string, unknown> {
   const effectivePermissions = Array.isArray(user.effectivePermissions)
     ? user.effectivePermissions.map(String)
     : []
-  const roleId = asRoleId(user.roleId)
+  const roleId = user.roleId ?? user.role_id
+  const fullName = String(user.full_name ?? user.displayName ?? '').trim()
+  const telegramLinked = Boolean(user.telegramLinked ?? user.telegram_chat_id ?? user.telegramChatId)
   return {
     ...user,
     id: asRecordId(user.id),
-    roleId: roleId != null ? String(roleId) : '',
+    // Backend users have no username; derive a display value from the email.
+    username: String(user.username ?? user.email ?? '').split('@')[0],
+    displayName: fullName,
+    roleId: roleId != null && roleId !== '' ? String(roleId) : '',
     effectivePermissions,
     permissionRows: permissionRowsFromFlatKeys(effectivePermissions),
-    lastLogin: user.lastLoginAt ?? user.lastLogin ?? null,
+    lastLogin: user.lastLoginAt ?? user.last_login_at ?? user.lastLogin ?? null,
     // Telegram linking is server-managed; show chat ID when linked.
-    telegramUsername: user.telegramLinked
-      ? String(user.telegramChatId || 'Linked')
+    telegramUsername: telegramLinked
+      ? String(user.telegram_chat_id ?? user.telegramChatId ?? 'Linked')
       : '',
   }
 }
 
-/** Only the fields UserCreate / UserUpdate accept (`extra="forbid"`). */
+/** Only the fields UserCreate / UserUpdate accept (`full_name`, `role_id`). */
 function adaptUserIn(input: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {}
-  const username = String(input.username ?? '').trim()
-  const displayName = String(input.displayName ?? '').trim()
+  const fullName = String(input.fullName ?? input.full_name ?? input.displayName ?? '').trim()
   const email = String(input.email ?? '').trim()
   const status = String(input.status ?? '').trim()
   const password = String(input.password ?? '')
-  const roleId = asRoleId(input.roleId)
-  const avatar = typeof input.avatar === 'string'
-    ? input.avatar.trim()
-    : typeof input.avatarUrl === 'string' ? input.avatarUrl.trim() : ''
+  const roleId = input.roleId ?? input.role_id
+  const chatId = String(input.telegramChatId ?? input.telegram_chat_id ?? '').trim()
 
-  if (username) output.username = username
-  if (displayName) output.displayName = displayName
+  if (fullName) output.full_name = fullName
   if (email) output.email = email
-  if (status) output.status = status
-  if (roleId != null) output.roleId = roleId
+  if (status) output.status = /^(inactive|disabled)$/i.test(status) ? 'DISABLED' : 'ACTIVE'
+  if (roleId != null && roleId !== '') output.role_id = String(roleId)
   if (password.trim()) output.password = password
-  if (avatar) output.avatar = avatar
+  if (chatId) output.telegram_chat_id = chatId
   return output
 }
 
@@ -126,15 +121,19 @@ function adaptRoleOut(role: Record<string, unknown>): Record<string, unknown> {
     permissions,
     permissionRows: permissionRowsFromFlatKeys(permissions),
     permissionCount: Number(role.permissionCount ?? permissions.length),
-    status: 'Active',
+    // Roles carry ACTIVE/DISABLED server-side; the list uses Active/Inactive.
+    status: String(role.status ?? 'ACTIVE').toUpperCase() === 'DISABLED' ? 'Inactive' : 'Active',
   }
 }
 
 /** UI permission-matrix rows â†’ flat backend permission keys. */
 function adaptRoleIn(input: Record<string, unknown>): Record<string, unknown> {
   const output = stripUiOnlyFields(input)
-  // status is a UI-only column for roles; the backend has no such field.
-  delete output.status
+  // Role status uses the ACTIVE/DISABLED dialect on the backend.
+  if (output.status != null) {
+    const status = String(output.status).toUpperCase()
+    output.status = status === 'INACTIVE' || status === 'DISABLED' ? 'DISABLED' : 'ACTIVE'
+  }
   if (Array.isArray(input.permissionRows)) {
     output.permissions = permissionRowsToFlatKeys(input.permissionRows as AppRolePermissionRow[])
   }
@@ -145,9 +144,14 @@ function adaptRoleIn(input: Record<string, unknown>): Record<string, unknown> {
 function adaptAuditLogOut(row: Record<string, unknown>): Record<string, unknown> {
   return {
     ...row,
-    user: row.userName ?? row.user ?? null,
-    entity: row.entityLabel ?? row.entityId ?? '',
-    ipDevice: row.ipAddress ?? row.ipDevice ?? '',
+    // Backend returns created_at / entity_type / old_values / new_values.
+    occurredAt: row.occurredAt ?? row.created_at ?? null,
+    user: row.userName ?? row.user ?? row.user_name ?? null,
+    eventType: row.eventType ?? row.action ?? '',
+    entity: row.entityLabel ?? row.entityId ?? row.entity_id ?? '',
+    ipDevice: row.ipAddress ?? row.ip_address ?? row.ipDevice ?? '',
+    beforeData: row.beforeData ?? row.old_values ?? '',
+    afterData: row.afterData ?? row.new_values ?? '',
   }
 }
 
@@ -178,7 +182,7 @@ function adaptProductOut(row: Record<string, unknown>): Record<string, unknown> 
     imageObjectKey: row.imageObjectKey ?? row.image_object_key ?? null,
     // Nearest lot expiry for the Stock list column (before Status).
     expiryDate: row.expiryDate ?? row.expiry_date ?? null,
-    // UI status dialect (mock + module filters use Active/Inactive).
+    // UI status dialect (module filters use Active/Inactive).
     status: row.status === 'ACTIVE' ? 'Active' : row.status === 'INACTIVE' ? 'Inactive' : row.status,
     // Pricing rows normalized to the UI camelCase dialect (spec §2.1.3):
     // { uomId, uomSymbol, convertUomId, convertUomSymbol, factorToBase,
@@ -266,6 +270,18 @@ function canonicalPaymentMethod(method: unknown): string {
   return POS_PAYMENT_METHOD_MAP[String(method ?? '').trim()] || String(method ?? 'CASH')
 }
 
+/** UI payment labels → canonical Finance expense methods (CASH|BANK_QR|CARD|OTHER). */
+const EXPENSE_PAYMENT_METHOD_MAP: Record<string, string> = {
+  Cash: 'CASH',
+  Card: 'CARD',
+  'Mobile Payment': 'BANK_QR',
+  'Bank Transfer': 'OTHER',
+}
+
+function canonicalExpenseMethod(method: unknown): string {
+  return EXPENSE_PAYMENT_METHOD_MAP[String(method ?? '').trim()] || 'OTHER'
+}
+
 function adaptEntityOut(collection: ApiCollection, row: Record<string, unknown>): Record<string, unknown> {
   if (collection === 'users') return adaptUserOut(row)
   if (collection === 'roles') return adaptRoleOut(row)
@@ -280,13 +296,34 @@ function adaptEntityOut(collection: ApiCollection, row: Record<string, unknown>)
   if (collection === 'stockIns') return adaptPurchaseReportLine(row)
   if (collection === 'saleReturns') return adaptSaleReturnRow(row)
   if (collection === 'purchaseReturns') return adaptPurchaseReturnRow(row)
-  if (collection === 'documentSequences') {
-    return {
-      ...row,
-      nextNumberPreview: documentSequencePreview(row as AppRecord),
-    }
-  }
+  if (collection === 'documentSequences') return adaptDocumentSequenceOut(row)
   return row
+}
+
+/**
+ * Backend SequenceOut → UI camelCase. `next_number` is the number to allocate
+ * next, so the UI's `lastValue` (last issued) is `next_number - 1`.
+ */
+function adaptDocumentSequenceOut(row: Record<string, unknown>): Record<string, unknown> {
+  const nextNumber = Math.max(1, Number(row.next_number ?? row.nextNumber ?? 1))
+  const lastValue = Math.max(0, nextNumber - 1)
+  const paddingLength = Math.max(1, Number(row.number_length ?? row.paddingLength ?? 6))
+  const normalized: AppRecord = {
+    ...(row as AppRecord),
+    documentType: String(row.document_type ?? row.documentType ?? ''),
+    prefix: String(row.prefix ?? ''),
+    lastValue,
+    paddingLength,
+  }
+  return {
+    ...row,
+    documentType: normalized.documentType,
+    prefix: normalized.prefix,
+    lastValue,
+    paddingLength,
+    resetType: row.reset_type ?? row.resetType ?? null,
+    nextNumberPreview: documentSequencePreview(normalized),
+  }
 }
 
 /** Backend SaleReturnRow → UI camelCase customer-return history row. */
@@ -365,6 +402,8 @@ function adaptDeliveryNoteOut(row: Record<string, unknown>): Record<string, unkn
     saleId: invoiceNos.length === 1 ? String(links[0]?.sale_id ?? links[0]?.saleId ?? '') : '',
     deliveryPhone: row.deliveryPhone ?? row.delivery_phone ?? '',
     deliveryLocation: row.deliveryLocation ?? row.delivery_location ?? '',
+    deliveryDate: row.deliveryDate ?? row.delivery_date ?? null,
+    deliveryFee: row.deliveryFee ?? row.delivery_fee ?? null,
     deliveredAt: row.deliveredAt ?? row.delivered_at ?? null,
     status: deliveryStatusLabel(row.status),
     note: row.note ?? null,
@@ -410,6 +449,9 @@ function adaptStockMovementOut(row: Record<string, unknown>): Record<string, unk
     movementType,
     quantity: Number(row.quantity ?? row.quantity_delta ?? 0),
     quantityDelta: row.quantityDelta ?? row.quantity_delta ?? 0,
+    // Backend MovementOut projects the signed delta into qty_in / qty_out.
+    qtyIn: Number(row.qty_in ?? row.qtyIn ?? 0),
+    qtyOut: Number(row.qty_out ?? row.qtyOut ?? 0),
     // Batch traceability (spec: movements expose the lot the change hit).
     batchNo: row.batchNo ?? row.batch_no ?? null,
     expiryDate: row.expiryDate ?? row.expiry_date ?? null,
@@ -544,7 +586,7 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
 
 /**
  * Group line-level GET /reports/sales rows into document rows matching the
- * UI/mock sale shape (id, saleNo, items[] with returnable quantities) so the
+ * UI sale shape (id, saleNo, items[] with returnable quantities) so the
  * Sales Report table AND the customer Return dialog share one contract.
  */
 function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
@@ -641,12 +683,16 @@ function adaptPurchaseReportLine(row: Record<string, unknown>): Record<string, u
     status: String(row.status ?? ''),
     currency: String(row.currency ?? 'USD'),
     exchangeRate: Number(row.exchange_rate ?? row.exchangeRate ?? 1) || 1,
+    // Header fields the Edit form reloads (repeated per line).
+    note: row.note ?? null,
+    discount: q2(row.discount_amount ?? row.discountAmount),
+    tax: q2(row.tax_amount ?? row.taxAmount),
   }
 }
 
 /**
  * Group line-level GET /reports/purchases rows into document rows matching
- * the UI/mock purchase shape (id, purchaseNo, items[] with returnable qty)
+ * the UI purchase shape (id, purchaseNo, items[] with returnable qty)
  * so the Purchase Report table AND the supplier Return dialog share one
  * contract. Return lines reference stock_transaction_item_id.
  */
@@ -672,6 +718,9 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
         paidAmount: 0,
         remaining: 0,
         status: 'Completed',
+        note: line.note,
+        discount: line.discount,
+        tax: line.tax,
       }
       byTx.set(key, doc)
     }
@@ -841,6 +890,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       currency: input.currency ?? 'USD',
       exchange_rate: input.exchangeRate ?? 1,
       note: input.note ?? null,
+      ...(input.transactionDate ? { transaction_date: input.transactionDate } : {}),
       items: input.lines.map(line => ({
         product_id: line.productId,
         quantity: Number(line.quantity || 0),
@@ -887,21 +937,36 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       damage: ApiEndpoints.STOCK_DAMAGE,
       expiry: ApiEndpoints.STOCK_EXPIRE,
     } as const
-    const endpoint = endpointByType[input.type]
-    if (input.type !== 'stock_in') {
-      // Damage / Expiry accept the target batch no + entered UOM; the
-      // backend validates the batch remaining quantity server-side.
-      return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
+    if (input.type === 'adjustment') {
+      // Adjustment is a signed delta (+/-); the quick-operation endpoint
+      // computes the actual counted quantity from the locked balance.
+      return unwrap<Record<string, unknown>>(await api.post<unknown>(ApiEndpoints.STOCK_OPERATIONS, {
+        type: 'adjustment',
         product_id: input.productId,
         quantity: input.quantity,
         note: input.note ?? null,
+      })) as AppRecord
+    }
+    if (input.type === 'damage' || input.type === 'expiry') {
+      // Damage/Expiry are absolute quantities and the backend expects an
+      // `items[]` envelope with a non-empty `reason`.
+      const item: Record<string, unknown> = {
+        product_id: input.productId,
+        quantity: input.quantity,
+        reason: input.note?.trim() || (input.type === 'damage' ? 'Damaged' : 'Expired'),
         ...(input.batchNo ? { batch_no: input.batchNo } : {}),
         ...(input.type === 'expiry' && input.expiryDate ? { expiry_date: input.expiryDate } : {}),
         ...(input.uomId ? { uom_id: input.uomId } : {}),
         ...(input.uomSymbol ? { uom_symbol: input.uomSymbol } : {}),
         ...(input.factorToBase != null ? { factor_to_base: input.factorToBase } : {}),
+      }
+      const endpoint = input.type === 'damage' ? ApiEndpoints.STOCK_DAMAGE : ApiEndpoints.STOCK_EXPIRE
+      return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
+        note: input.note ?? null,
+        items: [item],
       })) as AppRecord
     }
+    const endpoint = endpointByType[input.type]
     // Stock In = purchase (POST /stock/in): one line per call, qty/cost per
     // the selected Pricing UOM (converted to base server-side); unpaid
     // balance becomes supplier debt in the same transaction.
@@ -937,7 +1002,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       : ApiEndpoints.CUSTOMER_PAYMENTS(input.customerId)
     return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
       amount: input.amount,
-      payment_method: input.paymentMethod,
+      payment_method: canonicalPaymentMethod(input.paymentMethod),
       reference_no: input.reference ?? null,
     })) as AppRecord
   }
@@ -949,7 +1014,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       : ApiEndpoints.SUPPLIER_PAYMENTS(input.supplierId)
     return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
       amount: input.amount,
-      payment_method: input.paymentMethod,
+      payment_method: canonicalPaymentMethod(input.paymentMethod),
       reference_no: input.reference ?? null,
     })) as AppRecord
   }
@@ -1386,7 +1451,7 @@ export function createHttpFinanceRepository(): FinanceRepository {
           category: input.category,
           description: input.description,
           amount: input.amount,
-          payment_method: input.paymentMethod,
+          payment_method: canonicalExpenseMethod(input.paymentMethod),
           reference: input.reference ?? null,
           currency: input.currency ?? 'USD',
           exchange_rate: input.exchangeRate ?? 1,

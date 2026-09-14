@@ -17,19 +17,9 @@ export const useAppDataStore = defineStore('app-data', () => {
   const loadingCollections = ref<Record<string, boolean>>({})
   const collectionErrors = ref<Record<string, string | null>>({})
 
-  // True only when the repository layer is the real /api/v1 HTTP adapter.
-  // Mock mode (NUXT_PUBLIC_USE_MOCK_DATA=true) also loads through the same
-  // EntityRepository (in-memory), so loading/error state is driven by the
-  // repository — not by this flag. Never hardcode a mode here.
-  const isHttpMode = (() => {
-    try {
-      return useRuntimeConfig().public.useMockData !== true
-    }
-    catch {
-      // Outside a Nuxt context (tests/tooling): keep the repository-driven path.
-      return true
-    }
-  })()
+  // The repository layer is always the real /api/v1 HTTP adapter; loading and
+  // error state is driven by the repository.
+  const isHttpMode = true
 
   function reload() {
     void reloadCollections(Object.keys(remoteCache.value))

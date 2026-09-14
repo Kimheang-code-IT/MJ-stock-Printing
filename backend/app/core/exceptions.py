@@ -48,3 +48,8 @@ class AccessDeniedError(AppError):
 class RateLimitedError(AppError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     code = "RATE_LIMITED"
+
+
+class FeatureDisabledError(AppError):
+    status_code = status.HTTP_501_NOT_IMPLEMENTED
+    code = "FEATURE_DISABLED"

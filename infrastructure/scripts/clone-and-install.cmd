@@ -16,7 +16,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "%ROOT%\docker-compose.yml" (
+if not exist "%ROOT%\infrastructure\docker-compose.yml" (
   echo Cloning %REPO_URL% to %ROOT%
   git clone "%REPO_URL%" "%ROOT%"
   if errorlevel 1 exit /b 1

@@ -58,7 +58,7 @@ async def test_deliverable_items_and_partial_delivery(client):
 
     # First delivery note: partial (2 of 5 of line A), stays DRAFT.
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -85,7 +85,7 @@ async def test_deliverable_items_and_partial_delivery(client):
 
     # Over-delivery across notes is rejected.
     over = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "lines": [{"saleId": sale["id"], "saleItemId": line_a["id"], "qtyToDeliver": "4"}],
         },
@@ -96,7 +96,7 @@ async def test_deliverable_items_and_partial_delivery(client):
 
     # Over-delivery within one note's lines is rejected too.
     within = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "lines": [
                 {"saleId": sale["id"], "saleItemId": line_a["id"], "qtyToDeliver": "2"},
@@ -143,7 +143,7 @@ async def test_multi_invoice_same_customer_on_one_note(client):
         line_ids.append(sale_data["items"][0]["id"])
 
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -166,7 +166,7 @@ async def test_multi_invoice_same_customer_on_one_note(client):
     # The deliverable-invoices picker no longer offers either invoice (or only
     # the partial remainder of the second one).
     picked = (
-        await client.get("/api/v1/delivery-notes/deliverable-invoices", headers=headers)
+        await client.get("/api/v1/delivery/deliverable-invoices", headers=headers)
     ).json()["data"]
     picked_ids = {row["sale_id"] for row in picked}
     assert sale_ids[0] not in picked_ids  # fully allocated
@@ -175,7 +175,7 @@ async def test_multi_invoice_same_customer_on_one_note(client):
     invoice_no = next(link["invoice_no"] for link in note["sales"] if link["sale_id"] == sale_ids[1])
     searched = (
         await client.get(
-            f"/api/v1/delivery-notes/deliverable-invoices?search={invoice_no}", headers=headers
+            f"/api/v1/delivery/deliverable-invoices?search={invoice_no}", headers=headers
         )
     ).json()["data"]
     assert {row["sale_id"] for row in searched} <= {sale_ids[1]}
@@ -209,7 +209,7 @@ async def test_cross_customer_invoices_rejected(client):
         line_ids[customer["id"]] = sale_data["items"][0]["id"]
 
     mixed = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -232,7 +232,7 @@ async def test_draft_edit_rules_and_status_workflow(client):
 
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json=_create_body(sale["id"], line_a["id"], 2),
             headers=headers,
         )
@@ -240,7 +240,7 @@ async def test_draft_edit_rules_and_status_workflow(client):
 
     # Draft edits work: adjust qty and contact info.
     patched = await client.patch(
-        f"/api/v1/delivery-notes/{note['id']}",
+        f"/api/v1/delivery/{note['id']}",
         json={
             "delivery_phone": "012999999",
             "delivery_location": "Siem Reap",
@@ -254,24 +254,24 @@ async def test_draft_edit_rules_and_status_workflow(client):
     assert patched.json()["data"]["delivery_location"] == "Siem Reap"
 
     # Illegal transition: deliver a draft (Draft → Delivered is not allowed).
-    early = await client.post(f"/api/v1/delivery-notes/{note['id']}/deliver", headers=headers)
+    early = await client.post(f"/api/v1/delivery/{note['id']}/deliver", headers=headers)
     assert early.status_code == 409
 
-    confirmed = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
+    confirmed = await client.post(f"/api/v1/delivery/{note['id']}/confirm", headers=headers)
     assert confirmed.status_code == 200
     assert confirmed.json()["data"]["status"] == "PREPARING"
 
     # Draft-only editing: confirmed notes are locked.
     locked = await client.patch(
-        f"/api/v1/delivery-notes/{note['id']}", json={"delivery_phone": "011"}, headers=headers
+        f"/api/v1/delivery/{note['id']}", json={"delivery_phone": "011"}, headers=headers
     )
     assert locked.status_code == 409
 
-    out = await client.post(f"/api/v1/delivery-notes/{note['id']}/out-for-delivery", headers=headers)
+    out = await client.post(f"/api/v1/delivery/{note['id']}/out-for-delivery", headers=headers)
     assert out.status_code == 200
     assert out.json()["data"]["status"] == "OUT_FOR_DELIVERY"
 
-    delivered = await client.post(f"/api/v1/delivery-notes/{note['id']}/deliver", headers=headers)
+    delivered = await client.post(f"/api/v1/delivery/{note['id']}/deliver", headers=headers)
     assert delivered.status_code == 200, delivered.text
     body = delivered.json()["data"]
     assert body["status"] == "DELIVERED"
@@ -279,7 +279,7 @@ async def test_draft_edit_rules_and_status_workflow(client):
     assert all(Decimal(item["qty_delivered"]) == Decimal(item["qty_to_deliver"]) for item in body["items"])
 
     # Delivered is terminal.
-    again = await client.post(f"/api/v1/delivery-notes/{note['id']}/cancel", json={"reason": "nope"}, headers=headers)
+    again = await client.post(f"/api/v1/delivery/{note['id']}/cancel", json={"reason": "nope"}, headers=headers)
     assert again.status_code == 409
 
     # Remaining for line A reflects the delivered 3.
@@ -316,7 +316,7 @@ async def test_phone_and_location_required_before_confirm(client):
 
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json=_create_body(sale.json()["data"]["id"], line_id, 1),
             headers=headers,
         )
@@ -324,16 +324,16 @@ async def test_phone_and_location_required_before_confirm(client):
     assert note["status"] == "PENDING"
 
     # Confirm without phone/location is rejected.
-    missing = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
+    missing = await client.post(f"/api/v1/delivery/{note['id']}/confirm", headers=headers)
     assert missing.status_code == 422
 
     patched = await client.patch(
-        f"/api/v1/delivery-notes/{note['id']}",
+        f"/api/v1/delivery/{note['id']}",
         json={"delivery_phone": "012999888", "delivery_location": "Battambang"},
         headers=headers,
     )
     assert patched.status_code == 200
-    confirmed = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
+    confirmed = await client.post(f"/api/v1/delivery/{note['id']}/confirm", headers=headers)
     assert confirmed.status_code == 200, confirmed.text
 
 
@@ -345,7 +345,7 @@ async def test_cancel_releases_remaining_qty(client):
 
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json=_create_body(sale["id"], line_a["id"], 5),
             headers=headers,
         )
@@ -356,7 +356,7 @@ async def test_cancel_releases_remaining_qty(client):
     assert remaining[line_a["id"]] == Decimal("0.0000")
 
     cancelled = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/cancel", json={"reason": "customer away"}, headers=headers
+        f"/api/v1/delivery/{note['id']}/cancel", json={"reason": "customer away"}, headers=headers
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["data"]["status"] == "RETURNED"
@@ -367,7 +367,7 @@ async def test_cancel_releases_remaining_qty(client):
     assert remaining[line_a["id"]] == Decimal("5.0000"), "cancel must release the reserved quantity"
 
     # Cancelled notes cannot transition anymore.
-    confirm = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
+    confirm = await client.post(f"/api/v1/delivery/{note['id']}/confirm", headers=headers)
     assert confirm.status_code == 409
 
 
@@ -402,7 +402,7 @@ async def test_returned_qty_is_not_deliverable(client):
 
     # Delivering more than the return-adjusted remaining is rejected.
     over = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={"lines": [{"saleId": sale_data["id"], "saleItemId": line_id, "qtyToDeliver": "3"}]},
         headers=headers,
     )
@@ -417,13 +417,13 @@ async def test_print_payload_and_customer_listing(client):
 
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json=_create_body(sale["id"], line_a["id"], 1),
             headers=headers,
         )
     ).json()["data"]
 
-    printed = await client.get(f"/api/v1/delivery-notes/{note['id']}/print", headers=headers)
+    printed = await client.get(f"/api/v1/delivery/{note['id']}/print", headers=headers)
     assert printed.status_code == 200, printed.text
     payload = printed.json()["data"]
     assert payload["delivery_no"] == note["delivery_no"]
@@ -432,7 +432,7 @@ async def test_print_payload_and_customer_listing(client):
     assert payload["signature_blocks"] == ["Receiver", "Delivery staff"]
     assert len(payload["lines"]) == 1
 
-    customer_notes = await client.get(f"/api/v1/customers/{customer['id']}/delivery-notes", headers=headers)
+    customer_notes = await client.get(f"/api/v1/customers/{customer['id']}/delivery", headers=headers)
     assert customer_notes.status_code == 200
     assert note["id"] in {n["id"] for n in customer_notes.json()["data"]}
 
@@ -444,7 +444,7 @@ async def test_print_payload_and_customer_listing(client):
 
     # POS post-sale entry point creates a note for the same sale.
     pos_note = await client.post(
-        f"/api/v1/pos/sales/{sale['id']}/delivery-notes",
+        f"/api/v1/pos/sales/{sale['id']}/delivery",
         json=_create_body(sale["id"], line_a["id"], 1),
         headers=headers,
     )
@@ -465,14 +465,14 @@ async def test_delivery_permissions_enforced(client, db_session):
     data = await login(client, "dn-viewer@example.com", "dnviewer1")
     viewer = {"Authorization": f"Bearer {data['access_token']}"}
 
-    anon = await client.get("/api/v1/delivery-notes")
+    anon = await client.get("/api/v1/delivery")
     assert anon.status_code == 401
 
     # Viewer can read but not create/confirm.
-    assert (await client.get("/api/v1/delivery-notes", headers=viewer)).status_code == 200
+    assert (await client.get("/api/v1/delivery", headers=viewer)).status_code == 200
     assert (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json={"lines": [{"saleId": str(uuid.uuid4()), "saleItemId": str(uuid.uuid4()), "qtyToDeliver": "1"}]},
             headers=viewer,
         )
@@ -495,17 +495,17 @@ async def test_delivery_permissions_enforced(client, db_session):
 
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json=_create_body(sale_id, line_id, 1),
             headers=headers,
         )
     ).json()["data"]
 
-    assert (await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=viewer)).status_code == 403
-    assert (await client.post(f"/api/v1/delivery-notes/{note['id']}/deliver", headers=viewer)).status_code == 403
+    assert (await client.post(f"/api/v1/delivery/{note['id']}/confirm", headers=viewer)).status_code == 403
+    assert (await client.post(f"/api/v1/delivery/{note['id']}/deliver", headers=viewer)).status_code == 403
     assert (
         await client.post(
-            f"/api/v1/delivery-notes/{note['id']}/cancel", json={"reason": "x"}, headers=viewer
+            f"/api/v1/delivery/{note['id']}/cancel", json={"reason": "x"}, headers=viewer
         )
     ).status_code == 403
 
@@ -530,7 +530,7 @@ async def test_concurrent_delivery_note_creation_allocates_distinct_numbers(clie
 
     async def create(qty: str):
         return await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json={
                 "deliveryPhone": "0123456789",
                 "deliveryLocation": "Phnom Penh",
@@ -546,7 +546,7 @@ async def test_concurrent_delivery_note_creation_allocates_distinct_numbers(clie
     assert statuses == [201, 422], (first.text, second.text)
 
     listing = await client.get(
-        "/api/v1/delivery-notes", params={"q": sale.json()["data"]["invoice_no"]}, headers=headers
+        "/api/v1/delivery", params={"q": sale.json()["data"]["invoice_no"]}, headers=headers
     )
     numbers = [n["delivery_no"] for n in listing.json()["data"]]
     assert len(numbers) == len(set(numbers)) == 1
@@ -579,7 +579,7 @@ async def test_delivery_note_requires_completed_sale(client):
         headers=headers,
     )
     fully_returned = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={"lines": [{"saleId": sale_id, "saleItemId": line_id, "qtyToDeliver": "1"}]},
         headers=headers,
     )

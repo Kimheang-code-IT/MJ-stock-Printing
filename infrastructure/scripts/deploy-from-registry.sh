@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Pull Stock & POS images from GitHub Container Registry and start production.
 set -euo pipefail
-root="$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)"
-cd "$root"
+infra="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+cd "$infra"
 
 if [[ ! -f .env ]]; then
-  echo "Missing .env in the repository root. Copy .env.production.example to .env and fill every CHANGE_ME value." >&2
+  echo "Missing infrastructure/.env. Copy .env.production.example to .env and fill every CHANGE_ME value." >&2
   exit 1
 fi
 

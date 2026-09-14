@@ -66,7 +66,7 @@ def send_payment_invoice(self, payload: dict) -> int:
         from app.modules.administration.service import get_setting_value
         from app.modules.auth.models import User
         from app.shared.telegram.client import send_message
-        from app.shared.telegram.notify import format_payment_invoice_text
+        from app.shared.telegram.service import format_payment_text
 
         async with SessionFactory() as session:
             result = await session.execute(
@@ -78,12 +78,10 @@ def send_payment_invoice(self, payload: dict) -> int:
                 )
             )
             recipients = [str(chat_id) for chat_id in result.scalars().all()]
-            shop_name = await get_setting_value(session, "shop", "shop_name", "Yoeun Sokhon Pharmacy")
             timezone_name = await get_setting_value(session, "system", "timezone", "UTC")
 
-        text = format_payment_invoice_text(
+        text = format_payment_text(
             payload,
-            shop_name=str(shop_name or "Yoeun Sokhon Pharmacy"),
             timezone_name=str(timezone_name or "UTC"),
         )
         sent = 0

@@ -1,5 +1,6 @@
 export const ApiEndpoints = {
   AUTH_LOGIN: '/api/v1/auth/login',
+  AUTH_SETUP: '/api/v1/auth/setup',
   AUTH_LOGOUT: '/api/v1/auth/logout',
   AUTH_ME: '/api/v1/auth/me',
   AUTH_REFRESH: '/api/v1/auth/refresh',
@@ -55,7 +56,7 @@ export const ApiEndpoints = {
   SALE_DETAIL: (id: string) => `/api/v1/pos/sales/${id}`,
   POS_PRODUCT_SEARCH: '/api/v1/pos/products/search',
   POS_PRODUCT_BARCODE: (barcode: string) => `/api/v1/pos/products/barcode/${encodeURIComponent(barcode)}`,
-  POS_PRODUCT_DELIVERY_NOTE: (saleId: string) => `/api/v1/pos/sales/${saleId}/delivery-notes`,
+  POS_PRODUCT_DELIVERY_NOTE: (saleId: string) => `/api/v1/pos/sales/${saleId}/delivery`,
   /** Stock Out dialog click-through: invoice detail behind one SALE movement. */
   MOVEMENT_INVOICE: (movementId: string) => `/api/v1/stock/movements/${movementId}/invoice`,
 
@@ -66,10 +67,10 @@ export const ApiEndpoints = {
   REPORT_SALE_RETURNS: '/api/v1/reports/sale-returns',
   REPORT_PURCHASE_RETURNS: '/api/v1/reports/purchase-returns',
 
-  DELIVERY_NOTES: '/api/v1/delivery-notes',
-  DELIVERY_NOTE: (id: string) => `/api/v1/delivery-notes/${id}`,
-  DELIVERY_NOTE_STATUS: (id: string) => `/api/v1/delivery-notes/${id}/status`,
-  DELIVERY_NOTE_DELIVERABLE_INVOICES: '/api/v1/delivery-notes/deliverable-invoices',
+  DELIVERY_NOTES: '/api/v1/delivery',
+  DELIVERY_NOTE: (id: string) => `/api/v1/delivery/${id}`,
+  DELIVERY_NOTE_STATUS: (id: string) => `/api/v1/delivery/${id}/status`,
+  DELIVERY_NOTE_DELIVERABLE_INVOICES: '/api/v1/delivery/deliverable-invoices',
 
   /** Spec §7 Stock: one create path per operation — never a generic /stock/operations. */
   STOCK_IN: '/api/v1/stock/in',
@@ -78,6 +79,8 @@ export const ApiEndpoints = {
   STOCK_ADJUST: '/api/v1/stock/adjust',
   STOCK_DAMAGE: '/api/v1/stock/damage',
   STOCK_EXPIRE: '/api/v1/stock/expire',
+  /** Single-product quick operation (adjustment delta) from the Stock list. */
+  STOCK_OPERATIONS: '/api/v1/stock/operations',
   STOCK_MOVEMENTS: '/api/v1/stock/movements',
   /** Product-scoped movement history (spec: GET /stock/products/{id}/history). */
   PRODUCT_HISTORY: (id: string) => `/api/v1/stock/products/${id}/history`,
@@ -113,11 +116,6 @@ export const ApiEndpoints = {
 
   DOCUMENT_SEQUENCES: '/api/v1/admin/document-sequences',
   DOCUMENT_SEQUENCE: (id: string) => `/api/v1/admin/document-sequences/${id}`,
-
-  EXPORTS: '/api/v1/exports',
-  EXPORT: (id: string) => `/api/v1/exports/${id}`,
-  EXPORT_DOWNLOAD: (id: string) => `/api/v1/exports/${id}/download`,
-  TASK: (taskId: string) => `/api/v1/tasks/${taskId}`,
 
   APP_INFO: '/api/v1/settings/app-info',
   APP_INFO_RESET: '/api/v1/settings/app-info/reset',
@@ -158,7 +156,7 @@ export const CollectionEndpoints = {
   purchaseReturns: ApiEndpoints.REPORT_PURCHASE_RETURNS,
   stockMovements: ApiEndpoints.STOCK_MOVEMENTS,
   // Sale-price rows are product-scoped (PRODUCT_SALE_PRICES(productId)); this
-  // collection key exists for mock compatibility only and is never flat CRUD
+  // collection key exists for legacy compatibility only and is never flat CRUD
   // against the backend.
   productSalePrices: ApiEndpoints.PRODUCTS,
   customerDebtPayments: ApiEndpoints.CUSTOMERS,

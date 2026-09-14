@@ -192,3 +192,117 @@ async def test_audit_logs_listing(client):
     assert "login" in actions
     meta = listing.json()["meta"]
     assert meta["total"] >= len(data)
+
+
+async def test_create_user_with_custom_role(client):
+    """Regression: the response must resolve the freshly-assigned role without
+    a lazy-load after commit (which raised MissingGreenlet -> HTTP 500)."""
+    headers = await admin_headers(client)
+
+    role = await client.post(
+        "/api/v1/admin/roles",
+        json={"name": "CustomViewer", "description": "viewer", "permissions": ["stock.view"]},
+        headers=headers,
+    )
+    assert role.status_code == 201, role.text
+    role_id = role.json()["data"]["id"]
+
+    created = await client.post(
+        "/api/v1/admin/users",
+        json={
+            "full_name": "Custom Role User",
+            "email": "custom-role@example.com",
+            "password": "userpass123",
+            "role_id": role_id,
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["data"]["role"] == "CustomViewer"
+
+    second = await client.post(
+        "/api/v1/admin/roles",
+        json={"name": "CustomViewer2", "description": "viewer2", "permissions": ["stock.view"]},
+        headers=headers,
+    )
+    assert second.status_code == 201, second.text
+    user_id = created.json()["data"]["id"]
+    patched = await client.patch(
+        f"/api/v1/admin/users/{user_id}",
+        json={"role_id": second.json()["data"]["id"]},
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["data"]["role"] == "CustomViewer2"
+
+
+async def test_role_delete_guarded_by_system_flag_and_users(client):
+    headers = await admin_headers(client)
+
+    # Built-in system roles are protected.
+    roles = (await client.get("/api/v1/admin/roles", headers=headers)).json()["data"]
+    administrator = next(r for r in roles if r["name"] == "Administrator")
+    protected = await client.delete(f"/api/v1/admin/roles/{administrator['id']}", headers=headers)
+    assert protected.status_code == 409
+
+    # A role with no users is deletable.
+    unused = (
+        await client.post(
+            "/api/v1/admin/roles",
+            json={"name": "UnusedRole", "description": "temp", "permissions": ["stock.view"]},
+            headers=headers,
+        )
+    ).json()["data"]
+    removed = await client.delete(f"/api/v1/admin/roles/{unused['id']}", headers=headers)
+    assert removed.status_code == 200
+
+    # A role still referenced by a user is blocked.
+    used = (
+        await client.post(
+            "/api/v1/admin/roles",
+            json={"name": "UsedRole", "description": "temp", "permissions": ["stock.view"]},
+            headers=headers,
+        )
+    ).json()["data"]
+    user = await client.post(
+        "/api/v1/admin/users",
+        json={
+            "full_name": "Role Holder",
+            "email": "role-holder@example.com",
+            "password": "userpass123",
+            "role_id": used["id"],
+        },
+        headers=headers,
+    )
+    assert user.status_code == 201, user.text
+    blocked = await client.delete(f"/api/v1/admin/roles/{used['id']}", headers=headers)
+    assert blocked.status_code == 409
+    assert "users" in blocked.json()["detail"]["message"].lower()
+
+
+async def test_document_sequence_delete_only_when_never_issued(client):
+    headers = await admin_headers(client)
+
+    fresh = (
+        await client.post(
+            "/api/v1/admin/document-sequences",
+            json={"document_type": "TEST_DOC", "prefix": "TD", "number_length": 5},
+            headers=headers,
+        )
+    ).json()["data"]
+    removed = await client.delete(f"/api/v1/admin/document-sequences/{fresh['id']}", headers=headers)
+    assert removed.status_code == 200
+
+    issued = (
+        await client.post(
+            "/api/v1/admin/document-sequences",
+            json={"document_type": "TEST_DOC_2", "prefix": "TD2", "number_length": 5},
+            headers=headers,
+        )
+    ).json()["data"]
+    await client.patch(
+        f"/api/v1/admin/document-sequences/{issued['id']}", json={"next_number": 9}, headers=headers
+    )
+    blocked = await client.delete(f"/api/v1/admin/document-sequences/{issued['id']}", headers=headers)
+    assert blocked.status_code == 409
+    assert "deactivate" in blocked.json()["detail"]["message"].lower()

@@ -45,11 +45,19 @@ async def upload_image(
     if content_type not in _ALLOWED_CONTENT_TYPES:
         raise ValidationError("Unsupported image type. Allowed: jpeg, png, webp, gif")
 
-    content = await file.read()
+    service = ImageStorageService.from_settings()
+    max_bytes = service.max_bytes
+    if file.size is not None and file.size > max_bytes:
+        raise ValidationError("File is too large")
+    # Read at most one byte past the cap so an oversized upload can never be
+    # buffered into memory before the size check.
+    content = await file.read(max_bytes + 1)
     if not content:
         raise ValidationError("Empty file")
+    if len(content) > max_bytes:
+        raise ValidationError("File is too large")
 
-    stored = await ImageStorageService.from_settings().upload_image(
+    stored = await service.upload_image(
         folder=folder,
         filename=file.filename or "upload.bin",
         content=content,

@@ -52,22 +52,24 @@ Modular monolith, two deployable apps plus infrastructure:
 
 ## 4. Deployment & infrastructure
 
-Lean Compose stack (`docker-compose.yml`): `db` (postgres 16, host port 55432), `redis` (7, host port 56379), `api` (runs `alembic upgrade head` → `python -m app.seed` → uvicorn; host port `API_HOST_PORT:-8100`; media volume `/srv/data/media`), `frontend` (Nuxt static behind nginx, `/api` proxied). **No scheduler, MinIO, or Celery containers by default** — the daily expiry scan runs inside the API process with a Redis NX lock.
+Lean Compose stack (`infrastructure/docker-compose.yml`): `db` (postgres 16, host port 55432), `redis` (7, host port 56379), `api` (runs `alembic upgrade head` → `python -m app.seed` → uvicorn; host port `API_HOST_PORT:-8100`; media volume `/srv/data/media`), `frontend` (Nuxt static behind nginx, `/api` proxied). **No scheduler, MinIO, or Celery containers by default** — the daily expiry scan runs inside the API process with a Redis NX lock.
 
 ```bash
-cp .env.example .env && docker compose up -d --build          # dev/first run
-docker compose --profile telegram up -d                        # optional view-only inquiry bot
-docker compose --profile queue up -d                           # optional RabbitMQ/Celery (dormant code)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d   # production (prebuilt GHCR images, fails fast on weak secrets)
+# Compose lives in infrastructure/ (where .env lives); run from the repo root.
+powershell -File infrastructure/scripts/init-env.ps1                    # one-time local secrets
+docker compose -f infrastructure/docker-compose.yml up -d --build       # dev/first run
+docker compose -f infrastructure/docker-compose.yml --profile telegram up -d   # optional view-only inquiry bot
+docker compose -f infrastructure/docker-compose.yml --profile queue up -d      # optional RabbitMQ/Celery (dormant code)
+docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml up -d   # production (prebuilt GHCR images, fails fast on weak secrets)
 ```
 
 Production boot refuses: placeholder/short `JWT_SECRET_KEY`, placeholder Telegram client secret, weak `SEED_ADMIN_PASSWORD`, `DEBUG=true`, private-network CORS. `/docs` and `/openapi.json` are disabled in production.
 
-**Windows local deployment**: `infrastructure/scripts/stockpos/` provides `.bat`/`.ps1` helpers (install/start/stop/restart, autostart at login, desktop shortcut) that drive the Compose stack under `C:\StockPOS` (override with `STOCKPOS_DIR`); logs in `%TEMP%\stockpos-autostart.log`.
+**Windows local deployment**: everything needed sits in `infrastructure/` (compose files, `.env`, launchers). `First Time Setup.bat` generates `.env` with strong random secrets, builds, and starts; `Start Stock POS.bat` / `Stop Stock POS.bat` handle daily use (health-gated start, safe stop). Advanced helpers live in `infrastructure/scripts/stockpos/` (restart, autostart at login, desktop shortcut); logs in `%TEMP%\stockpos-autostart.log`. The local-only overlay binds the app to `127.0.0.1` and never publishes DB/Redis/API to the host. See `infrastructure/README.md`.
 
-**Storage & backups**: PostgreSQL is authoritative; local disk (`LOCAL_STORAGE_DIR`, default `var/media`) holds uploaded images only — no invoice PDFs or export files anywhere. Back up the `pgdata` volume (`pg_dump`) and the media volume; Redis is transient. `vercel.json` files exist for an optional static frontend target; the supported path is Compose.
+**Storage & backups**: PostgreSQL is authoritative; local disk (`LOCAL_STORAGE_DIR`, default `var/media`) holds uploaded images only — no invoice PDFs or export files anywhere. Back up the Compose project's `stock_pos_pgdata` volume (`pg_dump`) and the media volume; Redis is transient. `vercel.json` files exist for an optional static frontend target; the supported path is Compose.
 
-**Host reverse proxies** live in `infrastructure/nginx/`; deploy helpers in `infrastructure/scripts/` (`start-docker.*`, `deploy-from-registry.*`, `install-client.*`, `prepare-production.ps1`). Service image configs stay next to their build context (`backend/Dockerfile`, `backend/Dockerfile.telegram`, `frontend/Dockerfile` + `nginx.conf`).
+**Infrastructure root**: the Compose files (`.yml`), `.env` templates, launchers, deploy helpers, and host reverse proxies all live in `infrastructure/` (`docker-compose[.local|.prod].yml`, `.env*.example`, `scripts/`, `nginx/`). Service image configs stay next to their build context (`backend/Dockerfile`, `backend/Dockerfile.telegram`, `frontend/Dockerfile` + `nginx.conf`).
 
 ## 5. Non-goals (hard exclusions)
 
@@ -90,7 +92,7 @@ Production boot refuses: placeholder/short `JWT_SECRET_KEY`, placeholder Telegra
 ```bash
 pnpm --dir frontend test && pnpm --dir frontend typecheck && pnpm --dir frontend lint && pnpm --dir frontend build
 python -m pytest backend/tests
-docker compose config --quiet
+docker compose -f infrastructure/docker-compose.yml config --quiet
 ```
 
 Backend tests need the Compose stack's published ports (Postgres `55432`, Redis `56379`); `tests/conftest.py` creates `stock_pos_test` and runs migrations. CI (`.github/workflows/ci.yml`) runs compose validation, frontend test/typecheck, backend pytest against service containers; `publish-images.yml` publishes `api`, `frontend`, `telegram-bot` images to GHCR.

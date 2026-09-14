@@ -11,14 +11,14 @@ from app.api.deps import (
     require_permission,
 )
 from app.modules.auth.models import User
-from app.modules.delivery_notes.models import DeliveryNote
-from app.modules.delivery_notes.schemas import (
+from app.modules.delivery.models import DeliveryNote
+from app.modules.delivery.schemas import (
     DeliveryNoteCancelRequest,
     DeliveryNoteCreate,
     DeliveryNoteStatusRequest,
     DeliveryNoteUpdate,
 )
-from app.modules.delivery_notes.service import (
+from app.modules.delivery.service import (
     ACTION_TO_STATUS,
     LEGACY_STATUS_ALIASES,
     STATUS_PERMISSIONS,
@@ -36,10 +36,10 @@ async def _note_out(service: DeliveryNoteService, note) -> dict:
 # mutation happens anywhere in this module. Routes use flat business ownership
 # under /api/v1; cross-module entry points (sales/customers/pos) are declared
 # here so the workflow stays in one module.
-router = APIRouter(tags=["delivery-notes"])
+router = APIRouter(tags=["delivery"])
 
 
-@router.get("/delivery-notes")
+@router.get("/delivery")
 async def list_delivery_notes(
     params: ListParams = Depends(list_params),
     customer_id: UUID | None = Query(default=None),
@@ -60,7 +60,7 @@ async def list_delivery_notes(
     return envelope(data, {"page": params.page, "limit": params.limit, "total": total})
 
 
-@router.post("/delivery-notes", status_code=http_status.HTTP_201_CREATED)
+@router.post("/delivery", status_code=http_status.HTTP_201_CREATED)
 async def create_delivery_note(
     payload: DeliveryNoteCreate,
     db: AsyncSession = Depends(get_db_session),
@@ -71,7 +71,7 @@ async def create_delivery_note(
     return envelope(await _note_out(service, note))
 
 
-@router.get("/delivery-notes/deliverable-invoices")
+@router.get("/delivery/deliverable-invoices")
 async def list_deliverable_invoices(
     search: str | None = Query(default=None),
     customer_id: UUID | None = Query(default=None),
@@ -87,7 +87,7 @@ async def list_deliverable_invoices(
     return envelope([row.model_dump(mode="json") for row in data])
 
 
-@router.get("/delivery-notes/{delivery_note_id}")
+@router.get("/delivery/{delivery_note_id}")
 async def get_delivery_note(
     delivery_note_id: UUID,
     db: AsyncSession = Depends(get_db_session),
@@ -98,7 +98,7 @@ async def get_delivery_note(
     return envelope(await _note_out(service, note))
 
 
-@router.patch("/delivery-notes/{delivery_note_id}")
+@router.patch("/delivery/{delivery_note_id}")
 async def update_delivery_note(
     delivery_note_id: UUID,
     payload: DeliveryNoteUpdate,
@@ -110,7 +110,7 @@ async def update_delivery_note(
     return envelope(await _note_out(service, note))
 
 
-@router.post("/delivery-notes/{delivery_note_id}/confirm")
+@router.post("/delivery/{delivery_note_id}/confirm")
 async def confirm_delivery_note(
     delivery_note_id: UUID,
     db: AsyncSession = Depends(get_db_session),
@@ -121,7 +121,7 @@ async def confirm_delivery_note(
     return envelope(await _note_out(service, note))
 
 
-@router.post("/delivery-notes/{delivery_note_id}/out-for-delivery")
+@router.post("/delivery/{delivery_note_id}/out-for-delivery")
 async def delivery_note_out_for_delivery(
     delivery_note_id: UUID,
     db: AsyncSession = Depends(get_db_session),
@@ -132,7 +132,7 @@ async def delivery_note_out_for_delivery(
     return envelope(await _note_out(service, note))
 
 
-@router.post("/delivery-notes/{delivery_note_id}/deliver")
+@router.post("/delivery/{delivery_note_id}/deliver")
 async def deliver_delivery_note(
     delivery_note_id: UUID,
     db: AsyncSession = Depends(get_db_session),
@@ -143,7 +143,7 @@ async def deliver_delivery_note(
     return envelope(await _note_out(service, note))
 
 
-@router.post("/delivery-notes/{delivery_note_id}/cancel")
+@router.post("/delivery/{delivery_note_id}/cancel")
 async def cancel_delivery_note(
     delivery_note_id: UUID,
     payload: DeliveryNoteCancelRequest,
@@ -155,7 +155,7 @@ async def cancel_delivery_note(
     return envelope(await _note_out(service, note))
 
 
-@router.post("/delivery-notes/{delivery_note_id}/status")
+@router.post("/delivery/{delivery_note_id}/status")
 async def set_delivery_note_status(
     delivery_note_id: UUID,
     payload: DeliveryNoteStatusRequest,
@@ -215,7 +215,7 @@ async def _require(actor: User, permission: str) -> None:
         raise AccessDeniedError()
 
 
-@router.get("/delivery-notes/{delivery_note_id}/print")
+@router.get("/delivery/{delivery_note_id}/print")
 async def print_delivery_note(
     delivery_note_id: UUID,
     db: AsyncSession = Depends(get_db_session),
@@ -280,7 +280,7 @@ async def sale_deliverable_items(
     return envelope(await service.deliverable_items(sale_id))
 
 
-@router.post("/pos/sales/{sale_id}/delivery-notes", status_code=http_status.HTTP_201_CREATED)
+@router.post("/pos/sales/{sale_id}/delivery", status_code=http_status.HTTP_201_CREATED)
 async def create_delivery_note_from_pos_sale(
     sale_id: UUID,
     payload: DeliveryNoteCreate,
@@ -294,7 +294,7 @@ async def create_delivery_note_from_pos_sale(
     return envelope(await _note_out(service, note))
 
 
-@router.get("/customers/{customer_id}/delivery-notes")
+@router.get("/customers/{customer_id}/delivery")
 async def customer_delivery_notes(
     customer_id: UUID,
     db: AsyncSession = Depends(get_db_session),

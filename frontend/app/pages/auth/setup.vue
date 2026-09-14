@@ -5,8 +5,8 @@ import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 
 /**
- * Initial administrator setup. In mock mode this creates the local demo
- * session directly; the real backend allows this endpoint only once.
+ * Initial administrator setup (`POST /auth/setup`); the backend allows this
+ * endpoint only once.
  */
 definePageMeta({
   layout: 'auth',
@@ -15,7 +15,7 @@ definePageMeta({
 const { t } = useI18n()
 const router = useRouter()
 const toast = useToast()
-const { loginWithCredentials } = useAuth()
+const { setupAdministrator } = useAuth()
 const submitting = ref(false)
 
 usePageSeo({
@@ -27,8 +27,8 @@ usePageSeo({
 const schema = z.object({
   shopName: z.string().min(1, { error: t('pages.auth.shopNameRequired') }),
   email: z.email({ error: t('pages.auth.emailRequired') }),
-  password: z.string().min(6, { error: t('pages.auth.passwordRequired') }),
-  passwordConfirmation: z.string().min(6, { error: t('pages.auth.passwordRequired') }),
+  password: z.string().min(8, { error: t('pages.auth.passwordRequired') }),
+  passwordConfirmation: z.string().min(8, { error: t('pages.auth.passwordRequired') }),
 }).refine(data => data.password === data.passwordConfirmation, {
   message: t('pages.auth.passwordMismatch'),
   path: ['passwordConfirmation'],
@@ -47,7 +47,12 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   submitting.value = true
   try {
-    const result = await loginWithCredentials(payload.data.email, payload.data.password)
+    const result = await setupAdministrator({
+      fullName: payload.data.shopName,
+      email: payload.data.email,
+      password: payload.data.password,
+      passwordConfirmation: payload.data.passwordConfirmation,
+    })
     const user = result.data?.user
     if (!user) throw new Error('Setup failed')
     toast.add({ title: t('pages.auth.setupDone'), color: 'success' })

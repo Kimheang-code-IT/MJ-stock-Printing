@@ -23,12 +23,13 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import AccessDeniedError, ConflictError, NotFoundError, ValidationError
+from app.core.permissions import user_has_permission
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer
-from app.modules.delivery_notes.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
-from app.modules.delivery_notes.repository import DeliveryNoteRepository
-from app.modules.delivery_notes.schemas import (
+from app.modules.delivery.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
+from app.modules.delivery.repository import DeliveryNoteRepository
+from app.modules.delivery.schemas import (
     DeliverableInvoiceOut,
     DeliverableItemOut,
     DeliverableItemsOut,
@@ -160,6 +161,7 @@ class DeliveryNoteService:
         """What remains deliverable for a sale (drives the create form)."""
         sale = await self._sale(sale_id)
         allocated = await self.repo.allocated_by_sale_item(sale_id)
+        delivered = await self.repo.delivered_by_sale_item(sale_id)
 
         items: list[DeliverableItemOut] = []
         for sale_item in await self._sale_items(sale_id):
@@ -175,7 +177,7 @@ class DeliveryNoteService:
                     qty_ordered=ordered,
                     qty_returned=_q4(sale_item.returned_quantity),
                     qty_allocated=line_allocated,
-                    qty_delivered=_q4(allocated.get(sale_item.id, Decimal("0"))),
+                    qty_delivered=_q4(delivered.get(sale_item.id, Decimal("0"))),
                     qty_remaining=_q4(ordered - line_allocated),
                 )
             )
@@ -373,6 +375,10 @@ class DeliveryNoteService:
             requested_status = LEGACY_STATUS_ALIASES.get(requested_status, requested_status)
         if requested_status == DeliveryNote.STATUS_DRAFT:
             requested_status = None
+        # `confirm=True` is the legacy single-step confirm: normalize it to the
+        # CONFIRMED initial status so validation and permissions apply.
+        if payload.confirm and requested_status is None:
+            requested_status = DeliveryNote.STATUS_CONFIRMED
         if requested_status and requested_status not in {
             DeliveryNote.STATUS_CONFIRMED,
             DeliveryNote.STATUS_OUT_FOR_DELIVERY,
@@ -382,6 +388,14 @@ class DeliveryNoteService:
                 "Invalid delivery status",
                 field_errors={"status": "Must be PENDING, PREPARING, OUT_FOR_DELIVERY or DELIVERED"},
             )
+        # A note may only be born in an elevated status if the actor holds the
+        # matching transition permission (create only grants delivery.create).
+        if requested_status:
+            required = STATUS_PERMISSIONS.get(requested_status)
+            if required and not user_has_permission(actor, required):
+                raise AccessDeniedError(
+                    f"Not allowed to create a delivery note in {requested_status} status"
+                )
         if requested_status:
             for group in groups.values():
                 if not (payload.delivery_phone or customer.phone or "").strip() or not (
@@ -437,8 +451,6 @@ class DeliveryNoteService:
                     )
                 )
 
-        if payload.confirm and requested_status is None:
-            requested_status = DeliveryNote.STATUS_CONFIRMED
         if requested_status:
             # Initial state at creation time — not a transition: the note is
             # born in this status (guards above already ran). DELIVERED also
@@ -479,7 +491,7 @@ class DeliveryNoteService:
         return note
 
     async def create_from_sale(self, sale_id: uuid.UUID, payload, *, actor: User) -> DeliveryNote:
-        """POS auto-entry (POST /pos/sales/{id}/delivery-notes): prefill one
+        """POS auto-entry (POST /pos/sales/{id}/delivery): prefill one
         delivery note from a single sale. Default lines = every sale line with
         remaining undelivered qty; phone/location default from the customer.
         Reuses the canonical create() so all same-customer / allocation rules

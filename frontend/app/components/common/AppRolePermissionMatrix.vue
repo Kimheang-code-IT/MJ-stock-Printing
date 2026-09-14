@@ -71,7 +71,7 @@ onMounted(async () => {
     definitions.value = mapped.length ? mapped : frontendCatalog()
   }
   catch {
-    // Catalog unavailable (mock mode / offline): fall back to the frontend
+    // Catalog unavailable (offline): fall back to the frontend
     // mirror so the matrix still renders the page + action checkboxes.
     definitions.value = frontendCatalog()
   }

@@ -21,8 +21,8 @@ import type {
   StockHistoryKind,
   StockQueryRepository,
 } from '~/repositories/contracts/entities'
-import { applyListQuery, createId, mockLatency, nowIso, paginateMeta } from '~/mocks/query'
-import { mockInsert, mockRecords, mockRemove, mockUpdate, useMockDb } from '~/mocks/db'
+import { applyListQuery, createId, mockLatency, nowIso, paginateMeta } from '../mocks/query'
+import { mockInsert, mockRecords, mockRemove, mockUpdate, useMockDb } from '../mocks/db'
 import { convertToBase, divideDecimalSafe, multiplyDecimalSafe, roundQty } from '~/utils/stock/uom-conversions'
 
 /** Spec: a new product starts with sale-price version 1 (POS-active). */

@@ -8,20 +8,21 @@ backend/app/
 ├── seed.py                 # python -m app.seed (container bootstrap)
 ├── core/                   # config, database, redis, security, permissions,
 │                           # exceptions, errors (compat re-export), logging,
-│                           # rate_limit, money, scheduler
+│                           # rate_limit, scheduler
 ├── api/
 │   ├── deps.py             # get_db_session, get_current_user, require_permission,
 │   │                       # list_params, envelope re-exports
 │   └── v1/router.py        # /api/v1 aggregation of all module routers
+│                           # (+ api/v1/health.py, api/v1/search.py)
 ├── modules/                # one folder per domain: models / schemas / repository /
 │   │                       # service / router
 │   ├── auth, administration, categories, uoms, brands, stock, suppliers,
-│   ├── customers, pos, delivery_notes, dashboard, reports, image, telegram
+│   ├── customers, pos, delivery, dashboard, reports, image, telegram
 ├── shared/
 │   ├── audit/              # AuditLog model + record_audit (no commit)
 │   ├── documents/          # DocumentSequence model + allocate_document_number
 │   ├── pagination/params.py# ListParams, envelope(), list_meta(), parse_date_range
-│   └── telegram/           # client, delivery, inquiry, linking, notify
+│   └── telegram/           # client, delivery, inquiry, linking
 └── tasks/, telegram_bot.py # optional Celery app + standalone bot (profile-gated, off by default)
 ```
 
@@ -56,7 +57,7 @@ Key settings (env-prefixed upper-case): `DATABASE_URL` (asyncpg), `REDIS_URL`, `
 - `GET /permissions` — the catalog the role matrix renders.
 - Document sequences: list + PATCH (prefix/number_length/next_number/status).
 - Audit logs: filterable read-only list.
-- Settings: `GET /settings` (secrets masked), `PATCH /settings` (validated against the `SETTING_GROUPS` catalog, audit on change).
+- Settings: `GET /settings` (secrets masked), `PATCH /settings` (validated against the `SETTING_GROUPS` catalog, audit on change). The SPA Settings surface projects these groups: `GET/PATCH /settings/app-config`, `GET/PATCH /settings/app-info`, `POST /settings/app-info/reset`, email/telegram connectivity tests (`/settings/app-config/{email,telegram}/…`), and `POST /settings/reset-data` (refused with `FEATURE_DISABLED` — resets go through DB maintenance). Reference options: `GET /admin/roles/options`.
 
 ### stock (largest module)
 - **ProductService** — CRUD with barcode-first identity (barcode unique + required, auto-issued `BAR-…` when omitted; `sku` optional legacy code, unique when set), category/UOM/brand validation (UOM required + ACTIVE), `uom_conversions` normalization/validation, delete guards (no movements, zero balance), sale-price version creation on `selling_price` change, cost-price audit (`price_changed`).
@@ -71,7 +72,7 @@ Key settings (env-prefixed upper-case): `DATABASE_URL` (asyncpg), `REDIS_URL`, `
 - **`update_sale`** (`PATCH /pos/sales/{id}`, perm `pos.access`) — edits a `COMPLETED` sale that has **no returns**: locks the sale, reverses each original line (restores its batches and appends compensating `SALE_RETURN` movements — the old `SALE` rows are never mutated), deletes the old `SaleItem`s, re-applies the new lines (same UOM/discount/batch rules as `complete_sale`), rewrites header totals/currency/rate, and recalculates the linked `CustomerDebt` from the new grand total. Recorded `Payment` rows are immutable, so the already-paid amount stands (`paid_for_sale = min(existing_paid, grand_total)`). Audited as `sale_update`.
 - `build_receipt` — bilingual JSON print payload (shop settings, timezone-aware dates, customer phone/address, document `currency` + `exchange_rate`, paper size, exchange-rate display flag, footer, items with UOM/qty/unit price/discount/line total, totals incl. delivery fee, paid/debt/change, last payment method).
 
-### delivery_notes
+### delivery
 - Deliverable-item computation per sale (ordered − already-on-note − delivered), multi-invoice notes for one customer, draft editing, strict status machine with required phone/location before Confirm/Out/Deliver, cancellation reason required, `qty_delivered` set on Deliver, print payload endpoint, per-customer note list. Audit on every transition.
 
 ### customers / suppliers
@@ -88,7 +89,10 @@ Sales / Purchase / Customer Debt / Supplier Debt / Sale-Return / Purchase-Return
 `POST /images/upload` (multipart, 5 MB cap, image content types, per-folder object naming on local disk) and `GET /images/{object_key:path}` (path-traversal-guarded via `_safe_segment`/resolved-path check).
 
 ### telegram
-`ExpiryAlertService.scan_and_send` — daily in-process sweep (settings windows 90/7 days, once-per-lot state, Redis NX lock); `shared/telegram` holds the HTTP client, reset-code delivery, payment notify queue, and the view-only inquiry bot (`telegram_bot.py`, optional `telegram-bot` compose profile).
+`ExpiryAlertService.scan_and_send` — daily in-process sweep (settings windows 90/7 days, once-per-lot state, Redis NX lock); `shared/telegram` holds the HTTP client, reset-code delivery, notification formatters/broadcast, and the view-only inquiry bot (`telegram_bot.py`, optional `telegram-bot` compose profile; `TELEGRAM_BOT_MODE` configures the bot mode).
+
+### search
+`GET /search?q=&limit=` (api-level, `api/v1/search.py`) — read-only cross-module command-palette search over products, customers, suppliers and sale invoices. Result types are gated per caller permission (`stock.view` / `customer.view` / `supplier.view` / `report.sales`); blank `q` returns an empty result.
 
 ## 5. Redis usage (transient only)
 
@@ -133,4 +137,4 @@ All errors return `{"error": {"code", "message", "field_errors?"}}`-style payloa
 
 **Enforcement**: every protected endpoint declares `Depends(require_permission("module.action"))` — see the permission column in [API.md](API.md). `require_permission` chains `get_current_user` (active account + token version) then `user_has_permission` (`ALL_PAGES` or exact code) → 403 `ACCESS_DENIED`. Read endpoints are also gated (e.g. `stock.view`, `report.*`, `audit.view`). Object-level IDOR guards: debts must belong to the path customer/supplier; included debts must belong to the sale's customer; delivery notes are only created from real sales; images are path-traversal-guarded; the last active admin cannot be demoted; the walk-in customer cannot take debt. Seeded presets: **Administrator** (`ALL_PAGES`, system), plus code-defined **Cashier** and **Stock Staff** presets used by tests/seeding helpers.
 
-**⚠️ Known frontend/backend permission-key drift** (documentation-first finding, no functional backend impact): the frontend role matrix and route guards use their own vocabulary that only partially matches the backend catalog — `categories.*` vs `category.*`, `products.*` vs `stock.view`/`product.*`, plural `suppliers.*`/`customers.*`, `pos.view/operate/export` vs `pos.access/discount/debt_sale`, `sales.*`/`reports.*` vs `report.*`, `admin.*`/`configuration.*`/`settings.app_config.*` vs `user.manage`/`role.manage`/`sequence.manage`/`audit.view`/`settings.manage`. Consequences: menu/page visibility for non-admin roles is unreliable (mismatched matrix rows are filtered out and fail closed; `useMenu` ids like `products.view` never match `stock.view`), and saving a role from the frontend matrix can be rejected (422 "Unknown permissions"). Only `ALL_PAGES` accounts experience full navigation today; backend enforcement is unaffected and remains authoritative. A fix would map matrix rows ↔ catalog codes (or regenerate the matrix from the catalog) and align `useMenu`/`definePageMeta` ids. **Partial fix in place**: the matrix renders the live backend catalog (`GET /admin/permissions`) and falls back to the frontend mirror (`ROLE_DOCUMENT_TYPES`) when the catalog is unavailable, so role editing works in mock mode too; `useMenu` still gates routes with the same registry the pages use. The residual drift is limited to legacy ids still copied into some `definePageMeta`/module-config `permission` fields. The former **Page access** list was removed from the matrix.
+**⚠️ Known frontend/backend permission-key drift** (documentation-first finding, no functional backend impact): the frontend role matrix and route guards use their own vocabulary that only partially matches the backend catalog — `categories.*` vs `category.*`, `products.*` vs `stock.view`/`product.*`, plural `suppliers.*`/`customers.*`, `pos.view/operate/export` vs `pos.access/discount/debt_sale`, `sales.*`/`reports.*` vs `report.*`, `admin.*`/`configuration.*`/`settings.app_config.*` vs `user.manage`/`role.manage`/`sequence.manage`/`audit.view`/`settings.manage`. Consequences: menu/page visibility for non-admin roles is unreliable (mismatched matrix rows are filtered out and fail closed; `useMenu` ids like `products.view` never match `stock.view`), and saving a role from the frontend matrix can be rejected (422 "Unknown permissions"). Only `ALL_PAGES` accounts experience full navigation today; backend enforcement is unaffected and remains authoritative. A fix would map matrix rows ↔ catalog codes (or regenerate the matrix from the catalog) and align `useMenu`/`definePageMeta` ids. **Partial fix in place**: the matrix renders the live backend catalog (`GET /admin/permissions`) and falls back to the frontend mirror (`ROLE_DOCUMENT_TYPES`) when the catalog is unavailable, so role editing still works when the catalog request fails; `useMenu` still gates routes with the same registry the pages use. The residual drift is limited to legacy ids still copied into some `definePageMeta`/module-config `permission` fields. The former **Page access** list was removed from the matrix.

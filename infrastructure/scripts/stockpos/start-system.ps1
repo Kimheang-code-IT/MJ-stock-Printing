@@ -16,7 +16,7 @@ $root = Get-DeployRoot
 if (-not (Test-ComposeStack $root)) {
   Write-Host "Deployment folder $root is not complete." -ForegroundColor Red
   Write-Host "It must contain docker-compose.yml, docker-compose.local.yml and .env"
-  Write-Host "(see docs\LOCAL_DEPLOYMENT.md, 'First installation')."
+  Write-Host "(see infrastructure\README.md, 'First installation')."
   exit 1
 }
 

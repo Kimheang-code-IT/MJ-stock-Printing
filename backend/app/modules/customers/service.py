@@ -71,6 +71,17 @@ class CustomerService:
         customer = await self.get(customer_id)
         if customer.is_walk_in:
             raise ConflictError("The walk-in customer cannot be deleted")
+        referenced = (
+            await self.repo.count_sales(customer.id)
+            + await self.repo.count_debts(customer.id)
+            + await self.repo.count_delivery_notes(customer.id)
+            + await self.repo.count_payments(customer.id)
+        )
+        if referenced > 0:
+            raise ConflictError(
+                "Cannot delete this customer because sales, debt, delivery, or payment "
+                "history exists. Deactivate it instead."
+            )
         await self.session.delete(customer)
         await self.session.commit()
 

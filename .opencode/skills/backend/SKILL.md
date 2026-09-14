@@ -14,7 +14,7 @@ Read `docs/BACKEND.md` first. Open `docs/API.md` when touching any endpoint (con
 - Payments, movements, audit rows are immutable/append-only. Debt settlement locks the debt row and rejects overpayment — never "simplify" this.
 - Document numbers come from `shared/documents/service.py::allocate_document_number` (row-locked, in the caller's transaction).
 - Auth: `require_permission("module.action")` on every protected endpoint; IDOR guards (debt belongs to path party, delivery notes from real sales, walk-in cannot take debt). Never weaken these.
-- Errors use the shared envelope + stable codes (`core/errors.py`); audit rows commit inside the business transaction (`record_audit`, never commits alone).
+- Errors use the shared envelope + stable codes (`core/exceptions.py`); audit rows commit inside the business transaction (`record_audit`, never commits alone).
 - `NUMERIC` + `Decimal` for money/quantities — never float. Timestamps UTC.
 
 ## Before writing code
@@ -26,7 +26,7 @@ Read `docs/BACKEND.md` first. Open `docs/API.md` when touching any endpoint (con
 ## Checks (targeted first)
 
 ```bash
-docker compose up -d db redis                # tests need ports 55432/56379
+docker compose -f infrastructure/docker-compose.yml up -d db redis   # tests need ports 55432/56379
 python -m pytest backend/tests/modules/<area> -q   # affected area only
 python -m pytest backend/tests -q            # full suite only when required
 python -m ruff check app

@@ -4,8 +4,8 @@ import {
   createMockFinanceRepository,
   createMockPosRepository,
   createMockStockQueryRepository,
-} from '../app/repositories/mock/entities'
-import { mockRecords } from '../app/mocks/db'
+} from './support/repositories-mock/entities'
+import { mockRecords } from './support/mocks/db'
 import {
   convertToBase,
   multiplyDecimalSafe,

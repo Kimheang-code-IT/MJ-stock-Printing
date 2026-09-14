@@ -1,10 +1,14 @@
+# syntax=docker/dockerfile:1
 FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 WORKDIR /app
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# BuildKit cache mount keeps the pnpm store across rebuilds (validated
+# lockfiles still run in full). node_modules is snapshotted into the image.
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
@@ -12,12 +16,10 @@ COPY . .
 ARG NUXT_PUBLIC_API_BASE=same-origin
 ARG NUXT_PUBLIC_SITE_URL=
 ARG NUXT_PUBLIC_APP_VERSION=1.0.0
-# Production images always call the real API; mock data is opt-in for local dev.
-ARG NUXT_PUBLIC_USE_MOCK_DATA=false
+# Production images always call the real API.
 ENV NUXT_PUBLIC_API_BASE=$NUXT_PUBLIC_API_BASE
 ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL
 ENV NUXT_PUBLIC_APP_VERSION=$NUXT_PUBLIC_APP_VERSION
-ENV NUXT_PUBLIC_USE_MOCK_DATA=$NUXT_PUBLIC_USE_MOCK_DATA
 RUN pnpm build
 
 FROM nginx:1.27-alpine AS runner

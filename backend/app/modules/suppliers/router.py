@@ -47,6 +47,22 @@ async def create_supplier(
     return envelope(SupplierOut.model_validate(await service.create(payload)))
 
 
+@router.get("/options")
+async def supplier_options(
+    q: str | None = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("supplier.view")),
+) -> dict:
+    """Active-supplier options for stock-in / purchase selectors."""
+    service = SupplierService(db)
+    suppliers, _total = await service.list(q=q, status="ACTIVE", page=1, limit=limit)
+    return envelope([
+        {"id": str(s.id), "value": str(s.id), "label": s.name, "name": s.name}
+        for s in suppliers
+    ])
+
+
 @router.get("/{supplier_id}")
 async def get_supplier(
     supplier_id: UUID,

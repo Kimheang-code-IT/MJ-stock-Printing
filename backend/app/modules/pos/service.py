@@ -485,6 +485,7 @@ class POSService:
                 due_date=payload.due_date,
                 status="UNPAID" if paid_for_sale == 0 else "PARTIAL",
                 currency=sale.currency,
+                exchange_rate=sale.exchange_rate,
             )
             self.session.add(debt)
             await self.session.flush()
@@ -573,6 +574,17 @@ class POSService:
         existing_items = list(sale.items)
         if any(Decimal(item.returned_quantity or 0) > 0 for item in existing_items):
             raise ConflictError("Sales with returns cannot be edited")
+        # Delivery-note items RESTRICT-reference sale_items, so deleting the
+        # old lines would raise a FK violation (500). Reject the edit cleanly.
+        from app.modules.delivery.models import DeliveryNoteItem
+
+        attached = await self.session.execute(
+            select(func.count())
+            .select_from(DeliveryNoteItem)
+            .where(DeliveryNoteItem.sale_item_id.in_([item.id for item in existing_items]))
+        )
+        if int(attached.scalar_one() or 0) > 0:
+            raise ConflictError("Sales with delivery notes cannot be edited")
 
         customer = await self.session.get(Customer, sale.customer_id)
         if customer is None:
@@ -794,6 +806,10 @@ class POSService:
             debt.paid_amount = paid_for_sale
             debt.remaining_amount = debt_amount
             debt.status = "PAID" if debt_amount == 0 else ("PARTIAL" if paid_for_sale > 0 else "UNPAID")
+            # The edit rewrites the sale currency/rate; the debt must follow so
+            # amounts and their normalization stay in one currency.
+            debt.currency = sale.currency
+            debt.exchange_rate = sale.exchange_rate
         elif debt_amount > 0:
             self.session.add(
                 CustomerDebt(
@@ -806,6 +822,7 @@ class POSService:
                     due_date=getattr(payload, "due_date", None),
                     status="UNPAID" if paid_for_sale == 0 else "PARTIAL",
                     currency=sale.currency,
+                    exchange_rate=sale.exchange_rate,
                 )
             )
         sale.paid_amount = paid_for_sale
@@ -1030,17 +1047,34 @@ class POSService:
     # ---------------------------------------------------------------- return
 
     async def return_sale(self, sale_id: uuid.UUID, payload, *, actor: User) -> SaleReturnOut:
-        sale = await self.get_sale(sale_id)
+        # Lock the sale row so concurrent returns (and sale edits) serialize;
+        # without it two requests could both read the same returned_quantity
+        # and over-return stock/refunds.
+        result = await self.session.execute(
+            select(Sale).where(Sale.id == sale_id).with_for_update()
+        )
+        sale = result.scalar_one_or_none()
+        if sale is None:
+            raise NotFoundError("Sale not found")
         if sale.sale_status not in ("COMPLETED", "PARTIAL_RETURN"):
             raise ConflictError("This sale can no longer be returned")
 
         items_by_id: dict[uuid.UUID, SaleItem] = {item.id: item for item in sale.items}
+        # Sum requested quantities per line first: duplicate sale_item_id rows
+        # must be validated against the remaining quantity as a whole, never
+        # each independently.
+        requested: dict[uuid.UUID, Decimal] = {}
         for return_item in payload.items:
             sale_item = items_by_id.get(return_item.sale_item_id)
             if sale_item is None:
                 raise NotFoundError("Sale item not found on this sale")
+            requested[return_item.sale_item_id] = (
+                requested.get(return_item.sale_item_id, Decimal("0")) + return_item.quantity
+            )
+        for item_id, total_quantity in requested.items():
+            sale_item = items_by_id[item_id]
             remaining = sale_item.quantity - sale_item.returned_quantity
-            if return_item.quantity > remaining:
+            if total_quantity > remaining:
                 raise ValidationError(
                     f"Cannot return more than the remaining quantity ({remaining})",
                     field_errors={"items": "Return quantity exceeds remaining"},

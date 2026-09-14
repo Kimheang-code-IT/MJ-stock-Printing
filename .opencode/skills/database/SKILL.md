@@ -23,7 +23,7 @@ Read `docs/DATABASE.md` first. Open `docs/BUSINESS_LOGIC.md` when the schema cha
 ## Checks
 
 ```bash
-docker compose up -d db redis
+docker compose -f infrastructure/docker-compose.yml up -d db redis
 cd backend && alembic upgrade head           # applies cleanly on the dev/test DB
 python -m pytest backend/tests -q            # conftest migrates a fresh test DB — run areas you touched first
 ```

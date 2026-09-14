@@ -1,6 +1,6 @@
 import type { AppConfigLocalization } from '~/types/stock-pos/settings'
 
-/** Defaults aligned with mock settings seed and System Settings → Localization. */
+/** Defaults aligned with System Settings → Localization. */
 export const DEFAULT_FORMAT_CONFIG: AppConfigLocalization = {
   defaultLanguage: 'en',
   availableLanguages: ['en', 'km'],

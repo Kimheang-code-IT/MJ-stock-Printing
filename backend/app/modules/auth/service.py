@@ -127,6 +127,8 @@ class AuthService:
             await self._audit_failed_login(payload.email, ip_address, user_agent)
             raise AuthRequiredError("Invalid email or password")
         if user.status != "ACTIVE":
+            # Audit disabled-account attempts like any other failed login.
+            await self._audit_failed_login(payload.email, ip_address, user_agent)
             raise AccessDeniedError("This account is disabled")
 
         tokens = self._issue_tokens(user)

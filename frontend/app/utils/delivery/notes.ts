@@ -59,18 +59,24 @@ export function deliveryApiStatus(value: unknown): string {
 }
 
 /** Normalize any status dialect (UI label, verb alias, backend enum) to the
- *  UI label the mock DB and components use. */
+ *  UI label the components use. */
 export function normalizeDeliveryStatusInput(value: unknown): DeliveryStatus {
   const raw = String(value ?? '').trim()
   if (isDeliveryStatus(raw)) return raw
   const byVerb = ACTION_TO_STATUS[raw as DeliveryStatusAction]
   if (byVerb) return byVerb
   const byApi: Record<string, DeliveryStatus> = {
+    // Backend vocabulary (delivery/models.py) plus legacy aliases.
+    PENDING: 'Draft',
     DRAFT: 'Draft',
+    PREPARING: 'Confirmed',
     CONFIRMED: 'Confirmed',
     OUT_FOR_DELIVERY: 'Out for Delivery',
     DELIVERED: 'Delivered',
+    PARTIALLY_DELIVERED: 'Out for Delivery',
+    RETURNED: 'Cancelled',
     CANCELLED: 'Cancelled',
+    FAILED: 'Cancelled',
   }
   return byApi[raw.toUpperCase()] ?? 'Draft'
 }
@@ -224,8 +230,8 @@ export function saleHasDeliverableLines(sale: AppRecord | null | undefined, note
 
 /**
  * One confirmed invoice with remaining deliverable qty — the normalized row
- * shape of `deliverableInvoices()` (both mock and HTTP adapters produce it).
- * Mirrors GET /delivery-notes/deliverable-invoices (spec §2.1.9).
+ * shape of `deliverableInvoices()`.
+ * Mirrors GET /delivery/deliverable-invoices (spec §2.1.9).
  */
 export interface DeliverableInvoiceItem {
   saleItemId: string

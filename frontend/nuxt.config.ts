@@ -54,9 +54,6 @@ export default defineNuxtConfig({
       authMode: import.meta.env.NUXT_PUBLIC_AUTH_MODE === 'cookie' ? 'cookie' : 'bearer',
       csrfCookieName: import.meta.env.NUXT_PUBLIC_CSRF_COOKIE_NAME || 'XSRF-TOKEN',
       csrfHeaderName: import.meta.env.NUXT_PUBLIC_CSRF_HEADER_NAME || 'X-CSRF-Token',
-      // Real API by default. Mock data is opt-in for local/dev UI work only:
-      // set NUXT_PUBLIC_USE_MOCK_DATA=true (baked at build time for static builds).
-      useMockData: import.meta.env.NUXT_PUBLIC_USE_MOCK_DATA === 'true',
       appVersion: import.meta.env.NUXT_PUBLIC_APP_VERSION || '0.1.0',
       // Canonical public origin for Open Graph / Twitter image URLs (no trailing slash).
       // Example: https://app.stockpos.example — required for link previews to show images.
@@ -159,18 +156,20 @@ export default defineNuxtConfig({
       chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          manualChunks(id) {
-            // CSS/virtual style modules must stay with Vite's CSS pipeline or Nitro
-            // fails with UNRESOLVED_IMPORT on `*-styles-*.mjs-!~{…}~.js`.
-            if (
-              id.includes('.css')
-              || id.includes('?vue&type=style')
-              || id.includes('&lang.css')
-              || id.includes('type=style')
-            ) {
-              return
-            }
-            if (id.includes('node_modules/echarts') || id.includes('vue-echarts')) return 'echarts'
+          // Nuxt 4.5 builds with rolldown (Vite 8), which ignores `manualChunks`.
+          // Use `codeSplitting` so ECharts (+ its zrender renderer) lands in its
+          // own chunk. AppEChart imports that chunk lazily, so it stays out of
+          // the first client payload and only downloads when a chart renders.
+          // Do NOT match `vue-echarts`: its dependency on Vue would pull the Vue
+          // runtime into the ECharts chunk and back into the entry's static
+          // import graph (defeating the split).
+          codeSplitting: {
+            groups: [
+              {
+                name: 'echarts',
+                test: /node_modules[\\/](?:echarts|zrender)[\\/]/,
+              },
+            ],
           },
         },
       },

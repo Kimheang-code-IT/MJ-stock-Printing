@@ -91,7 +91,6 @@ export function useApi() {
 
   const configuredBase = String(config.public.apiBase || '')
   const requireSecureApi = import.meta.env.PROD
-    && config.public.useMockData === false
     && !isAutoApiBase(configuredBase)
     && !isSameOriginApiBase(configuredBase)
 

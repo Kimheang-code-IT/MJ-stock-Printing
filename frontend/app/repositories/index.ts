@@ -17,15 +17,6 @@ import {
   createHttpSearchRepository,
   createHttpStockQueryRepository,
 } from '~/repositories/http/entities'
-import { createMockAppConfigRepository, createMockAppInfoRepository, createMockStorageRepository } from '~/repositories/mock/settings'
-import { createMockDeliveryRepository } from '~/repositories/mock/delivery'
-import {
-  createMockEntityRepository,
-  createMockFinanceRepository,
-  createMockPosRepository,
-  createMockSearchRepository,
-  createMockStockQueryRepository,
-} from '~/repositories/mock/entities'
 
 let appInfoRepo: AppInfoRepository
 let appConfigRepo: AppConfigRepository
@@ -38,30 +29,9 @@ let financeRepo: FinanceRepository
 let searchRepo: SearchRepository
 let initialized = false
 
-function useMockMode(): boolean {
-  try {
-    return useRuntimeConfig().public.useMockData === true
-  }
-  catch {
-    return false
-  }
-}
-
 function ensureRepositories() {
   if (initialized) return
   initialized = true
-  if (useMockMode()) {
-    appInfoRepo = createMockAppInfoRepository()
-    appConfigRepo = createMockAppConfigRepository()
-    storageRepo = createMockStorageRepository()
-    entityRepo = createMockEntityRepository()
-    stockQueryRepo = createMockStockQueryRepository()
-    posCommandRepo = createMockPosRepository()
-    deliveryCommandRepo = createMockDeliveryRepository()
-    financeRepo = createMockFinanceRepository()
-    searchRepo = createMockSearchRepository()
-    return
-  }
   appInfoRepo = createHttpAppInfoRepository()
   appConfigRepo = createHttpAppConfigRepository()
   storageRepo = createHttpStorageRepository()

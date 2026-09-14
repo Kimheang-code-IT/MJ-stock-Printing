@@ -16,6 +16,12 @@ import { normalizeUomConversions } from '~/utils/stock/uom-conversions'
 import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
 import { documentSequencePreview, documentSequenceTypeLabel, documentSequenceTypeOptions, normalizeDocumentSequenceType } from '~/utils/document-sequences'
 import {
+  isRecordInactive,
+  statusValueFor,
+  supportsHardDelete,
+  supportsStatusToggle,
+} from '~/utils/module/row-actions'
+import {
   moduleDocumentLineActionKey,
   moduleDocumentTabs,
   RELATED_FIELD_KEY,
@@ -91,8 +97,7 @@ async function load() {
     applyLoadedRecord(found)
     return
   }
-  // Not in cache: fetch through the repository. Works in mock mode too — the
-  // mock repository reads the in-memory seed directly.
+  // Not in cache: fetch through the repository.
   if (!import.meta.client) {
     loadingRecord.value = true
     return
@@ -158,10 +163,10 @@ const readOnly = computed(() => {
 const canMutateRecord = computed(() => Boolean(module.value) && !readOnly.value && !isCreate.value && Boolean(model.value.id))
 const canDeleteRecord = computed(() => {
   if (!module.value || isCreate.value || !model.value.id) return false
+  if (!supportsHardDelete(module.value.collection)) return false
   if (module.value.collection === 'roles' && (model.value.isSystem || Number(model.value.userCount || 0) > 0)) return false
   return auth.canAccessPage(moduleActionPermission('delete'))
 })
-const deactivationOnly = computed(() => module.value?.group === 'master' || module.value?.collection === 'documentSequences')
 
 const tabs = computed(() => {
   if (!module.value) return []
@@ -198,48 +203,33 @@ watch(tabs, (value) => {
 provide(moduleDocumentLineActionKey, () => {})
 
 const moreItems = computed<DropdownMenuItem[][]>(() => {
-  if (module.value?.collection === 'documentSequences') {
-    if (!canMutateRecord.value) return []
-    const active = String(model.value.status || '').toUpperCase() === 'ACTIVE'
-    return [[{
-      label: t(active ? 'core.rowActions.deactivate' : 'core.rowActions.activate'),
-      icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-      color: active ? 'warning' as const : 'success' as const,
-      onSelect: () => { void setDocumentSequenceStatus(active ? 'INACTIVE' : 'ACTIVE') },
-    }]]
+  const collection = module.value?.collection
+  const items: DropdownMenuItem[] = []
+  if (canMutateRecord.value && supportsStatusToggle(collection)) {
+    const inactive = isRecordInactive(model.value.status)
+    items.push(inactive
+      ? {
+          label: t('core.rowActions.activate'),
+          icon: 'i-lucide-circle-check',
+          color: 'success' as const,
+          onSelect: () => { void setRecordStatus(true) },
+        }
+      : {
+          label: t('core.rowActions.deactivate'),
+          icon: 'i-lucide-circle-off',
+          color: 'warning' as const,
+          onSelect: () => { void setRecordStatus(false) },
+        })
   }
-
-  if (module.value?.collection === 'users') {
-    const items: DropdownMenuItem[] = []
-    const active = String(model.value.status || '') === 'Active'
-    if (canMutateRecord.value) {
-      items.push({
-        label: t(active ? 'core.rowActions.deactivate' : 'core.rowActions.activate'),
-        icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-        color: active ? 'warning' as const : 'success' as const,
-        onSelect: () => { void setUserStatus(active ? 'Inactive' : 'Active') },
-      })
-    }
-    if (canDeleteRecord.value) {
-      items.push({
-        label: t('app.ui.delete'),
-        icon: 'i-lucide-trash-2',
-        color: 'error' as const,
-        onSelect: () => { void deleteRecord() },
-      })
-    }
-    return items.length ? [items] : []
-  }
-
   if (canDeleteRecord.value) {
-    return [[{
-      label: t(deactivationOnly.value ? 'app.ui.deactivate' : 'app.ui.delete'),
-      icon: deactivationOnly.value ? 'i-lucide-circle-off' : 'i-lucide-trash-2',
-      color: deactivationOnly.value ? 'warning' as const : 'error' as const,
+    items.push({
+      label: t('app.ui.delete'),
+      icon: 'i-lucide-trash-2',
+      color: 'error' as const,
       onSelect: () => { void deleteRecord() },
-    }]]
+    })
   }
-  return []
+  return items.length ? [items] : []
 })
 
 function setRolePermissions(rows: AppRolePermissionRow[]) {
@@ -411,26 +401,14 @@ async function save() {
   }
 }
 
-async function setDocumentSequenceStatus(status: 'ACTIVE' | 'INACTIVE') {
-  if (module.value?.collection !== 'documentSequences' || !canMutateRecord.value) return
+async function setRecordStatus(active: boolean) {
+  if (!module.value || !canMutateRecord.value || saving.value) return
   saving.value = true
   try {
+    const status = statusValueFor(module.value.collection, active)
     model.value = await store.updateRemote(module.value.collection, String(model.value.id), { status }) as AppRecord
     originalModel.value = { ...model.value }
-    toast.add({ title: t(status === 'ACTIVE' ? 'core.common.activated' : 'core.common.deactivated'), color: 'success' })
-  }
-  finally {
-    saving.value = false
-  }
-}
-
-async function setUserStatus(status: 'Active' | 'Inactive') {
-  if (module.value?.collection !== 'users' || !canMutateRecord.value) return
-  saving.value = true
-  try {
-    model.value = await store.updateRemote(module.value.collection, String(model.value.id), { status }) as AppRecord
-    originalModel.value = { ...model.value }
-    toast.add({ title: t(status === 'Active' ? 'core.common.activated' : 'core.common.deactivated'), color: 'success' })
+    toast.add({ title: t(active ? 'core.common.activated' : 'core.common.deactivated'), color: 'success' })
   }
   finally {
     saving.value = false
@@ -438,24 +416,31 @@ async function setUserStatus(status: 'Active' | 'Inactive') {
 }
 
 async function deleteRecord() {
-  if (!module.value || !canDeleteRecord.value) return
-  if (deactivationOnly.value) {
-    saving.value = true
-    try {
-      const status = module.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive'
-      model.value = await store.updateRemote(module.value.collection, String(model.value.id), { status }) as AppRecord
-      toast.add({ title: t('app.ui.recordDeactivated'), color: 'success' })
-    }
-    finally {
-      saving.value = false
-    }
-    return
-  }
-  const ok = await confirm({ kind: 'delete', count: 1 })
+  if (!module.value || !canDeleteRecord.value || saving.value) return
+  const ok = await confirm({
+    kind: 'delete',
+    titleKey: 'core.confirm.deleteTitle',
+    description: t('core.actions.deleteConfirmNamed', { name: title.value }),
+    confirmLabelKey: 'core.rowActions.delete',
+    confirmColor: 'error',
+  })
   if (!ok) return
-  await store.deleteRemote(module.value.collection, [String(model.value.id)])
-  toast.add({ title: t('core.actions.deletedItems', { n: 1 }), color: 'success' })
-  await navigateTo(module.value.path)
+  saving.value = true
+  try {
+    await store.deleteRemote(module.value.collection, [String(model.value.id)])
+    toast.add({ title: t('core.actions.deletedItems', { n: 1 }), color: 'success' })
+    await navigateTo(module.value.path)
+  }
+  catch (error: unknown) {
+    toast.add({
+      title: t('app.ui.deleteFailed'),
+      description: error instanceof Error ? error.message : String(error),
+      color: 'error',
+    })
+  }
+  finally {
+    saving.value = false
+  }
 }
 </script>
 

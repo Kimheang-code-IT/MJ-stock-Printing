@@ -11,7 +11,7 @@ import { unwrap } from './entities'
 /**
 
 /**
- * HTTP delivery-note commands against `/api/v1/delivery-notes`. The backend
+ * HTTP delivery-note commands against `/api/v1/delivery`. The backend
  * owns sequence allocation, remaining-quantity validation, permissions and
  * audit trails; the UI only forwards the operation.
  */

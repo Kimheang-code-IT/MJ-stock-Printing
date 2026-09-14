@@ -24,7 +24,7 @@ export function useGlobalSearch() {
 
   // The connected backend implements keyword search only. Hide Ask AI and the
   // semantic mode instead of labelling SQL keyword search as semantic AI.
-  const isHttpMode = useRuntimeConfig().public.useMockData === false
+  const isHttpMode = true
 
   ensureSearchIndexSeeded()
 

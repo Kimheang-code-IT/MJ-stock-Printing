@@ -49,7 +49,7 @@ async def test_create_with_fulfillment_fields_and_initial_status(client):
     product, customer, sale, line_a, _sale_b, _line_b = await _two_sales_one_customer(client, headers, tag)
 
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "customerId": customer["id"],
             "deliveryPhone": "0123456789",
@@ -90,7 +90,7 @@ async def test_status_vocabulary_and_transitions(client):
 
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json={
                 "deliveryPhone": "0123456789",
                 "deliveryLocation": "Phnom Penh",
@@ -102,29 +102,29 @@ async def test_status_vocabulary_and_transitions(client):
 
     # FAILED without a reason is rejected.
     failed = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status",
+        f"/api/v1/delivery/{note['id']}/status",
         json={"status": "FAILED", "cancel_reason": "driver unavailable"},
         headers=headers,
     )
     assert failed.status_code == 409  # PENDING → FAILED is not a legal transition
 
     preparing = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status", json={"status": "PREPARING"}, headers=headers
+        f"/api/v1/delivery/{note['id']}/status", json={"status": "PREPARING"}, headers=headers
     )
     assert preparing.status_code == 200
 
     no_reason = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status", json={"status": "FAILED"}, headers=headers
+        f"/api/v1/delivery/{note['id']}/status", json={"status": "FAILED"}, headers=headers
     )
     assert no_reason.status_code == 422
 
     out = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status", json={"status": "OUT_FOR_DELIVERY"}, headers=headers
+        f"/api/v1/delivery/{note['id']}/status", json={"status": "OUT_FOR_DELIVERY"}, headers=headers
     )
     assert out.status_code == 200
 
     partial = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status",
+        f"/api/v1/delivery/{note['id']}/status",
         json={"status": "PARTIALLY_DELIVERED"},
         headers=headers,
     )
@@ -132,14 +132,14 @@ async def test_status_vocabulary_and_transitions(client):
     assert partial.json()["data"]["status"] == "PARTIALLY_DELIVERED"
 
     delivered = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status", json={"status": "DELIVERED"}, headers=headers
+        f"/api/v1/delivery/{note['id']}/status", json={"status": "DELIVERED"}, headers=headers
     )
     assert delivered.status_code == 200
     assert delivered.json()["data"]["status"] == "DELIVERED"
 
     # DELIVERED is terminal even for the new statuses.
     late = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status",
+        f"/api/v1/delivery/{note['id']}/status",
         json={"status": "FAILED", "cancel_reason": "late"},
         headers=headers,
     )
@@ -158,7 +158,7 @@ async def test_derived_invoice_delivery_status(client):
     # First partial note delivers 1 of 4 → PARTIALLY_DELIVERED.
     first = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json={
                 "deliveryPhone": "0123456789",
                 "deliveryLocation": "Phnom Penh",
@@ -172,7 +172,7 @@ async def test_derived_invoice_delivery_status(client):
 
     picker = (
         await client.get(
-            f"/api/v1/delivery-notes/deliverable-invoices?customer_id={customer['id']}", headers=headers
+            f"/api/v1/delivery/deliverable-invoices?customer_id={customer['id']}", headers=headers
         )
     ).json()["data"]
     row = next(r for r in picker if r["sale_id"] == sale["id"])
@@ -181,7 +181,7 @@ async def test_derived_invoice_delivery_status(client):
     # Second note completes the invoice (3 remaining) → FULLY_DELIVERED and
     # the invoice leaves the picker.
     second = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "deliveryPhone": "0123456789",
             "deliveryLocation": "Phnom Penh",
@@ -194,13 +194,13 @@ async def test_derived_invoice_delivery_status(client):
 
     picker = (
         await client.get(
-            f"/api/v1/delivery-notes/deliverable-invoices?customer_id={customer['id']}", headers=headers
+            f"/api/v1/delivery/deliverable-invoices?customer_id={customer['id']}", headers=headers
         )
     ).json()["data"]
     assert all(r["sale_id"] != sale["id"] for r in picker)
 
     # Detail view of the first note shows the derived FULLY_DELIVERED status.
-    detail = (await client.get(f"/api/v1/delivery-notes/{first['id']}", headers=headers)).json()["data"]
+    detail = (await client.get(f"/api/v1/delivery/{first['id']}", headers=headers)).json()["data"]
     assert detail["sales"][0]["delivery_status"] == "FULLY_DELIVERED"
 
 
@@ -215,7 +215,7 @@ async def test_concurrent_partial_deliveries_no_over_delivery(client):
 
     async def create(qty: str):
         return await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json={
                 "deliveryPhone": "0123456789",
                 "deliveryLocation": "Phnom Penh",
@@ -256,7 +256,7 @@ async def test_new_statuses_permission_gated(client, db_session):
     _product, _customer, sale, line_a, _sale_b, _line_b = await _two_sales_one_customer(client, headers, tag)
     note = (
         await client.post(
-            "/api/v1/delivery-notes",
+            "/api/v1/delivery",
             json={
                 "deliveryPhone": "0123456789",
                 "deliveryLocation": "Phnom Penh",
@@ -269,18 +269,18 @@ async def test_new_statuses_permission_gated(client, db_session):
     # Preparer can move to PREPARING / OUT_FOR_DELIVERY...
     assert (
         await client.post(
-            f"/api/v1/delivery-notes/{note['id']}/status", json={"status": "PREPARING"}, headers=preparer
+            f"/api/v1/delivery/{note['id']}/status", json={"status": "PREPARING"}, headers=preparer
         )
     ).status_code == 200
     assert (
         await client.post(
-            f"/api/v1/delivery-notes/{note['id']}/status", json={"status": "OUT_FOR_DELIVERY"}, headers=preparer
+            f"/api/v1/delivery/{note['id']}/status", json={"status": "OUT_FOR_DELIVERY"}, headers=preparer
         )
     ).status_code == 200
 
     # ...but not to PARTIALLY_DELIVERED (needs delivery.deliver).
     forbidden = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status",
+        f"/api/v1/delivery/{note['id']}/status",
         json={"status": "PARTIALLY_DELIVERED"},
         headers=preparer,
     )
@@ -288,7 +288,7 @@ async def test_new_statuses_permission_gated(client, db_session):
 
     # FAILED (delivery.cancel) is forbidden for this role too.
     failed = await client.post(
-        f"/api/v1/delivery-notes/{note['id']}/status",
+        f"/api/v1/delivery/{note['id']}/status",
         json={"status": "FAILED", "cancel_reason": "x"},
         headers=preparer,
     )

@@ -1,5 +1,4 @@
 import type { ApiResponse, FieldOption } from '~/types/stock-pos/common'
-import { CollectionEndpoints } from '~/utils/constants/api-endpoints'
 
 const OPTIONS_CACHE_TTL_MS = 60_000
 const optionsCache = new Map<string, {
@@ -29,44 +28,10 @@ function endpointParams(endpoint: string) {
 }
 
 /** Map an options endpoint (e.g. /api/v1/uoms/options) back to its collection name. */
-function collectionFromEndpoint(endpoint: string): string | null {
-  const path = endpointPath(endpoint).replace(/\/options$/, '')
-  for (const [collection, value] of Object.entries(CollectionEndpoints)) {
-    if (String(value) === path) return collection
-  }
-  return null
-}
-
-/**
- * Mock mode: resolve reference options from the in-memory entity repository
- * (active records only) instead of issuing real HTTP requests.
- */
-async function loadMockReferenceOptions(endpoint: string): Promise<FieldOption[]> {
-  const collection = collectionFromEndpoint(endpoint)
-  if (!collection) return []
-  const { useEntityRepository } = await import('~/repositories/index')
-  const result = await useEntityRepository().list(collection, { status: 'Active', limit: 1000 })
-  return result.items.map(row => ({
-    label: String(row.name || row.displayName || row.label || row.code || row.id),
-    value: String(row.id),
-  })).filter(row => row.value)
-}
-
 export function useReferenceOptions() {
   const api = useApi()
 
-  function isMockMode(): boolean {
-    try {
-      return useRuntimeConfig().public.useMockData === true
-    }
-    catch {
-      return false
-    }
-  }
-
   async function loadReferenceOptionsUncached(endpoint: string, search = ''): Promise<FieldOption[]> {
-    if (isMockMode()) return loadMockReferenceOptions(endpoint)
-
     const path = endpointPath(endpoint)
     const params = endpointParams(endpoint)
     const valueField = optionsValueField(endpoint)

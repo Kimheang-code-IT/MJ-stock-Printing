@@ -111,7 +111,7 @@ export interface DeliveryNoteCreateInput {
 }
 
 /**
- * Edit an existing DRAFT delivery note (PATCH /delivery-notes/:id). When
+ * Edit an existing DRAFT delivery note (PATCH /delivery/:id). When
  * `lines` is provided the whole line set is replaced (remaining-quantity
  * validation still runs, excluding this note); omitted fields are untouched.
  * Non-draft notes are rejected by the backend (delivery.update).
@@ -379,6 +379,8 @@ export interface PosCommandRepository {
     currency?: 'USD' | 'KHR'
     /** Exchange rate applied (KHR per 1 USD) — 1 for USD documents. */
     exchangeRate?: number
+    /** Transaction date (ISO) recorded on the Stock In document. */
+    transactionDate?: string | null
     note?: string | null
   }): Promise<AppRecord>
   /**
@@ -438,7 +440,7 @@ export interface PosCommandRepository {
     paymentMethod: string
     reference?: string | null
   }): Promise<AppRecord>
-  /** Printable receipt payload derived from the stored sale (mock: in-memory). */
+  /** Printable receipt payload derived from the stored sale. */
   getSaleReceipt(saleId: string): Promise<SaleReceipt>
   /** Original sale (lines + currency + customer) loaded into POS return mode. */
   getSale(saleId: string): Promise<SaleDetail>

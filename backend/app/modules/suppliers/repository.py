@@ -38,12 +38,49 @@ class SupplierRepository:
         self.session.add(supplier)
 
     async def count_debts(self, supplier_id) -> int:
-        from sqlalchemy import select as _select
-
         from app.modules.suppliers.models import SupplierDebt
 
         result = await self.session.execute(
-            _select(func.count()).select_from(SupplierDebt).where(SupplierDebt.supplier_id == supplier_id)
+            select(func.count()).select_from(SupplierDebt).where(SupplierDebt.supplier_id == supplier_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_purchases(self, supplier_id) -> int:
+        """Stock-in (purchase) documents recorded against the supplier."""
+        from app.modules.stock.models import StockTransaction
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(StockTransaction)
+            .where(StockTransaction.supplier_id == supplier_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_purchase_returns(self, supplier_id) -> int:
+        from app.modules.stock.models import PurchaseReturn
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(PurchaseReturn)
+            .where(PurchaseReturn.supplier_id == supplier_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_payments(self, supplier_id) -> int:
+        from app.modules.pos.models import Payment
+
+        result = await self.session.execute(
+            select(func.count()).select_from(Payment).where(Payment.supplier_id == supplier_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_batches(self, supplier_id) -> int:
+        from app.modules.stock.models import BatchStockBalance
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(BatchStockBalance)
+            .where(BatchStockBalance.supplier_id == supplier_id)
         )
         return int(result.scalar_one())
 

@@ -38,12 +38,14 @@ No standalone pages/routes for sales, purchases, returns, debts, stock in/adjust
 Load the matching skill in `.opencode/skills/` (`backend`, `frontend`, `database`, `testing`, `project-cleanup`) before non-trivial work.
 
 ```bash
-cp .env.example .env
+# All Compose files + templates live in infrastructure/ (run Compose from the repo root).
+# One-time secrets (Windows local deploy): scripts/init-env.ps1 fills infrastructure/.env.
+powershell -File infrastructure/scripts/init-env.ps1
 pnpm --dir frontend install
 python -m pip install -r backend/requirements-dev.txt
 
-docker compose up -d --build            # frontend :80, API :8100, Postgres :55432, Redis :56379
-docker compose up -d db redis           # minimum for backend tests
+docker compose -f infrastructure/docker-compose.yml up -d --build   # dev: frontend :80, API :8100, Postgres :55432, Redis :56379
+docker compose -f infrastructure/docker-compose.yml up -d db redis  # minimum for backend tests
 ```
 
 Run the smallest relevant check first, then related ones; full suite / frontend build only when required:
@@ -57,7 +59,7 @@ pnpm --dir frontend build                     # slow; only before reporting a fr
 python -m pytest backend/tests/modules/<area> -q
 python -m pytest backend/tests -q             # full suite (~4 min)
 
-docker compose config --quiet
+docker compose -f infrastructure/docker-compose.yml config --quiet
 ```
 
 Never report a check as passing unless it ran.

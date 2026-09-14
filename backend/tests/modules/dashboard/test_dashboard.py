@@ -214,7 +214,7 @@ async def test_dashboard_counts_pending_delivery_notes(client, dashboard_baselin
     _, _, cash_sale = await _seed_transactions(client, headers)
 
     created = await client.post(
-        "/api/v1/delivery-notes",
+        "/api/v1/delivery",
         json={
             "sale_id": cash_sale["id"],
             "delivery_phone": "0123456789",
@@ -230,10 +230,10 @@ async def test_dashboard_counts_pending_delivery_notes(client, dashboard_baselin
     assert after_create.status_code == 200
     assert _delta(dashboard_baseline, after_create.json()["data"], "summary", "pending_delivery_notes_count") == 1
 
-    confirmed = await client.post(f"/api/v1/delivery-notes/{note['id']}/confirm", headers=headers)
+    confirmed = await client.post(f"/api/v1/delivery/{note['id']}/confirm", headers=headers)
     assert confirmed.status_code == 200, confirmed.text
 
-    delivered = await client.post(f"/api/v1/delivery-notes/{note['id']}/deliver", headers=headers)
+    delivered = await client.post(f"/api/v1/delivery/{note['id']}/deliver", headers=headers)
     assert delivered.status_code == 200, delivered.text
 
     after_deliver = await client.get("/api/v1/dashboard/summary?period=7d", headers=headers)

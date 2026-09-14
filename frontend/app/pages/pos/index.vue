@@ -723,9 +723,9 @@ async function completeSale() {
     lastSaleNo.value = String(sale.invoiceNo || sale.saleNo || '')
     lastSaleId.value = String(sale.id || '')
     const shouldOpenDelivery = needsDelivery.value && canCreateDelivery.value
-    // Invoice payload comes from the sale receipt contract (mock: derived
-    // from the stored sale; HTTP: GET /pos/sales/{id}/receipt). Falls back to
-    // the cart snapshot if the receipt cannot be read. No invoice.pdf call.
+    // Invoice payload comes from the sale receipt contract
+    // (GET /pos/sales/{id}/receipt). Falls back to the
+    // cart snapshot if the receipt cannot be read. No invoice.pdf call.
     let printLines: SaleInvoicePrintInput['lines'] = snapshot
     try {
       const receipt = await posCommands.getSaleReceipt(lastSaleId.value)

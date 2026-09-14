@@ -194,11 +194,24 @@ class ProductService:
         product = await self.repo.get(product_id)
         if product is None:
             raise NotFoundError("Product not found")
-        if await self.repo.count_movements(product.id) > 0:
-            raise ConflictError("Cannot delete a product that has stock history")
+        referenced = (
+            await self.repo.count_movements(product.id)
+            + await self.repo.count_sale_items(product.id)
+            + await self.repo.count_transaction_items(product.id)
+            + await self.repo.count_purchase_return_items(product.id)
+            + await self.repo.count_delivery_items(product.id)
+            + await self.repo.count_batches(product.id)
+        )
+        if referenced > 0:
+            raise ConflictError(
+                "Cannot delete this product because stock, purchase, sale, return, or "
+                "delivery history exists. Deactivate it instead."
+            )
         balance = await self.repo.ensure_balance(product.id)
         if balance.quantity != 0:
-            raise ConflictError("Cannot delete a product that still has stock")
+            raise ConflictError(
+                "Cannot delete this product because it still has stock. Deactivate it instead."
+            )
         await self.session.delete(product)
         await self.session.commit()
 
@@ -642,6 +655,7 @@ class StockOperationService:
                 original_amount=total,
                 paid_amount=paid,
                 currency=transaction.currency,
+                exchange_rate=transaction.exchange_rate,
             )
 
         # paid_amount > 0 → immutable payment record (spec 2.1.x Stock In).
@@ -919,6 +933,7 @@ class StockOperationService:
             debt.remaining_amount = outstanding
             debt.status = "PAID" if outstanding == 0 else ("PARTIAL" if paid > 0 else "UNPAID")
             debt.currency = transaction.currency
+            debt.exchange_rate = transaction.exchange_rate
         elif outstanding > 0:
             from app.modules.suppliers import create_supplier_debt_for_stock_in
 
@@ -930,6 +945,7 @@ class StockOperationService:
                 original_amount=new_total,
                 paid_amount=paid,
                 currency=transaction.currency,
+                exchange_rate=transaction.exchange_rate,
             )
 
         await record_audit(
@@ -976,12 +992,20 @@ class StockOperationService:
         items_by_id: dict[uuid.UUID, StockTransactionItem] = {
             item.id: item for item in transaction.items
         }
+        # Sum requested quantities per line first: duplicate stock_transaction_
+        # item_id rows must be validated as a whole, never each independently.
+        requested: dict[uuid.UUID, Decimal] = {}
         for line in payload.lines:
             item = items_by_id.get(line.stock_transaction_item_id)
             if item is None:
                 raise NotFoundError("Stock In line not found on this document")
+            requested[line.stock_transaction_item_id] = (
+                requested.get(line.stock_transaction_item_id, Decimal("0")) + Decimal(line.quantity)
+            )
+        for item_id, total_quantity in requested.items():
+            item = items_by_id[item_id]
             returnable = Decimal(item.quantity) - Decimal(item.returned_quantity)
-            if Decimal(line.quantity) > returnable:
+            if total_quantity > returnable:
                 raise ValidationError(
                     f"Cannot return more than the returnable quantity ({returnable})",
                     field_errors={"lines": "Return quantity exceeds returnable"},
@@ -1195,6 +1219,30 @@ class StockOperationService:
             item_rows.append(row)
             self.session.add(row)
             if difference != 0:
+                from app.modules.stock import batch_service
+
+                # Keep the per-batch ledger in step with the total balance:
+                # a count surplus lands in the synthetic unbatched lot, a
+                # shortfall drains FEFO (expired lots may be written down).
+                if difference > 0:
+                    await batch_service.batch_in(
+                        self.session,
+                        product_id=item.product_id,
+                        batch_no=None,
+                        expiry_date=None,
+                        quantity_base=difference,
+                        unit_cost_per_base=unit_cost,
+                        document_no=document_no,
+                    )
+                else:
+                    allocations = await batch_service.allocate_fefo(
+                        self.session,
+                        product=product,
+                        quantity_base=-difference,
+                        allow_negative=negative_ok,
+                        include_expired=True,
+                    )
+                    await batch_service.deduct_allocations(self.session, allocations)
                 await apply_stock_movement(
                     self.session,
                     product_id=item.product_id,

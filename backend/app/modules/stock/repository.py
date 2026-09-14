@@ -151,6 +151,52 @@ class ProductRepository:
         )
         return int(result.scalar_one())
 
+    async def count_sale_items(self, product_id: uuid.UUID) -> int:
+        from app.modules.pos.models import SaleItem
+
+        result = await self.session.execute(
+            select(func.count()).select_from(SaleItem).where(SaleItem.product_id == product_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_transaction_items(self, product_id: uuid.UUID) -> int:
+        from app.modules.stock.models import StockTransactionItem
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(StockTransactionItem)
+            .where(StockTransactionItem.product_id == product_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_purchase_return_items(self, product_id: uuid.UUID) -> int:
+        from app.modules.stock.models import PurchaseReturnItem
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(PurchaseReturnItem)
+            .where(PurchaseReturnItem.product_id == product_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_delivery_items(self, product_id: uuid.UUID) -> int:
+        from app.modules.delivery.models import DeliveryNoteItem
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(DeliveryNoteItem)
+            .where(DeliveryNoteItem.product_id == product_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_batches(self, product_id: uuid.UUID) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(BatchStockBalance)
+            .where(BatchStockBalance.product_id == product_id)
+        )
+        return int(result.scalar_one())
+
     async def aggregate_movements(self, product_ids: list[uuid.UUID]) -> dict:
         """Per-product stock read-model aggregates.
 

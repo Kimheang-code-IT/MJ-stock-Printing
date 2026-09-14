@@ -7,7 +7,7 @@ from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.customers.models import Customer
-from app.modules.delivery_notes.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
+from app.modules.delivery.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
 
 
 class DeliveryNoteRepository:

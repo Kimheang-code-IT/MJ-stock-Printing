@@ -1,23 +1,28 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Shared helpers for the C:\StockPOS local-only deployment of Stock & POS.
+  Shared helpers for the local-only Windows deployment of Stock & POS.
 
 .DESCRIPTION
   Thin functions used by the double-clickable .bat wrappers in this folder:
   start / stop / restart / open / wait-and-open / autostart install/remove.
   Everything works without administrator rights; Docker Desktop must be
   installed for the current user.
+
+  The Compose files and `.env` live in the `infrastructure/` folder next to the
+  `scripts/` folder. Set STOCKPOS_DIR to that folder to override autodetection.
 #>
 
 $ErrorActionPreference = "Stop"
 
-# Deployment root: the folder that contains docker-compose.yml + .env.
-# Default C:\StockPOS; override with $env:STOCKPOS_HOME for other locations.
+# Deployment folder: the `infrastructure/` folder that contains
+# docker-compose.yml, docker-compose.local.yml and `.env`.
+# Autodetected from this script's location; override with STOCKPOS_DIR.
 function Get-DeployRoot {
   if ($env:STOCKPOS_DIR) { return $env:STOCKPOS_DIR }
   if ($env:STOCKPOS_HOME) { return $env:STOCKPOS_HOME }
-  return "C:\StockPOS"
+  # This file lives in infrastructure\scripts\stockpos\, so go up two levels.
+  return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
 
 function Assert-Docker([switch]$Quiet) {
@@ -90,7 +95,8 @@ function Start-Stack {
   if (-not (Test-ComposeStack $root)) {
     Write-Host "Deployment folder $root is not complete." -ForegroundColor Red
     Write-Host "It must contain docker-compose.yml, docker-compose.local.yml and .env"
-    Write-Host "(see docs\LOCAL_DEPLOYMENT.md for the first installation)."
+    Write-Host "(run infrastructure\scripts\init-env.ps1 to create .env, then see"
+    Write-Host " infrastructure\README.md for the first installation)."
     return 1
   }
   Set-Location $root

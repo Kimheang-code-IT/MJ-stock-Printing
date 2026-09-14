@@ -46,8 +46,10 @@ export const deliveryModules: ModuleConfig[] = [
       col('customer', 'Customer'),
       col('deliveryPhone', 'Phone'),
       col('deliveryLocation', 'Location'),
+      col('deliveryFee', 'Delivery Price'),
       col('createdAt', 'Date', { type: 'date' }),
       col('status', 'Status'),
+      col('note', 'Note'),
       col('itemCount', 'Items', { type: 'number' }),
     ],
     // Metadata only — delivery data comes from POS sales; there is no

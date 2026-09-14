@@ -4,8 +4,8 @@ import type {
   DeliveryNoteCreateInput,
   DeliveryNoteUpdateInput,
 } from '~/repositories/contracts/entities'
-import { createId, mockLatency, nowIso } from '~/mocks/query'
-import { mockInsert, mockUpdate, useMockDb } from '~/mocks/db'
+import { createId, mockLatency, nowIso } from '../mocks/query'
+import { mockInsert, mockUpdate, useMockDb } from '../mocks/db'
 import { normalizeDeliveryStatusInput, saleItemReservedQty, saleHasDeliverableLines } from '~/utils/delivery/notes'
 
 /**
@@ -276,7 +276,7 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
       const db = useMockDb()
       const needle = String(search || '').trim().toLowerCase()
       // Normalized row shape — identical to the HTTP adapter output of
-      // GET /delivery-notes/deliverable-invoices (see DeliverableInvoice).
+      // GET /delivery/deliverable-invoices (see DeliverableInvoice).
       const rows: AppRecord[] = []
       for (const sale of db.collections.sales) {
         if (!saleHasDeliverableLines(sale, db.collections.deliveryNotes)) continue

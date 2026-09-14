@@ -68,8 +68,18 @@ class SupplierService:
 
     async def delete(self, supplier_id) -> None:
         supplier = await self.get(supplier_id)
-        if await self.repo.count_debts(supplier.id) > 0:
-            raise ConflictError("Cannot delete a supplier that has debt records")
+        referenced = (
+            await self.repo.count_purchases(supplier.id)
+            + await self.repo.count_purchase_returns(supplier.id)
+            + await self.repo.count_debts(supplier.id)
+            + await self.repo.count_payments(supplier.id)
+            + await self.repo.count_batches(supplier.id)
+        )
+        if referenced > 0:
+            raise ConflictError(
+                "Cannot delete this supplier because purchase, debt, payment, or batch "
+                "history exists. Deactivate it instead."
+            )
         await self.session.delete(supplier)
         await self.session.commit()
 
@@ -252,9 +262,12 @@ async def create_supplier_debt_for_stock_in(
     original_amount,
     paid_amount,
     currency: str = "USD",
+    exchange_rate=1,
 ) -> SupplierDebt:
     """Public interface: stock-in transactions create supplier debts in their own
-    transaction when the purchase is not fully paid."""
+    transaction when the purchase is not fully paid. The debt inherits the
+    source document's currency AND exchange rate so KHR debts are never
+    normalized as USD in reports."""
     from decimal import Decimal
 
     from app.core.exceptions import NotFoundError
@@ -267,6 +280,9 @@ async def create_supplier_debt_for_stock_in(
     original = Decimal(original_amount).quantize(Decimal("0.01"))
     paid = min(Decimal(paid_amount).quantize(Decimal("0.01")), original)
     remaining = original - paid
+    rate = Decimal(str(exchange_rate if exchange_rate is not None else 1))
+    if rate <= 0:
+        rate = Decimal("1")
     debt = SupplierDebt(
         supplier_id=supplier.id,
         stock_transaction_id=stock_transaction_id,
@@ -276,6 +292,7 @@ async def create_supplier_debt_for_stock_in(
         remaining_amount=remaining,
         status="UNPAID" if paid == 0 else "PARTIAL",
         currency=currency,
+        exchange_rate=rate,
     )
     session.add(debt)
     await session.flush()

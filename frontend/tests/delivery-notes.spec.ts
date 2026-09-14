@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createMockDeliveryRepository } from '../app/repositories/mock/delivery'
-import { createMockPosRepository } from '../app/repositories/mock/entities'
-import { mockRecords } from '../app/mocks/db'
+import { createMockDeliveryRepository } from './support/repositories-mock/delivery'
+import { createMockPosRepository } from './support/repositories-mock/entities'
+import { mockRecords } from './support/mocks/db'
 import {
   DELIVERY_STATUSES,
   canTransitionDelivery,

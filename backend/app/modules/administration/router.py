@@ -9,6 +9,7 @@ from app.modules.administration.schemas import (
     RoleCreate,
     RoleOut,
     RoleUpdate,
+    SequenceCreate,
     SequenceOut,
     SequenceUpdate,
     SettingsOut,
@@ -90,6 +91,21 @@ async def list_roles(
     return envelope([RoleOut.model_validate(r) for r in await service.list_roles()])
 
 
+@router.get("/roles/options")
+async def role_options(
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("role.manage")),
+) -> dict:
+    """Active-role options for user form selectors."""
+    service = AdministrationService(db)
+    roles = await service.list_roles()
+    return envelope([
+        {"id": str(r.id), "value": str(r.id), "label": r.name, "name": r.name}
+        for r in roles
+        if r.status == "ACTIVE"
+    ])
+
+
 @router.post("/roles", status_code=201)
 async def create_role(
     payload: RoleCreate,
@@ -111,6 +127,17 @@ async def update_role(
     return envelope(RoleOut.model_validate(await service.update_role(role_id, payload, actor=actor)))
 
 
+@router.delete("/roles/{role_id}")
+async def delete_role(
+    role_id: UUID,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("role.manage")),
+) -> dict:
+    service = AdministrationService(db)
+    await service.delete_role(role_id, actor=actor)
+    return envelope({"message": "Role deleted"})
+
+
 @router.get("/permissions")
 async def get_permissions(
     db: AsyncSession = Depends(get_db_session),
@@ -118,9 +145,6 @@ async def get_permissions(
 ) -> dict:
     service = AdministrationService(db)
     return envelope(await service.permission_catalog())
-
-
-# -------------------------------------------------------------- sequences
 
 
 @router.get("/document-sequences")
@@ -132,6 +156,18 @@ async def list_sequences(
     return envelope([SequenceOut.model_validate(s) for s in await service.list_sequences()])
 
 
+@router.post("/document-sequences", status_code=201)
+async def create_sequence(
+    payload: SequenceCreate,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("sequence.manage")),
+) -> dict:
+    service = AdministrationService(db)
+    return envelope(
+        SequenceOut.model_validate(await service.create_sequence(payload, actor=actor))
+    )
+
+
 @router.patch("/document-sequences/{sequence_id}")
 async def update_sequence(
     sequence_id: UUID,
@@ -141,6 +177,17 @@ async def update_sequence(
 ) -> dict:
     service = AdministrationService(db)
     return envelope(SequenceOut.model_validate(await service.update_sequence(sequence_id, payload)))
+
+
+@router.delete("/document-sequences/{sequence_id}")
+async def delete_sequence(
+    sequence_id: UUID,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("sequence.manage")),
+) -> dict:
+    service = AdministrationService(db)
+    await service.delete_sequence(sequence_id, actor=actor)
+    return envelope({"message": "Document sequence deleted"})
 
 
 # ------------------------------------------------------------- audit logs
@@ -168,10 +215,21 @@ async def list_audit_logs(
     )
     from app.shared.pagination.params import list_meta
 
+    user_names: dict[UUID, str] = {}
+    actor_ids = {log.user_id for log in logs if log.user_id}
+    if actor_ids:
+        from sqlalchemy import select
+
+        rows = await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(actor_ids))
+        )
+        user_names = {row[0]: row[1] for row in rows.all()}
+
     data = [
         {
             "id": str(log.id),
             "user_id": str(log.user_id) if log.user_id else None,
+            "user": user_names.get(log.user_id) if log.user_id else None,
             "action": log.action,
             "module": log.module,
             "entity_type": log.entity_type,

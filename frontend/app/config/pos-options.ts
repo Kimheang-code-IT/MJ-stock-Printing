@@ -1,4 +1,4 @@
-/** Shared Stock & POS option lists (mock-seeded and later served by the API). */
+/** Shared Stock & POS option lists. */
 export const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Payment', 'Bank Transfer', 'Credit'] as const
 
 export const STOCK_OPERATION_TYPES = ['stock_in', 'adjustment', 'damage', 'expiry'] as const

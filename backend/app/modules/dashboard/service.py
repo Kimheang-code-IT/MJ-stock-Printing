@@ -29,7 +29,7 @@ from app.core.exceptions import ValidationError
 from app.core.permissions import user_has_permission
 from app.modules.auth.models import User
 from app.modules.customers.models import Customer, CustomerDebt
-from app.modules.delivery_notes.models import DeliveryNote
+from app.modules.delivery.models import DeliveryNote
 from app.modules.pos.models import Sale, SaleItem, SaleReturn, SaleReturnItem
 from app.modules.reports.models import Expense
 from app.modules.stock.models import (

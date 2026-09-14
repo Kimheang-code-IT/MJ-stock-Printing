@@ -97,7 +97,7 @@ async def _seed_sample_master_data(session) -> None:
 
     from app.modules.auth.models import User
     from app.modules.brands.models import Brand
-    from app.modules.delivery_notes.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
+    from app.modules.delivery.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
     from app.modules.pos.models import Sale
 
     for code, name in (("GEN", "Generic"), ("PREM", "Premium")):

@@ -85,25 +85,6 @@ export function documentHasReturnableLines(doc: AppRecord | null | undefined): b
   return buildReturnLines(doc, 'sale').length > 0
 }
 
-export function returnRefundTotal(lines: ReturnLineDraft[]): number {
-  return roundMoney(lines.reduce((sum, line) => {
-    const qty = Math.max(0, Number(line.qty || 0))
-    if (qty <= 0) return sum
-    return sum + roundMoney(qty * line.unitAmount)
-  }, 0))
-}
-
-export function validateReturnLines(lines: ReturnLineDraft[]): string | null {
-  const active = lines.filter(line => Number(line.qty || 0) > 0)
-  if (!active.length) return 'empty'
-  for (const line of active) {
-    const qty = Number(line.qty || 0)
-    if (!Number.isFinite(qty) || qty <= 0) return 'invalid'
-    if (qty > line.returnableQty + 1e-9) return 'over'
-  }
-  return null
-}
-
 /** One fixed original purchase line for Purchase Return mode. */
 export type PurchaseReturnLineDraft = {
   lineId: string

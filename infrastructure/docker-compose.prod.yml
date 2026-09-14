@@ -1,11 +1,11 @@
 # Production overlay for Stock & POS Management System.
 #
 # First-time setup on the production host:
-#   1. Copy this repo (needed for compose files + backend/rabbitmq.conf)
-#   2. Copy `.env.production.example` to `.env` and fill real secrets
+#   1. Copy this repo (compose files live in infrastructure/, app code in backend/ + frontend/)
+#   2. Copy infrastructure/.env.production.example to infrastructure/.env and fill real secrets
 #   3. docker login ghcr.io -u YOUR_GITHUB_USERNAME
-#   4. docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-#   5. docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   4. cd infrastructure && docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   5. cd infrastructure && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Do not pass `--build` on the production host; images come from GHCR.
 # Set IMAGE_TAG to `latest` (default here), a git SHA, or a version tag such as `v1.0.0`.

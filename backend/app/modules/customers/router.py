@@ -42,6 +42,22 @@ async def create_customer(
     return envelope(CustomerOut.model_validate(await service.create(payload)))
 
 
+@router.get("/options")
+async def customer_options(
+    q: str | None = None,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("customer.view")),
+) -> dict:
+    """Active-customer options for POS / delivery selectors."""
+    service = CustomerService(db)
+    customers, _total = await service.list(q=q, status="ACTIVE", page=1, limit=limit)
+    return envelope([
+        {"id": str(c.id), "value": str(c.id), "label": c.name, "name": c.name}
+        for c in customers
+    ])
+
+
 @router.get("/{customer_id}")
 async def get_customer(
     customer_id: UUID,

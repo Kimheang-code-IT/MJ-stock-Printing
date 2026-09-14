@@ -56,6 +56,9 @@ class CategoryService:
     async def delete(self, category_id: uuid.UUID) -> None:
         category = await self.get(category_id)
         if await self.repo.count_products(category_id) > 0:
-            raise ConflictError("Cannot delete a category that still has products")
+            raise ConflictError(
+                "Cannot delete this category because products reference it. "
+                "Deactivate it instead."
+            )
         await self.session.delete(category)
         await self.session.commit()

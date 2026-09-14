@@ -1,4 +1,4 @@
-"""POS auto-entry delivery note: POST /pos/sales/{id}/delivery-notes.
+"""POS auto-entry delivery note: POST /pos/sales/{id}/delivery.
 
 Prefills one delivery note from a single sale (all remaining undelivered qty
 by default; phone/location from the customer), reusing the canonical create
@@ -38,7 +38,7 @@ async def test_pos_alias_prefills_note_from_one_sale(client):
     sale = await _complete_sale(client, headers, product["id"], customer["id"])
 
     response = await client.post(
-        f"/api/v1/pos/sales/{sale['id']}/delivery-notes",
+        f"/api/v1/pos/sales/{sale['id']}/delivery",
         json={"delivery_phone": "012345678", "delivery_location": "Street 1, Phnom Penh"},
         headers=headers,
     )
@@ -67,12 +67,12 @@ async def test_pos_alias_twice_rejects_nothing_left_to_deliver(client):
     sale = await _complete_sale(client, headers, product["id"], customer["id"])
 
     first = await client.post(
-        f"/api/v1/pos/sales/{sale['id']}/delivery-notes", json={}, headers=headers
+        f"/api/v1/pos/sales/{sale['id']}/delivery", json={}, headers=headers
     )
     assert first.status_code == 201, first.text
 
     second = await client.post(
-        f"/api/v1/pos/sales/{sale['id']}/delivery-notes", json={}, headers=headers
+        f"/api/v1/pos/sales/{sale['id']}/delivery", json={}, headers=headers
     )
     assert second.status_code == 409, second.text
 
@@ -98,6 +98,6 @@ async def test_pos_alias_requires_delivery_permission(client, db_session):
     cashier_headers = {"Authorization": f"Bearer {cashier['access_token']}"}
 
     response = await client.post(
-        f"/api/v1/pos/sales/{sale['id']}/delivery-notes", json={}, headers=cashier_headers
+        f"/api/v1/pos/sales/{sale['id']}/delivery", json={}, headers=cashier_headers
     )
     assert response.status_code == 403, response.text

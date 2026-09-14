@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { systemSettingsTabs } from '../app/config/settings-schemas'
-import { MOCK_APP_CONFIG } from '../app/repositories/mock/settings'
+import { MOCK_APP_CONFIG } from './support/repositories-mock/settings'
 import { applyAdminSettingsGroups, toAdminSettingsValues } from '../app/repositories/http/admin-settings'
 import type { AppConfig } from '../app/types/stock-pos/settings'
 

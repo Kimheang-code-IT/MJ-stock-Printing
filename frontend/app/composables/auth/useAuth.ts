@@ -1,10 +1,13 @@
 import type { AuthUser } from '~/types/auth-user'
-import { ok } from '~/mocks/query'
-import { MOCK_DEMO_EMAIL, MOCK_DEMO_PASSWORD, mockLoginUser } from '~/mocks/auth'
 import { clearTokens, getAccessToken, hasTokens, setTokens } from '~/utils/auth/tokens'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 
 type LoginResult = { user: AuthUser }
+
+/** Envelope helper matching the `{ data }` shape returned by the HTTP API. */
+function ok<T>(data: T) {
+  return { data }
+}
 
 interface AuthTokenPairResponse {
   accessToken: string
@@ -15,19 +18,7 @@ interface AuthTokenPairResponse {
   user?: AuthUser
 }
 
-function useMockAuthMode(): boolean {
-  try {
-    return useRuntimeConfig().public.useMockData === true
-  }
-  catch {
-    return false
-  }
-}
-
-/**
- * HTTP auth operations against `/api/v1/auth/*`. In mock mode every operation
- * is answered locally with placeholder tokens and the seeded demo profile.
- */
+/** HTTP auth operations against `/api/v1/auth/*`. */
 export function useAuth() {
   const api = useApi()
   const authStore = useAuthStore()
@@ -40,11 +31,6 @@ export function useAuth() {
   }
 
   async function loginWithCredentials(email: string, password: string) {
-    if (useMockAuthMode()) {
-      const user = mockLoginUser(email, password)
-      setTokens('mock-access-token', 'mock-refresh-token')
-      return ok<LoginResult>({ user })
-    }
     const payload = await unwrap<AuthTokenPairResponse>(await api.post<AuthTokenPairResponse | { data: AuthTokenPairResponse }>(
       ApiEndpoints.AUTH_LOGIN,
       { email, password },
@@ -56,14 +42,34 @@ export function useAuth() {
     return ok<LoginResult>({ user })
   }
 
+  /**
+   * One-time initial administrator setup (`POST /auth/setup`), then sign the
+   * new administrator in.
+   */
+  async function setupAdministrator(input: {
+    fullName: string
+    email: string
+    password: string
+    passwordConfirmation: string
+  }) {
+    if (input.password !== input.passwordConfirmation) {
+      throw createError({ statusCode: 400, statusMessage: 'Passwords do not match' })
+    }
+    await api.post(ApiEndpoints.AUTH_SETUP, {
+      full_name: input.fullName,
+      email: input.email,
+      password: input.password,
+      confirm_password: input.passwordConfirmation,
+    }, { isAuthRequest: true, suppressErrorToast: true })
+    return loginWithCredentials(input.email, input.password)
+  }
+
   async function requestPasswordReset(email: string) {
-    if (useMockAuthMode()) return ok({ sent: true, channel: 'telegram' as const })
     await api.post(ApiEndpoints.AUTH_FORGOT_PASSWORD, { email }, { isAuthRequest: true })
     return ok({ sent: true, channel: 'telegram' as const })
   }
 
   async function verifyPasswordResetCode(email: string, code: string) {
-    if (useMockAuthMode()) return ok({ verified: true, resetToken: 'mock-reset-token' })
     const result = await unwrap<{ resetToken: string }>(await api.post<{ resetToken: string } | { data: { resetToken: string } }>(
       ApiEndpoints.AUTH_RESET_VERIFY,
       { email, code },
@@ -73,7 +79,6 @@ export function useAuth() {
   }
 
   async function resendPasswordResetCode(email: string) {
-    if (useMockAuthMode()) return ok({ sent: true, channel: 'telegram' as const })
     await api.post(ApiEndpoints.AUTH_RESET_RESEND, { email }, { isAuthRequest: true })
     return ok({ sent: true, channel: 'telegram' as const })
   }
@@ -85,15 +90,12 @@ export function useAuth() {
     password: string
     passwordConfirmation: string
   }) {
-    if (!useMockAuthMode()) {
-      if (!input.resetToken) {
-        throw createError({ statusCode: 400, statusMessage: 'Reset session expired. Verify the code again.' })
-      }
+    if (!input.resetToken) {
+      throw createError({ statusCode: 400, statusMessage: 'Reset session expired. Verify the code again.' })
     }
     if (input.password !== input.passwordConfirmation) {
       throw createError({ statusCode: 400, statusMessage: 'Passwords do not match' })
     }
-    if (useMockAuthMode()) return ok({ reset: true })
     await api.post(ApiEndpoints.AUTH_RESET_PASSWORD, {
       email: input.email,
       resetToken: input.resetToken,
@@ -103,7 +105,6 @@ export function useAuth() {
   }
 
   async function exchangePasswordResetHandoff(handoff: string) {
-    if (useMockAuthMode()) return ok({ email: MOCK_DEMO_EMAIL, resetToken: 'mock-reset-token' })
     const result = await unwrap<{ email: string, resetToken: string }>(await api.post<{ email: string, resetToken: string } | { data: { email: string, resetToken: string } }>(
       ApiEndpoints.AUTH_RESET_HANDOFF,
       { handoff },
@@ -113,7 +114,6 @@ export function useAuth() {
   }
 
   async function createTelegramLinkCode() {
-    if (useMockAuthMode()) return ok({ code: 'MOCK-1234', expiresIn: 600 })
     const result = await unwrap<{ code: string, expiresIn: number }>(await api.post<{ code: string, expiresIn: number } | { data: { code: string, expiresIn: number } }>(
       ApiEndpoints.AUTH_TELEGRAM_LINK_CODE,
       {},
@@ -131,7 +131,6 @@ export function useAuth() {
     if (input.password !== input.passwordConfirmation) {
       throw createError({ statusCode: 400, statusMessage: 'Passwords do not match' })
     }
-    if (useMockAuthMode()) return ok({ changed: true })
     await api.post(ApiEndpoints.AUTH_CHANGE_PASSWORD, {
       currentPassword: input.currentPassword,
       newPassword: input.password,
@@ -142,9 +141,7 @@ export function useAuth() {
   async function updateProfileAvatar(avatar: string) {
     const auth = useAuthStore()
     if (!auth.user) throw createError({ statusCode: 401, statusMessage: 'Not signed in' })
-    if (!useMockAuthMode()) {
-      await api.patch(ApiEndpoints.AUTH_PROFILE_AVATAR, { avatar })
-    }
+    await api.patch(ApiEndpoints.AUTH_PROFILE_AVATAR, { avatar })
     auth.updateUser({ avatar })
     return ok({ avatar })
   }
@@ -152,15 +149,13 @@ export function useAuth() {
   async function removeProfileAvatar() {
     const auth = useAuthStore()
     if (!auth.user) throw createError({ statusCode: 401, statusMessage: 'Not signed in' })
-    if (!useMockAuthMode()) {
-      await api.patch(ApiEndpoints.AUTH_PROFILE_AVATAR, { avatar: null })
-    }
+    await api.patch(ApiEndpoints.AUTH_PROFILE_AVATAR, { avatar: null })
     auth.updateUser({ avatar: undefined })
     return ok({ removed: true })
   }
 
   async function logoutServer(refreshToken: string | null) {
-    if (useMockAuthMode() || !refreshToken) return ok({ message: 'Logged out' })
+    if (!refreshToken) return ok({ message: 'Logged out' })
     try {
       await api.post(ApiEndpoints.AUTH_LOGOUT, { refreshToken }, { isAuthRequest: true, suppressErrorToast: true, suppressAccessAlert: true })
     }
@@ -173,12 +168,6 @@ export function useAuth() {
   /** Refresh the stored user profile from `GET /auth/me`. */
   async function hydrateSessionFromApi(): Promise<AuthUser | null> {
     if (!hasTokens()) return null
-    if (useMockAuthMode()) {
-      const cached = authStore.user
-      const user = cached ?? mockLoginUser(MOCK_DEMO_EMAIL, MOCK_DEMO_PASSWORD)
-      authStore.login(user)
-      return user
-    }
     try {
       const me = await api.get<AuthUser | { data: AuthUser }>(ApiEndpoints.AUTH_ME, {
         suppressAccessAlert: true,
@@ -206,6 +195,7 @@ export function useAuth() {
 
   return {
     loginWithCredentials,
+    setupAdministrator,
     requestPasswordReset,
     verifyPasswordResetCode,
     resendPasswordResetCode,

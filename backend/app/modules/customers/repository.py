@@ -37,5 +37,41 @@ class CustomerRepository:
     def add(self, customer: Customer) -> None:
         self.session.add(customer)
 
+    async def count_sales(self, customer_id) -> int:
+        from app.modules.pos.models import Sale
+
+        result = await self.session.execute(
+            select(func.count()).select_from(Sale).where(Sale.customer_id == customer_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_debts(self, customer_id) -> int:
+        from app.modules.customers.models import CustomerDebt
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(CustomerDebt)
+            .where(CustomerDebt.customer_id == customer_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_delivery_notes(self, customer_id) -> int:
+        from app.modules.delivery.models import DeliveryNote
+
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(DeliveryNote)
+            .where(DeliveryNote.customer_id == customer_id)
+        )
+        return int(result.scalar_one())
+
+    async def count_payments(self, customer_id) -> int:
+        from app.modules.pos.models import Payment
+
+        result = await self.session.execute(
+            select(func.count()).select_from(Payment).where(Payment.customer_id == customer_id)
+        )
+        return int(result.scalar_one())
+
     async def flush(self) -> None:
         await self.session.flush()

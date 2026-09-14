@@ -40,6 +40,7 @@ SETTING_GROUPS: dict[str, dict[str, object]] = {
         "bot_token": "",
         "enabled": True,
         "enable_password_reset": True,
+        "payment_invoice_notify_enabled": True,
         "verification_code_expiry": 300,
         "max_verification_attempts": 5,
         "stock_inquiry_enabled": True,
@@ -114,6 +115,10 @@ class AdministrationService:
             new_values={"email": user.email, "role": role.name, "status": user.status},
         )
         await self.session.commit()
+        # The freshly added user never ran through a selectin load, so its
+        # `role_ref` is unloaded. Load it here (async context) or the router
+        # serialization raises MissingGreenlet -> HTTP 500.
+        await self.session.refresh(user, attribute_names=["role_ref"])
         return user
 
     async def update_user(self, user_id: UUID, payload, *, actor: User) -> User:
@@ -149,6 +154,9 @@ class AdministrationService:
             if user.id == actor.id or await self._is_last_active_admin(user):
                 raise ConflictError("Cannot change the role of the last active administrator")
             user.role_id = role.id
+            # Keep the loaded relationship in sync so serialization does not
+            # return the previous role name.
+            user.role_ref = role
             changes["role_id"] = str(role.id)
 
         if changes:
@@ -268,6 +276,34 @@ class AdministrationService:
     async def permission_catalog(self) -> list[dict[str, object]]:
         return permission_catalog()
 
+    async def delete_role(self, role_id: UUID, *, actor: User) -> None:
+        """Hard-delete a role only when it is not a built-in and no user uses it.
+
+        History safety: a role referenced by any user is never removed — the
+        caller must reassign users or keep the role instead.
+        """
+        role = await self.roles.get(role_id)
+        if role is None:
+            raise NotFoundError("Role not found")
+        if role.is_system:
+            raise ConflictError("System roles cannot be deleted")
+        if await self.roles.count_users_with_role(role.id) > 0:
+            raise ConflictError(
+                "Cannot delete this role because users still reference it. "
+                "Reassign them first."
+            )
+        await self.session.delete(role)
+        await record_audit(
+            self.session,
+            action="role_deleted",
+            module="administration",
+            user_id=actor.id,
+            entity_type="role",
+            entity_id=role.id,
+            old_values={"name": role.name, "permissions": role.permissions},
+        )
+        await self.session.commit()
+
     # -------------------------------------------------------------- sequences
 
     async def list_sequences(self) -> list[DocumentSequence]:
@@ -275,6 +311,36 @@ class AdministrationService:
             select(DocumentSequence).order_by(DocumentSequence.document_type)
         )
         return list(result.scalars().all())
+
+    async def create_sequence(self, payload, *, actor: User) -> DocumentSequence:
+        document_type = payload.document_type.strip().upper()
+        existing = await self.session.execute(
+            select(DocumentSequence).where(DocumentSequence.document_type == document_type)
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ConflictError("A document sequence already exists for this document type")
+        sequence = DocumentSequence(
+            document_type=document_type,
+            prefix=payload.prefix.strip().upper(),
+            next_number=1,
+            number_length=payload.number_length,
+            reset_type=payload.reset_type,
+            status=payload.status,
+        )
+        self.session.add(sequence)
+        await self.session.flush()
+        await record_audit(
+            self.session,
+            action="sequence_created",
+            module="administration",
+            user_id=actor.id,
+            entity_type="document_sequence",
+            entity_id=sequence.id,
+            new_values={"document_type": sequence.document_type, "prefix": sequence.prefix},
+        )
+        await self.session.commit()
+        await self.session.refresh(sequence)
+        return sequence
 
     async def update_sequence(self, sequence_id: UUID, payload) -> DocumentSequence:
         sequence = await self.session.get(DocumentSequence, sequence_id)
@@ -295,7 +361,33 @@ class AdministrationService:
         await self.session.refresh(sequence)
         return sequence
 
-    # ------------------------------------------------------------- audit logs
+    async def delete_sequence(self, sequence_id: UUID, *, actor: User) -> None:
+        """Hard-delete only a sequence that has never issued a document.
+
+        next_number > 1 means at least one number was allocated; deleting it
+        would break the numbering history of existing documents, so it is
+        refused in favour of deactivation.
+        """
+        sequence = await self.session.get(DocumentSequence, sequence_id)
+        if sequence is None:
+            raise NotFoundError("Document sequence not found")
+        if sequence.next_number > 1:
+            raise ConflictError(
+                "Cannot delete this document sequence because numbers have already "
+                "been issued. Deactivate it instead."
+            )
+        document_type = sequence.document_type
+        await self.session.delete(sequence)
+        await record_audit(
+            self.session,
+            action="sequence_deleted",
+            module="administration",
+            user_id=actor.id,
+            entity_type="document_sequence",
+            entity_id=sequence.id,
+            old_values={"document_type": document_type},
+        )
+        await self.session.commit()
 
     async def list_audit_logs(
         self, *, q, user_id, module, action, start, end, page, limit

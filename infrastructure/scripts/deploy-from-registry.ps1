@@ -4,8 +4,9 @@
   Pull Stock & POS images from GitHub Container Registry and start production.
 
 .DESCRIPTION
-  Uses docker-compose.yml + docker-compose.prod.yml. Does not build images locally.
-  Requires `.env` (copy from `.env.production.example`) and docker login to ghcr.io.
+  Uses docker-compose.yml + docker-compose.prod.yml from the infrastructure/
+  folder. Does not build images locally. Requires `.env` (copy from
+  `.env.production.example`) and docker login to ghcr.io.
 #>
 
 param(
@@ -15,11 +16,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-Set-Location $root
+$infra = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Set-Location $infra
 
-if (-not (Test-Path (Join-Path $root ".env"))) {
-  Write-Error "Missing .env in the repository root. Copy .env.production.example to .env and fill every CHANGE_ME value."
+if (-not (Test-Path (Join-Path $infra ".env"))) {
+  Write-Error "Missing infrastructure\.env. Copy .env.production.example to .env and fill every CHANGE_ME value."
 }
 
 if ($Tag) { $env:IMAGE_TAG = $Tag }

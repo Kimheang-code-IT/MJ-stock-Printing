@@ -1,6 +1,7 @@
 /**
- * Mock file-text extraction for Phase 2 indexing.
- * Real PDF/OCR parsers can replace extractText later.
+ * Embedded sample text used for search indexing / file previews when the
+ * original file bytes are unavailable. Real PDF/OCR parsers can replace
+ * extractText later.
  */
 
 export type ExtractInput = {
@@ -12,7 +13,7 @@ export type ExtractInput = {
   contextTitle?: string
 }
 
-const MOCK_BODY_BY_EXT: Record<string, string> = {
+const SAMPLE_BODY_BY_EXT: Record<string, string> = {
   pdf: 'Official correspondence cover letter. Subject: administrative follow-up and document review. Please confirm receipt and route for approval.',
   doc: 'Internal memorandum describing process steps, responsible officers, and target completion dates for this record.',
   docx: 'Internal memorandum describing process steps, responsible officers, and target completion dates for this record.',
@@ -44,15 +45,15 @@ export function extractText(input: ExtractInput): string {
   }
 
   if (mime.startsWith('text/') || ext === 'txt' || ext === 'csv' || ext === 'md') {
-    const body = MOCK_BODY_BY_EXT[ext] || MOCK_BODY_BY_EXT.txt!
+    const body = SAMPLE_BODY_BY_EXT[ext] || SAMPLE_BODY_BY_EXT.txt!
     return `${name}\n${body}`
   }
 
-  const seeded = MOCK_BODY_BY_EXT[ext]
-    || (mime.includes('pdf') ? MOCK_BODY_BY_EXT.pdf
-      : mime.includes('word') ? MOCK_BODY_BY_EXT.docx
-        : mime.includes('sheet') || mime.includes('excel') ? MOCK_BODY_BY_EXT.xlsx
-          : mime.startsWith('image/') ? MOCK_BODY_BY_EXT.png
+  const seeded = SAMPLE_BODY_BY_EXT[ext]
+    || (mime.includes('pdf') ? SAMPLE_BODY_BY_EXT.pdf
+      : mime.includes('word') ? SAMPLE_BODY_BY_EXT.docx
+        : mime.includes('sheet') || mime.includes('excel') ? SAMPLE_BODY_BY_EXT.xlsx
+          : mime.startsWith('image/') ? SAMPLE_BODY_BY_EXT.png
             : 'Supporting file content available for operational search after indexing.')
 
   const context = input.contextTitle ? `Related to: ${input.contextTitle}.` : ''

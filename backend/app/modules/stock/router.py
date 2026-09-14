@@ -238,6 +238,12 @@ async def add_product_sale_price(
             sale_price=payload.sale_price,
             effective_date=payload.effective_date,
             actor=actor,
+            batch_no=payload.batch_no,
+            purchase_date=payload.purchase_date,
+            expiry_date=payload.expiry_date,
+            uom_prices=[row.model_dump(by_alias=False) for row in payload.uom_prices]
+            if payload.uom_prices is not None
+            else None,
         )
     )
 
