@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { AppConfig } from '~/types/stock-pos/settings'
-import type { ConnectionStatusFieldValue } from '~/types/stock-pos/common'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
@@ -13,8 +12,8 @@ const { t } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
 const auth = useAuthStore()
-const canEdit = computed(() => auth.canAccessPage('settings.manage'))
-const canConfigure = computed(() => auth.canAccessPage('settings.manage'))
+const canEdit = computed(() => auth.canAccessPage('settings.update'))
+const canConfigure = computed(() => auth.canAccessPage('settings.update'))
 const appLocalization = useAppLocalization()
 
 const pending = ref(true)
@@ -45,27 +44,6 @@ async function load() {
 function fieldValue(key: string): unknown {
   if (!model.value) return undefined
 
-  if (key === '__emailConnection') {
-    const value: ConnectionStatusFieldValue = {
-      status: model.value.email.connectionStatus,
-      message: model.value.email.lastTestMessage,
-      lastTestedAt: model.value.email.lastTestedAt,
-    }
-    return value
-  }
-
-  if (key === '__telegramConnection') {
-    const value: ConnectionStatusFieldValue = {
-      status: model.value.telegram.connectionStatus,
-      message: model.value.telegram.lastTestMessage,
-      lastTestedAt: model.value.telegram.lastTestedAt,
-      details: model.value.telegram.botUsername
-        ? [{ label: t('core.settings.botUsername'), value: model.value.telegram.botUsername }]
-        : [],
-    }
-    return value
-  }
-
   // Select options use string values; coerce number fields for USelect match.
   if (key === 'general.defaultPageSize' || key === 'system.paginationDefault') {
     const raw = getByPath(model.value, key)
@@ -79,20 +57,11 @@ function fieldValue(key: string): unknown {
     return raw == null ? undefined : String(raw)
   }
 
-  if (key === 'localization.firstDayOfWeek') {
-    const raw = getByPath(model.value, key)
-    return raw == null || raw === '' ? undefined : String(raw)
-  }
-
   return getByPath(model.value, key)
 }
 
 async function setFieldValue(key: string, value: unknown) {
   if (!model.value) return
-
-  if (key === '__emailConnection' || key === '__telegramConnection') {
-    return
-  }
 
   if (key === 'system.maintenanceMode' || key === 'system.readOnlyMode') {
     if (value === true) {
@@ -116,12 +85,6 @@ async function setFieldValue(key: string, value: unknown) {
 
   if (key === 'telegram.notificationLanguage') {
     setByPath(model.value, 'telegram.messageLanguage', value === 'km' ? 'km' : 'en')
-    return
-  }
-
-  if (key === 'localization.firstDayOfWeek') {
-    const day = Number(value)
-    setByPath(model.value, key, day === 0 || day === 1 || day === 6 ? day : 1)
     return
   }
 

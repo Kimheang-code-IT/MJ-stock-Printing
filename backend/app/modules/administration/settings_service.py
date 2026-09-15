@@ -107,22 +107,25 @@ def _localization(groups: dict[str, dict[str, object]]) -> dict:
         "availableLanguages": ["en", "km"],
         "timezone": _str(system.get("timezone"), "Asia/Phnom_Penh") or "Asia/Phnom_Penh",
         "dateFormat": _str(system.get("date_format"), "YYYY-MM-DD") or "YYYY-MM-DD",
-        "timeFormat": "HH:mm",
-        "firstDayOfWeek": 1,
-        "numberFormat": "1,234.56",
+        "timeFormat": _str(system.get("time_format"), "HH:mm") or "HH:mm",
+        "firstDayOfWeek": _int(system.get("first_day_of_week"), 1),
+        "numberFormat": _str(system.get("number_format"), "1,234.56") or "1,234.56",
         "currency": _str(currency.get("code"), "USD") or "USD",
-        "locale": "en-US",
+        "locale": _str(system.get("display_locale"), "en-US") or "en-US",
     }
 
 
-def _telegram(groups: dict[str, dict[str, object]], *, shop_name: str) -> dict:
+def _telegram(
+    groups: dict[str, dict[str, object]], *, shop_name: str, environment_token_configured: bool
+) -> dict:
     telegram = groups.get("telegram", {})
     language = _str(telegram.get("notification_language"), "en")
+    token_configured = bool(_str(telegram.get("bot_token"))) or environment_token_configured
     return {
         "enabled": _bool(telegram.get("enabled")),
         "botDisplayName": shop_name,
-        "botToken": _MASK,
-        "chatId": "",
+        "botToken": _MASK if token_configured else "",
+        "chatId": _str(telegram.get("chat_id")),
         "messageLanguage": "km" if language == "km" else "en",
         "passwordResetEnabled": _bool(telegram.get("enable_password_reset")),
         "paymentInvoiceNotifyEnabled": _bool(telegram.get("payment_invoice_notify_enabled")),
@@ -148,8 +151,32 @@ def _stock(groups: dict[str, dict[str, object]]) -> dict:
     }
 
 
+def _security(groups: dict[str, dict[str, object]]) -> dict:
+    sec = groups.get("security", {})
+    exts = sec.get("allowed_upload_extensions")
+    if not isinstance(exts, list) or not exts:
+        exts = ["jpg", "jpeg", "png", "webp", "gif"]
+    return {
+        "sessionTimeoutMinutes": 120,
+        "maxLoginAttempts": _int(sec.get("max_login_attempts"), 5),
+        "accountLockMinutes": _int(sec.get("account_lock_minutes"), 15),
+        "passwordExpiryDays": _int(sec.get("password_expiry_days"), 180),
+        "requirePasswordChange": _bool(sec.get("require_password_change")),
+        "allowedUploadExtensions": [str(ext) for ext in exts],
+        "auditRetentionDays": _int(sec.get("audit_retention_days"), 365),
+        "passwordResetChannel": _str(sec.get("password_reset_channel"), "telegram") or "telegram",
+        "passwordResetCodeExpiryMinutes": _int(sec.get("password_reset_code_expiry_minutes"), 10),
+        "jwtAccessTokenMinutes": 30,
+        "jwtRefreshTokenDays": _int(sec.get("jwt_refresh_token_days"), 14),
+        "frontendOnly": False,
+    }
+
+
 def build_app_config(
-    groups: dict[str, dict[str, object]], *, environment: str = "development"
+    groups: dict[str, dict[str, object]],
+    *,
+    environment: str = "development",
+    environment_token_configured: bool = False,
 ) -> dict:
     shop = groups.get("shop", {})
     shop_name = _str(shop.get("shop_name"), _DEFAULT_SHOP_NAME) or _DEFAULT_SHOP_NAME
@@ -177,7 +204,11 @@ def build_app_config(
             "timeoutSeconds": 15,
             "connectionStatus": "disabled",
         },
-        "telegram": _telegram(groups, shop_name=shop_name),
+        "telegram": _telegram(
+            groups,
+            shop_name=shop_name,
+            environment_token_configured=environment_token_configured,
+        ),
         "stock": _stock(groups),
         "notifications": {
             "inAppEnabled": True,
@@ -188,20 +219,7 @@ def build_app_config(
             "language": "en",
             "rules": [],
         },
-        "security": {
-            "sessionTimeoutMinutes": 120,
-            "maxLoginAttempts": 5,
-            "accountLockMinutes": 15,
-            "passwordExpiryDays": 180,
-            "requirePasswordChange": False,
-            "allowedUploadExtensions": ["jpg", "jpeg", "png", "pdf"],
-            "auditRetentionDays": 365,
-            "passwordResetChannel": "telegram",
-            "passwordResetCodeExpiryMinutes": 10,
-            "jwtAccessTokenMinutes": 30,
-            "jwtRefreshTokenDays": 14,
-            "frontendOnly": True,
-        },
+        "security": _security(groups),
         "system": {
             "maintenanceMode": False,
             "readOnlyMode": False,
@@ -242,6 +260,12 @@ def app_config_to_groups(payload: dict) -> dict[str, dict[str, object]]:
         group = groups.setdefault("telegram", {})
         if "enabled" in telegram:
             group["enabled"] = _bool(telegram.get("enabled"))
+        if "botToken" in telegram:
+            token = _str(telegram.get("botToken")).strip()
+            if token != _MASK:
+                group["bot_token"] = token
+        if "chatId" in telegram:
+            group["chat_id"] = _str(telegram.get("chatId")).strip()
         if "passwordResetEnabled" in telegram:
             group["enable_password_reset"] = _bool(telegram.get("passwordResetEnabled"))
         if "paymentInvoiceNotifyEnabled" in telegram:
@@ -276,8 +300,50 @@ def app_config_to_groups(payload: dict) -> dict[str, dict[str, object]]:
         date_format = localization.get("dateFormat")
         if isinstance(date_format, str) and date_format:
             system["date_format"] = date_format
+        time_format = localization.get("timeFormat")
+        if isinstance(time_format, str) and time_format:
+            system["time_format"] = time_format
+        if "firstDayOfWeek" in localization:
+            system["first_day_of_week"] = _int(localization.get("firstDayOfWeek"), 1)
+        number_format = localization.get("numberFormat")
+        if isinstance(number_format, str) and number_format:
+            system["number_format"] = number_format
+        display_locale = localization.get("locale")
+        if isinstance(display_locale, str) and display_locale:
+            system["display_locale"] = display_locale
         currency = localization.get("currency")
         if isinstance(currency, str) and currency:
             groups.setdefault("currency", {})["code"] = currency
+
+    security = payload.get("security")
+    if isinstance(security, dict):
+        sec = groups.setdefault("security", {})
+        if "maxLoginAttempts" in security:
+            sec["max_login_attempts"] = _int(security.get("maxLoginAttempts"), 5)
+        if "accountLockMinutes" in security:
+            sec["account_lock_minutes"] = _int(security.get("accountLockMinutes"), 15)
+        if "passwordExpiryDays" in security:
+            sec["password_expiry_days"] = _int(security.get("passwordExpiryDays"), 180)
+        if "auditRetentionDays" in security:
+            sec["audit_retention_days"] = _int(security.get("auditRetentionDays"), 365)
+        if "requirePasswordChange" in security:
+            sec["require_password_change"] = _bool(security.get("requirePasswordChange"))
+        if "passwordResetChannel" in security:
+            sec["password_reset_channel"] = _str(security.get("passwordResetChannel"), "telegram") or "telegram"
+        if "passwordResetCodeExpiryMinutes" in security:
+            sec["password_reset_code_expiry_minutes"] = _int(
+                security.get("passwordResetCodeExpiryMinutes"), 10
+            )
+        if "jwtRefreshTokenDays" in security:
+            sec["jwt_refresh_token_days"] = _int(security.get("jwtRefreshTokenDays"), 14)
+        exts = security.get("allowedUploadExtensions")
+        if isinstance(exts, list):
+            sec["allowed_upload_extensions"] = [
+                str(ext).strip().lstrip(".").lower() for ext in exts if str(ext).strip()
+            ]
+        elif isinstance(exts, str):
+            sec["allowed_upload_extensions"] = [
+                ext.strip().lstrip(".").lower() for ext in exts.split(",") if ext.strip()
+            ]
 
     return {group: values for group, values in groups.items() if values}

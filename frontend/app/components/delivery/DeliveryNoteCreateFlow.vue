@@ -12,6 +12,7 @@ import {
   type DeliverableInvoice,
 } from '~/utils/delivery/notes'
 import { printDeliveryNoteDocument } from '~/utils/print/delivery-note'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 
 /**
  * Reusable delivery-note create flow (spec §2.1.9 / §5.13) — built on the
@@ -389,11 +390,16 @@ async function save(confirm: boolean) {
     emit('created', record)
   }
   catch (error: unknown) {
-    toast.add({
-      title: isEdit.value ? t('app.delivery.updateFailed') : t('app.delivery.createFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: isEdit.value ? t('app.delivery.updateFailed') : t('app.delivery.createFailed'),
+        description: apiErrorMessage(
+          error,
+          isEdit.value ? t('app.delivery.updateFailed') : t('app.delivery.createFailed'),
+        ),
+        color: 'error',
+      })
+    }
   }
   finally {
     saving.value = false

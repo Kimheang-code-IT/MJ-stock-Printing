@@ -8,10 +8,11 @@ Inbound (long polling), view-only (spec sections 3.6 / 3.6.1):
   read-only adapters in `app.shared.telegram.inquiry`; the bot never writes
   to the database. Any unknown/write-shaped callback is refused ("View only").
 
-Outbound password-reset delivery is queued through RabbitMQ and sent by the
-`worker-telegram` Celery worker (`app.tasks.telegram`) — unchanged.
+Outbound password-reset delivery is sent in-process by the API
+(`app.shared.telegram.delivery`) — no Celery/RabbitMQ worker.
 
-Secrets (bot token, client secret) come from environment only.
+The bot token may be saved from Administration > Settings; the environment
+value remains a fallback. The client secret remains environment-only.
 """
 
 import asyncio
@@ -37,9 +38,15 @@ TOOL_LABELS = {
 PERIOD_LABELS = {"today": "Today", "7d": "Last 7 days", "month": "This month"}
 
 
-async def _idle_forever() -> None:
-    logger.warning("TELEGRAM_BOT_TOKEN is not configured; telegram bot is idle")
+async def _wait_for_bot_token() -> str:
+    """Wait until a saved or environment token is available."""
+    from app.shared.telegram.client import resolve_bot_token
+
+    logger.warning("Telegram bot token is not configured; telegram bot is idle")
     while True:
+        token = await resolve_bot_token()
+        if token:
+            return token
         await asyncio.sleep(60)
 
 
@@ -219,10 +226,11 @@ async def on_callback(update, context) -> None:
 
 
 def run() -> None:
-    token = settings.telegram_bot_token
+    from app.shared.telegram.client import resolve_bot_token
+
+    token = asyncio.run(resolve_bot_token())
     if not token:
-        asyncio.run(_idle_forever())
-        return
+        token = asyncio.run(_wait_for_bot_token())
 
     from telegram.ext import (
         Application,

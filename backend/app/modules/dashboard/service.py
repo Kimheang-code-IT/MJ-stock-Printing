@@ -165,13 +165,13 @@ class DashboardService:
     async def _cogs(self, start_at: datetime, end_at: datetime) -> Decimal:
         """Sold cost for sales in the period, minus cost of restocked returns."""
         sold = await self.session.execute(
-            select(func.coalesce(func.sum(_usd(SaleItem.unit_cost * SaleItem.quantity, Sale.currency, Sale.exchange_rate)), 0))
+            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity * SaleItem.factor_to_base), 0))
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
         )
         restocked = await self.session.execute(
-            select(func.coalesce(func.sum(_usd(SaleReturnItem.quantity * SaleItem.unit_cost, Sale.currency, Sale.exchange_rate)), 0))
+            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost * SaleItem.factor_to_base), 0))
             .select_from(SaleReturnItem)
             .join(SaleItem, SaleItem.id == SaleReturnItem.sale_item_id)
             .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)

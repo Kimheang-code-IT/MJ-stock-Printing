@@ -11,6 +11,7 @@ import type {
 } from '~/types/stock-pos/common'
 import { conversionForUom, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
 import { buildPurchaseEditLines, buildPurchaseReturnLines } from '~/utils/reports/returns'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 
 /**
  * New Purchase (Stock In = purchase, spec §2.1.x) — built on the same
@@ -127,6 +128,7 @@ onMounted(async () => {
   const preselect = String(route.query.productId || '')
   if (preselect) {
     model.lines = [{ ...blankLine(), productId: preselect }]
+    applyDefaultSupplier(productFor(preselect))
   }
 })
 
@@ -164,12 +166,13 @@ async function loadReturnPurchase(purchaseId: string, purchaseNo: string) {
     setTitle(t('app.purchase.returnMode'))
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.purchase.returnLoadFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
-    await navigateTo('/reports/purchases')
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.purchase.returnLoadFailed'),
+        description: apiErrorMessage(error, t('app.purchase.returnLoadFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     returnLoading.value = false
@@ -212,12 +215,13 @@ async function loadEditPurchase(purchaseId: string, purchaseNo: string) {
     setTitle(t('app.purchase.editTitle'))
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.purchase.updateLoadFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
-    await navigateTo('/reports/purchases')
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.purchase.updateLoadFailed'),
+        description: apiErrorMessage(error, t('app.purchase.updateLoadFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     returnLoading.value = false
@@ -336,18 +340,33 @@ function productFor(productId: string) {
   return store.list('products').find(row => String(row.id) === productId) || null
 }
 
-/** Products not already on another line (one line per product; the backend
+/** Default supplier fast-path: the selected product's own supplier prefills
+ *  the purchase header. A manual supplier choice is never overwritten. */
+const autoSupplierId = ref('')
+
+function applyDefaultSupplier(product: Record<string, unknown> | null) {
+  const productSupplier = String(product?.supplierId || '')
+  if (!productSupplier) return
+  const current = String(model.supplierId || '')
+  if (current && current !== autoSupplierId.value) return
+  model.supplierId = productSupplier
+  autoSupplierId.value = productSupplier
+}
+
+/** Products not already on ANOTHER line (one line per product; the backend
  *  rejects duplicates on the same stock-in document). The picker shows the
- *  product NAME only and searches it (barcode/SKU stay out of the dropdown). */
+ *  product NAME only and searches it (barcode/SKU stay out of the dropdown).
+ *  The row's own product stays in the list so its name still resolves — the
+ *  table passes a copy of the row, so identity checks would drop it. */
 function availableProductOptions(row: Record<string, unknown>) {
+  const currentId = String(row.productId || '')
   const lines = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
-  const excluded = new Set(lines
-    .filter(other => other !== row)
+  const usedByOthers = new Set(lines
     .map(other => String(other.productId || ''))
-    .filter(Boolean))
+    .filter(id => id && id !== currentId))
   return store.list('products')
-    .filter(row => !excluded.has(String(row.id)))
-    .map(row => ({ label: String(row.name || ''), value: String(row.id) }))
+    .filter(product => !usedByOthers.has(String(product.id)))
+    .map(product => ({ label: String(product.name || ''), value: String(product.id) }))
 }
 
 /** Batch tracking is per product toggle (spec §5.9 Stock Costing). */
@@ -388,7 +407,7 @@ watch(() => model.lines, (rows) => {
     const nextUomId = String(product.uomId || '')
     const unitAmount = Number(row.unitAmount || 0)
     const nextCost = unitAmount > 0 ? unitAmount : suggestedCost(String(row.productId), nextUomId)
-    const nextRow: Record<string, unknown> = { ...row, uomId: nextUomId, unitAmount: nextCost }
+    const nextRow: Record<string, unknown> = { ...row, uomId: nextUomId, unitAmount: nextCost, name: String(product.name || '') }
     // Base qty display: entered qty × factor (display only — ledger math
     // happens server-side from factorToBase).
     nextRow.baseQuantity = multiplyDecimalSafe(Number(row.quantity || 0), conversionForUom(product, nextUomId)?.factorToBase ?? 1)
@@ -400,6 +419,7 @@ watch(() => model.lines, (rows) => {
     // Product changed → default the Batch No. to the product's latest lot.
     const prevRow = (rows as Array<Record<string, unknown>>)[index]
     if (String(nextRow.productId || '') !== String(prevRow?.productId || '')) {
+      applyDefaultSupplier(product)
       void autofillLatestBatch(nextRow, String(nextRow.productId || ''))
     }
     else if (nextRow.batchNo !== prevRow?.batchNo) {
@@ -622,8 +642,17 @@ const completedLines = computed(() => lines.value.filter((row) => {
   return true
 }))
 
+/** Lines with a product, quantity and cost — the running purchase total. The
+ *  stricter `completedLines` (below) additionally enforces batch/expiry, so an
+ *  incomplete line still shows its amount in the summary instead of $0.00. */
+const pricedLines = computed(() => lines.value.filter((row) => {
+  if (!row.productId) return false
+  if (!(Number(row.quantity) > 0)) return false
+  return Number(row.unitAmount) >= 0
+}))
+
 const subtotal = computed(() =>
-  round2(completedLines.value.reduce(
+  round2(pricedLines.value.reduce(
     (sum, row) => sum + round2(multiplyDecimalSafe(Number(row.quantity || 0), Number(row.unitAmount || 0))),
     0,
   )))
@@ -664,11 +693,13 @@ async function saveReturn() {
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.reports.returnFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.reports.returnFailed'),
+        description: apiErrorMessage(error, t('app.reports.returnFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     saving.value = false
@@ -709,11 +740,13 @@ async function saveEdit() {
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.purchase.updateFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.purchase.updateFailed'),
+        description: apiErrorMessage(error, t('app.purchase.updateFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     saving.value = false
@@ -764,11 +797,13 @@ async function save() {
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.purchase.saveFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.purchase.saveFailed'),
+        description: apiErrorMessage(error, t('app.purchase.saveFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     saving.value = false

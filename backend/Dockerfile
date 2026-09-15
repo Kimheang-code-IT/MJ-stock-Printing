@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p /srv/data/exports \
+RUN mkdir -p /srv/data/exports /srv/data/media \
     && useradd --create-home appuser \
     && chown -R appuser:appuser /srv
 USER appuser

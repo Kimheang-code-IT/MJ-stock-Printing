@@ -4,6 +4,7 @@ import type { AppRecord } from '~/config/admin-seed'
 import type { ProductSalePriceRow } from '~/repositories/contracts/entities'
 import { useStockQueries } from '~/repositories/index'
 import { formatMoney } from '~/utils/format/format-service'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
 import type { SalePriceVersionSelection } from '~/utils/stock/uom-conversions'
 import { pricingRowsFor, salePriceVersionSelection } from '~/utils/stock/uom-conversions'
@@ -91,7 +92,7 @@ async function load() {
     rows.value = result.items
   }
   catch (error: unknown) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
     rows.value = []
   }
   finally {
@@ -174,11 +175,13 @@ async function addVersion() {
     await load()
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.stock.priceHistoryFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.stock.priceHistoryFailed'),
+        description: apiErrorMessage(error, t('app.stock.priceHistoryFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     busy.value = false
@@ -192,6 +195,11 @@ async function activate(row: ProductSalePriceRow) {
     await stockQueries.activateSalePrice(String(props.product.id), String(row.id))
     toast.add({ title: t('app.stock.priceHistoryActivated'), color: 'success' })
     await load()
+    // Activating copies the default-sale price onto the product; mirror it into
+    // the form so the Pricing base row and sale price stay in sync.
+    const refreshedRow = rows.value.find(item => String(item.id) === String(row.id))
+    const activePrice = Number((refreshedRow ?? row).salePrice)
+    if (Number.isFinite(activePrice)) recordAccess?.set?.('salePrice', activePrice)
     // Keep the loaded Pricing table in sync when the selected version was activated.
     if (selectedId.value === String(row.id) && recordAccess?.set) {
       const refreshed = rows.value.find(item => String(item.id) === String(row.id))
@@ -199,11 +207,13 @@ async function activate(row: ProductSalePriceRow) {
     }
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.stock.priceHistoryFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.stock.priceHistoryFailed'),
+        description: apiErrorMessage(error, t('app.stock.priceHistoryFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     busy.value = false

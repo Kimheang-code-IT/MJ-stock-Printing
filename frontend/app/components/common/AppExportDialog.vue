@@ -69,16 +69,14 @@ function submit() {
 </script>
 
 <template>
-  <UModal
+  <CommonAppDialog
     v-model:open="open"
     :title="$t('core.exportDialog.title')"
     :description="$t('core.exportDialog.description')"
-    :dismissible="false"
-    :close="{ color: 'primary', variant: 'outline', class: 'rounded-full' }"
-    :ui="{ content: 'w-[calc(100%-2rem)] max-w-2xl sm:max-w-2xl' }"
+    :loading="loading"
+    width="2xl"
   >
-    <template #body>
-      <div class="space-y-5">
+    <div class="space-y-5">
         <UFormField
           :label="$t('core.exportDialog.dateRange')"
           :help="$t('core.exportDialog.dateRangeHelp')"
@@ -120,7 +118,6 @@ function submit() {
           </p>
         </fieldset>
       </div>
-    </template>
 
     <template #footer>
       <div class="flex w-full justify-end gap-2">
@@ -140,5 +137,5 @@ icon="i-lucide-download"
         </UButton>
       </div>
     </template>
-  </UModal>
+  </CommonAppDialog>
 </template>

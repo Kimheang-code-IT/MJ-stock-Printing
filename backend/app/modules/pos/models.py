@@ -179,7 +179,10 @@ class Payment(Base):
     """Immutable payment records for sales and customer/supplier debt payments."""
 
     __tablename__ = "payments"
-
+    __table_args__ = (
+        Index("ix_payments_customer_debt_id", "customer_debt_id"),
+        Index("ix_payments_supplier_debt_id", "supplier_debt_id"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     payment_no: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     sale_id: Mapped[uuid.UUID | None] = mapped_column(

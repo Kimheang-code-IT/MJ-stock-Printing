@@ -55,6 +55,11 @@ export function setAccessToken(access: string | null) {
   writeSession(ACCESS_KEY, access)
 }
 
+export function setRefreshToken(refresh: string | null) {
+  memoryRefresh = refresh
+  writeSession(REFRESH_KEY, refresh)
+}
+
 export function clearTokens() {
   setTokens(null, null)
 }

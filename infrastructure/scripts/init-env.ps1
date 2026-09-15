@@ -68,10 +68,11 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 Write-Host ""
 Write-Host "Created $envPath with strong random secrets." -ForegroundColor Green
 Write-Host ""
-Write-Host "Login credentials (save these now):" -ForegroundColor Cyan
-Write-Host "  Email:    $AdminEmail"
-Write-Host "  Password: $seedPassword"
+Write-Host "No data is seeded on startup. The first administrator is created on the" -ForegroundColor Cyan
+Write-Host "Setup page the first time you open the app (http://localhost)." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Next: double-click 'Start Stock POS.bat' in the infrastructure folder,"
 Write-Host "or run: .\infrastructure\scripts\stockpos\start-system.ps1"
+Write-Host ""
+Write-Host "To wipe all data later: .\infrastructure\scripts\clear-data.ps1" -ForegroundColor Cyan
 exit 0

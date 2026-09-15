@@ -19,11 +19,19 @@ PERMISSION_CATALOG: dict[str, tuple[str, ...]] = {
     "delivery": ("view", "create", "update", "confirm", "deliver", "cancel"),
     "report": ("sales", "purchase", "customer_debt", "supplier_debt", "finance"),
     "expense": ("create",),  # Add Expense on Finance Report only (no Expense page)
-    "user": ("manage",),
-    "role": ("manage",),
-    "sequence": ("manage",),
+    "user": ("view", "create", "update", "delete"),
+    "role": ("view", "create", "update", "delete"),
+    "sequence": ("view", "create", "update", "delete"),
     "audit": ("view",),
-    "settings": ("manage",),
+    "settings": ("view", "update"),
+}
+
+# Legacy `*.manage` codes expand to CRUD so older role rows keep working.
+_LEGACY_MANAGE_EXPANSION: dict[str, tuple[str, ...]] = {
+    "user.manage": ("user.view", "user.create", "user.update", "user.delete"),
+    "role.manage": ("role.view", "role.create", "role.update", "role.delete"),
+    "sequence.manage": ("sequence.view", "sequence.create", "sequence.update", "sequence.delete"),
+    "settings.manage": ("settings.view", "settings.update"),
 }
 
 SERVICE_PERMISSIONS = frozenset({"telegram.reset.send"})
@@ -52,7 +60,16 @@ def build_all_permissions() -> list[str]:
 
 
 def normalize_role_permissions(values: Iterable[str] | None, *, allow_wildcard: bool = False) -> list[str]:
-    normalized = list(dict.fromkeys(str(value).strip() for value in (values or []) if str(value).strip()))
+    expanded: list[str] = []
+    for value in values or []:
+        code = str(value).strip()
+        if not code:
+            continue
+        if code in _LEGACY_MANAGE_EXPANSION:
+            expanded.extend(_LEGACY_MANAGE_EXPANSION[code])
+        else:
+            expanded.append(code)
+    normalized = list(dict.fromkeys(expanded))
     allowed = set(ASSIGNABLE_PERMISSIONS)
     if allow_wildcard:
         allowed.add(SUPER_ADMIN_PERMISSION)
@@ -63,7 +80,10 @@ def normalize_role_permissions(values: Iterable[str] | None, *, allow_wildcard: 
     for permission in normalized:
         if permission.count(".") < 1:
             continue
-        module, action = permission.rsplit(".", 1)
+        # Dotted actions (e.g. supplier.debt.pay) belong to the first segment's
+        # module, so granting them also grants supplier.view / customer.view.
+        module = permission.split(".", 1)[0]
+        action = permission.rsplit(".", 1)[-1]
         view_permission = f"{module}.view"
         if action != "view" and view_permission in ASSIGNABLE_PERMISSIONS:
             granted.add(view_permission)
@@ -86,12 +106,18 @@ def cashier_permissions() -> list[str]:
 
 
 def effective_permissions(user: object) -> list[str]:
-    """Resolve access exclusively from the authoritative related role."""
+    """Resolve access exclusively from the authoritative related role.
+
+    The system Administrator role always has full access (`ALL_PAGES`), even if
+    the stored role_permissions rows are stale after a catalog change.
+    """
     role = getattr(user, "role_ref", None)
     if role is None:
         return []
+    if getattr(role, "name", None) == SUPER_ADMIN_ROLE:
+        return [SUPER_ADMIN_PERMISSION]
     values = list(getattr(role, "permissions", None) or [])
-    if getattr(role, "name", None) == SUPER_ADMIN_ROLE and SUPER_ADMIN_PERMISSION in values:
+    if SUPER_ADMIN_PERMISSION in values:
         return [SUPER_ADMIN_PERMISSION]
     return [value for value in values if value in ASSIGNABLE_PERMISSIONS]
 

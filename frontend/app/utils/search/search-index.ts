@@ -15,20 +15,6 @@ function writeAll(docs: IndexedDocument[]) {
   localStore.set(INDEX_KEY, docs)
 }
 
-export function listIndexedDocuments(): IndexedDocument[] {
-  if (!import.meta.client) return []
-  return readAll()
-}
-
-export function upsertIndexedDocument(doc: IndexedDocument) {
-  if (!import.meta.client) return
-  const rows = readAll()
-  const idx = rows.findIndex(r => r.id === doc.id)
-  if (idx >= 0) rows[idx] = doc
-  else rows.push(doc)
-  writeAll(rows)
-}
-
 export function upsertIndexedDocuments(docs: IndexedDocument[]) {
   if (!import.meta.client || !docs.length) return
   const map = new Map(readAll().map(d => [d.id, d]))

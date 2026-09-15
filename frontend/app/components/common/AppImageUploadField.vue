@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { ApiEndpoints } from '~/utils/constants/api-endpoints'
+import { mediaObjectUrl } from '~/utils/security/url'
+
 const model = defineModel<string | undefined>({ default: undefined })
 
 const props = withDefaults(defineProps<{
@@ -11,18 +14,37 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   /** Compact layout for side-by-side placement next to form fields. */
   compact?: boolean
+  /** Storage folder used by POST /images/upload. */
+  folder?: string
 }>(), {
   accept: SAFE_RASTER_IMAGE_ACCEPT,
   maxSizeMb: 2,
   disabled: false,
   compact: false,
+  folder: 'general',
 })
 
 const { t, te } = useI18n()
 const toast = useToast()
+const api = useApi()
 const inputRef = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
-const previewSource = computed(() => safeImageSource(model.value))
+const uploading = ref(false)
+const localPreview = ref<string | null>(null)
+
+/**
+ * Preview source. While uploading we show the just-picked file; otherwise the
+ * stored object key (or URL/data URL) is resolved to a same-origin media URL.
+ */
+const previewSource = computed(() => {
+  if (localPreview.value) return localPreview.value
+  return safeImageSource(mediaObjectUrl(model.value)) || sameOriginMediaUrl(model.value)
+})
+
+function sameOriginMediaUrl(value: unknown): string | null {
+  const url = mediaObjectUrl(value)
+  return url && !/^(data:|blob:|https?:)/i.test(url) ? url : null
+}
 
 const labelText = computed(() => {
   if (props.label) return props.label
@@ -37,12 +59,26 @@ const helpText = computed(() => {
 })
 
 function openPicker() {
-  if (props.disabled) return
+  if (props.disabled || uploading.value) return
   inputRef.value?.click()
 }
 
 function clear() {
+  localPreview.value = null
   model.value = undefined
+}
+
+async function uploadFile(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('folder', props.folder)
+  const response = await api.post<unknown>(ApiEndpoints.IMAGE_UPLOAD, form as unknown as Record<string, unknown>)
+  const payload = response && typeof response === 'object' && 'data' in response
+    ? (response as { data?: { objectName?: string } }).data
+    : undefined
+  const objectName = payload?.objectName
+  if (!objectName) throw new Error('missing object name')
+  return String(objectName)
 }
 
 async function readFile(file: File) {
@@ -54,13 +90,26 @@ async function readFile(file: File) {
     toast.add({ title: t('core.common.imageTooLarge', { size: props.maxSizeMb }), color: 'error' })
     return
   }
-  const reader = new FileReader()
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    reader.onload = () => resolve(String(reader.result || ''))
-    reader.onerror = () => reject(new Error('read failed'))
-    reader.readAsDataURL(file)
-  })
-  model.value = dataUrl
+
+  uploading.value = true
+  try {
+    // Instant local preview while the upload is in flight.
+    localPreview.value = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(new Error('read failed'))
+      reader.readAsDataURL(file)
+    })
+    model.value = await uploadFile(file)
+    localPreview.value = null
+  }
+  catch {
+    localPreview.value = null
+    toast.add({ title: t('core.common.imageUploadFailed'), color: 'error' })
+  }
+  finally {
+    uploading.value = false
+  }
 }
 
 function onInputChange(event: Event) {
@@ -72,7 +121,7 @@ function onInputChange(event: Event) {
 
 function onDrop(event: DragEvent) {
   dragOver.value = false
-  if (props.disabled) return
+  if (props.disabled || uploading.value) return
   const file = event.dataTransfer?.files?.[0]
   if (file) void readFile(file)
 }
@@ -92,7 +141,10 @@ function onDrop(event: DragEvent) {
       @dragleave.prevent="dragOver = false"
       @drop.prevent="onDrop"
     >
-      <template v-if="model">
+      <template v-if="uploading">
+        <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-primary" />
+      </template>
+      <template v-else-if="model">
         <img
 v-if="previewSource"
 :src="previewSource"
@@ -134,7 +186,7 @@ variant="ghost"
       type="file"
       class="hidden"
       :accept="accept"
-      :disabled="disabled"
+      :disabled="disabled || uploading"
       @change="onInputChange"
     >
   </UFormField>

@@ -7,6 +7,7 @@ import { formatMoney } from '~/composables/module/useModule'
 import { useFinanceRepository } from '~/repositories/index'
 import type { DashboardSummary } from '~/repositories/contracts/entities'
 import { datePickerPopoverContent, parsePickerValue, serializePickerValue } from '~/utils/date-picker'
+import { apiErrorMessage } from '~/utils/api/errors'
 
 /** Lazy chart: keeps the ~670 KB ECharts/vue-echarts chunk out of the
  *  landing route's initial JS — it loads only when the chart first renders. */
@@ -86,7 +87,7 @@ async function loadServerSummary() {
     return { start, end }
   }
   catch (error: unknown) {
-    summaryError.value = error instanceof Error ? error.message : String(error)
+    summaryError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
     return null
   }
   finally {

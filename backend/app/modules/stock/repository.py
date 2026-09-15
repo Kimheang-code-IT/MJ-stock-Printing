@@ -49,6 +49,8 @@ def product_to_out(product: Product, *, grouped: dict | None = None) -> dict:
         "uom_symbol": product.uom_ref.symbol if product.uom_ref else None,
         "brand_id": product.brand_id,
         "brand_name": product.brand_ref.name if product.brand_ref else None,
+        "supplier_id": product.supplier_id,
+        "supplier_name": product.supplier_ref.name if product.supplier_ref else None,
         "cost_price": product.cost_price,
         "selling_price": product.selling_price,
         "minimum_stock": product.minimum_stock,

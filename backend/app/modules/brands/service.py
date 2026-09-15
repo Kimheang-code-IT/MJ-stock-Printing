@@ -40,10 +40,12 @@ class BrandService:
 
     async def update(self, brand_id: uuid.UUID, payload) -> Brand:
         brand = await self.get(brand_id)
-        if payload.code is not None and payload.code.strip() != brand.code:
-            if await self.repo.get_by_code(payload.code.strip()):
-                raise ConflictError("A brand with this code already exists")
-            brand.code = payload.code.strip()
+        if payload.code is not None:
+            code = payload.code.strip()
+            if code and code != brand.code:
+                if await self.repo.get_by_code(code):
+                    raise ConflictError("A brand with this code already exists")
+                brand.code = code
         if payload.name is not None:
             brand.name = payload.name.strip()
         if payload.description is not None:

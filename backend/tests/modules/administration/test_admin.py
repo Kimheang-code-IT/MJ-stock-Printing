@@ -23,7 +23,7 @@ async def staff_headers(client, db_session):
 async def test_admin_requires_user_manage_permission(client, staff_headers):
     for method, path in (("get", "/api/v1/admin/users"), ("get", "/api/v1/admin/roles"), ("get", "/api/v1/admin/audit-logs"), ("get", "/api/v1/admin/settings"), ("get", "/api/v1/admin/document-sequences")):
         response = await getattr(client, method)(path, headers=staff_headers)
-        assert response.status_code == 403, f"{path} must deny user.manage-less users"
+        assert response.status_code == 403, f"{path} must deny users without admin view permissions"
 
     response = await client.get("/api/v1/categories", headers=staff_headers)
     assert response.status_code == 200
@@ -306,3 +306,76 @@ async def test_document_sequence_delete_only_when_never_issued(client):
     blocked = await client.delete(f"/api/v1/admin/document-sequences/{issued['id']}", headers=headers)
     assert blocked.status_code == 409
     assert "deactivate" in blocked.json()["detail"]["message"].lower()
+
+
+USER_MANAGER_EMAIL = "user-manager@example.com"
+USER_MANAGER_PASSWORD = "managerpass1"
+
+
+@pytest.fixture
+async def user_manager_headers(client, db_session):
+    """A role with user CRUD but NOT role.update (least privilege)."""
+    await create_user_with_role(
+        db_session,
+        email=USER_MANAGER_EMAIL,
+        password=USER_MANAGER_PASSWORD,
+        role_name="UserManagerOnly",
+        permissions=["user.view", "user.create", "user.update", "user.delete"],
+    )
+    await db_session.commit()
+    data = await login(client, USER_MANAGER_EMAIL, USER_MANAGER_PASSWORD)
+    return {"Authorization": f"Bearer {data['access_token']}"}
+
+
+async def _admin_role_id(client, headers) -> str:
+    roles = await client.get("/api/v1/admin/roles", headers=headers)
+    return next(r["id"] for r in roles.json()["data"] if r["name"] == "Administrator")
+
+
+async def test_user_manage_is_not_an_administrator_takeover(client, user_manager_headers):
+    """User CRUD alone must not grant/reset the Administrator role."""
+    admin = await admin_headers(client)
+    admin_role_id = await _admin_role_id(client, admin)
+    me = await client.get("/api/v1/auth/me", headers=admin)
+    admin_id = me.json()["data"]["id"]
+
+    # 1) Cannot create a new Administrator.
+    created = await client.post(
+        "/api/v1/admin/users",
+        json={
+            "full_name": "Sneaky Admin",
+            "email": "sneaky-admin@example.com",
+            "password": "sneakypass123",
+            "role_id": admin_role_id,
+        },
+        headers=user_manager_headers,
+    )
+    assert created.status_code == 403, created.text
+
+    # 2) Cannot reset an existing Administrator's password.
+    reset = await client.post(
+        f"/api/v1/admin/users/{admin_id}/reset-password",
+        json={"new_password": "takenover123"},
+        headers=user_manager_headers,
+    )
+    assert reset.status_code == 403, reset.text
+
+    # 3) A non-privileged role is still allowed for a user CRUD actor.
+    role = (
+        await client.post(
+            "/api/v1/admin/roles",
+            json={"name": "PlainViewer", "permissions": ["category.view"]},
+            headers=admin,
+        )
+    ).json()["data"]
+    allowed = await client.post(
+        "/api/v1/admin/users",
+        json={
+            "full_name": "Plain User",
+            "email": "plain-user@example.com",
+            "password": "plainpass123",
+            "role_id": role["id"],
+        },
+        headers=user_manager_headers,
+    )
+    assert allowed.status_code == 201, allowed.text

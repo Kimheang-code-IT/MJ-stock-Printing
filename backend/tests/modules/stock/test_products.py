@@ -202,3 +202,56 @@ async def test_product_delete_blocked_by_stock_in_history(client):
     blocked = await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
     assert blocked.status_code == 409
     assert "deactivate" in blocked.json()["detail"]["message"].lower()
+
+
+async def test_product_default_supplier_stored_shown_and_cleared(client):
+    """A product keeps an optional default supplier (fast-purchase prefill)."""
+    headers = await admin_headers(client)
+    category = (
+        await client.post("/api/v1/categories", json={"code": "SUP", "name": "Supplier"}, headers=headers)
+    ).json()["data"]
+    supplier = (
+        await client.post(
+            "/api/v1/suppliers",
+            json={"name": "Default Vendor", "phone": "012345678"},
+            headers=headers,
+        )
+    ).json()["data"]
+
+    created = await client.post(
+        "/api/v1/products",
+        json={
+            "name": "Supplier Product",
+            "category_id": category["id"],
+            "uom_id": str(DEFAULT_UOM_ID),
+            "selling_price": "3.00",
+            "supplier_id": supplier["id"],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    product = created.json()["data"]
+    assert product["supplier_id"] == supplier["id"]
+    assert product["supplier_name"] == "Default Vendor"
+
+    # Detail read keeps the supplier.
+    detail = await client.get(f"/api/v1/products/{product['id']}", headers=headers)
+    assert detail.json()["data"]["supplier_id"] == supplier["id"]
+
+    # Explicit null clears the default supplier.
+    cleared = await client.patch(
+        f"/api/v1/products/{product['id']}", json={"supplier_id": None}, headers=headers
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["data"]["supplier_id"] is None
+
+    # Unknown supplier is rejected.
+    unknown = await client.patch(
+        f"/api/v1/products/{product['id']}",
+        json={"supplier_id": "00000000-0000-0000-0000-000000000000"},
+        headers=headers,
+    )
+    assert unknown.status_code == 404
+
+    await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
+    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)

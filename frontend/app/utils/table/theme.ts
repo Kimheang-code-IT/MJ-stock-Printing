@@ -56,11 +56,6 @@ export const appTableUiCompactReadonly = {
   tr: '',
 } as const
 
-export const appTableFillUiReadonly = {
-  ...appTableUiReadonly,
-  root: 'relative h-full min-h-0 min-w-0 overflow-auto',
-} as const
-
 /** Centered checkbox column classes for list tables. */
 export const appTableCheckboxMeta = {
   class: {

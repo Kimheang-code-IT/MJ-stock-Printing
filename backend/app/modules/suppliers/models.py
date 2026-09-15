@@ -20,7 +20,6 @@ class Supplier(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     company_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     contact_person: Mapped[str | None] = mapped_column(String(200), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)

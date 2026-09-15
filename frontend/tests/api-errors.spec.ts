@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeApiError } from '../app/utils/api/errors'
+import { apiErrorMessage, isApiErrorHandled, markApiErrorHandled, normalizeApiError } from '../app/utils/api/errors'
 
 describe('normalizeApiError', () => {
   it('normalizes FastAPI nested detail payloads', () => {
@@ -55,5 +55,52 @@ describe('normalizeApiError', () => {
     const error = normalizeApiError({ unexpected: true }, 500)
     expect(error.statusCode).toBe(500)
     expect(error.message).toContain('Something went wrong')
+  })
+})
+
+describe('apiErrorMessage', () => {
+  it('prefers the backend detail message over the raw ofetch string', () => {
+    const fetchError = Object.assign(new Error('[DELETE] "http://127.0.0.1/api/v1/customers/1": 409 Conflict'), {
+      statusCode: 409,
+      data: {
+        detail: {
+          code: 'CONFLICT',
+          message: 'Cannot delete this customer because sales history exists. Deactivate it instead.',
+        },
+      },
+    })
+
+    expect(apiErrorMessage(fetchError, 'Could not delete'))
+      .toBe('Cannot delete this customer because sales history exists. Deactivate it instead.')
+  })
+
+  it('never surfaces the raw [METHOD] "url": status string', () => {
+    const fetchError = Object.assign(new Error('[DELETE] "http://127.0.0.1/api/v1/customers/1": 409 Conflict'), {
+      statusCode: 409,
+    })
+
+    expect(apiErrorMessage(fetchError, 'Could not delete')).toBe('Could not delete')
+  })
+
+  it('keeps plain client-side error messages', () => {
+    expect(apiErrorMessage(new Error('Factor must be greater than 0'), 'Invalid')).toBe('Factor must be greater than 0')
+  })
+
+  it('uses the fallback for unknown values', () => {
+    expect(apiErrorMessage('boom', 'Could not save')).toBe('Could not save')
+  })
+})
+
+describe('handled API error marker', () => {
+  it('is false until marked', () => {
+    const error = new Error('nope')
+    expect(isApiErrorHandled(error)).toBe(false)
+    markApiErrorHandled(error)
+    expect(isApiErrorHandled(error)).toBe(true)
+  })
+
+  it('is false for non-object values', () => {
+    expect(isApiErrorHandled(undefined)).toBe(false)
+    expect(isApiErrorHandled('nope')).toBe(false)
   })
 })

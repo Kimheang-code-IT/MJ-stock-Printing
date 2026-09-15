@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { compactQuery } from '../app/utils/api/query'
 import { safeInternalPath } from '../app/utils/auth/session'
-import { safeApiBase, safeExternalUrl, sameOriginApiUrl } from '../app/utils/security/url'
+import { mediaObjectKey, mediaObjectUrl, safeApiBase, safeExternalUrl, sameOriginApiUrl } from '../app/utils/security/url'
 
 describe('security boundaries', () => {
   it('accepts only safe internal redirects', () => {
@@ -30,5 +30,17 @@ describe('security boundaries', () => {
 
   it('removes empty query values without changing valid filters', () => {
     expect(compactQuery({ q: 'widget', empty: '', none: null, page: 1, status: [] })).toEqual({ q: 'widget', page: 1 })
+  })
+
+  it('resolves stored media keys to API download URLs and back', () => {
+    expect(mediaObjectUrl('images/products/2026/09/a.png')).toBe('/api/v1/images/images/products/2026/09/a.png')
+    expect(mediaObjectUrl('/api/v1/images/images/products/a.png')).toBe('/api/v1/images/images/products/a.png')
+    expect(mediaObjectUrl('https://cdn.example/a.png')).toBe('https://cdn.example/a.png')
+    expect(mediaObjectUrl('')).toBeNull()
+
+    expect(mediaObjectKey('images/products/2026/09/a.png')).toBe('images/products/2026/09/a.png')
+    expect(mediaObjectKey('/api/v1/images/images/products/a.png')).toBe('images/products/a.png')
+    expect(mediaObjectKey('data:image/png;base64,AAAA')).toBeNull()
+    expect(mediaObjectKey('https://cdn.example/a.png')).toBeNull()
   })
 })

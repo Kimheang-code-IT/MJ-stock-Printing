@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 class SetupRequest(BaseModel):
@@ -90,15 +90,50 @@ def token_pair_payload(tokens: TokenPairResponse) -> dict:
     return data
 
 class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=1, max_length=2048)
+    model_config = ConfigDict(populate_by_name=True)
+
+    refresh_token: str = Field(
+        min_length=1, max_length=2048,
+        validation_alias=AliasChoices("refresh_token", "refreshToken"),
+    )
 
 
 class LogoutRequest(BaseModel):
-    refresh_token: str | None = Field(default=None, max_length=2048)
+    model_config = ConfigDict(populate_by_name=True)
+
+    refresh_token: str | None = Field(
+        default=None, max_length=2048,
+        validation_alias=AliasChoices("refresh_token", "refreshToken"),
+    )
 
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Result of a reset request.
+
+    `channel` is `telegram` when the code was delivered to a linked chat, or
+    `telegram_link` when the account has no linked chat yet — then `link_code`
+    is a one-time code the user sends to the bot (`/link CODE`) and the bot
+    replies with the reset code.
+    """
+
+    message: str
+    channel: str = "telegram"
+    link_code: str | None = None
+    linkCode: str | None = None
+    expires_in: int = 0
+    expiresIn: int = 0
+
+    @model_validator(mode="after")
+    def _sync_aliases(self):
+        if self.linkCode is None and self.link_code is not None:
+            self.linkCode = self.link_code
+        if not self.expiresIn and self.expires_in:
+            self.expiresIn = self.expires_in
+        return self
 
 
 class VerifyResetCodeRequest(BaseModel):

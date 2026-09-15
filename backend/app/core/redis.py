@@ -37,6 +37,28 @@ class CacheClient:
         except Exception:
             return None
 
+    async def get(self, key: str) -> str | None:
+        client = self._get_client()
+        if client is None:
+            return None
+        try:
+            value = await client.get(key)
+            if value is None:
+                return None
+            return value if isinstance(value, str) else value.decode()
+        except Exception as exc:
+            logger.warning("redis get failed for %s: %s", key, exc)
+            return None
+
+    async def set(self, key: str, value: str, ttl_seconds: int) -> None:
+        client = self._get_client()
+        if client is None:
+            return
+        try:
+            await client.set(key, value, ex=max(1, int(ttl_seconds)))
+        except Exception as exc:
+            logger.warning("redis set failed for %s: %s", key, exc)
+
     async def delete_prefix(self, prefix: str) -> None:
         client = self._get_client()
         if client is None:

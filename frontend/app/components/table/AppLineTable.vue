@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import { h, type Component } from 'vue'
-import { CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputMenu, UInputNumber, USelect } from '#components'
+import { CommonAppCurrencyInput, CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputMenu, UInputNumber, USelect } from '#components'
 import type { ModuleLineColumn, ModuleTable } from '~/config/modules'
 import { useModuleLabel } from '~/composables/module/useModule'
 import type { DatePickerGranularity } from '~/utils/date-picker'
@@ -57,6 +57,7 @@ const TableIcon = UIcon as Component
 const TableInput = UInput as Component
 const TableInputMenu = UInputMenu as Component
 const TableInputNumber = UInputNumber as Component
+const TableInputCurrency = CommonAppCurrencyInput as Component
 const TableMenu = UDropdownMenu as Component
 const TableSelect = USelect as Component
 
@@ -196,13 +197,12 @@ function inlineMoneyCell(column: ModuleLineColumn, row: Record<string, unknown>,
     h('div', { class: 'space-y-0.5' }, inlineFields.map(field =>
       h('div', { class: 'flex items-center justify-end gap-1' }, [
         h('span', { class: 'text-[11px] leading-none text-muted' }, fieldLabel(field)),
-        h(TableInputNumber, {
+        h(TableInputCurrency, {
           'modelValue': Number(row[field.key] || 0),
-          'increment': false,
-          'decrement': false,
+          'currency': String(row.currency || props.currency || ''),
           'size': cellSize.value,
           'class': 'w-20',
-          'ui': { base: 'text-right tabular-nums' },
+          'align': 'right',
           'aria-label': fieldLabel(field),
           'onUpdate:modelValue': (value: number | null) => updateCell(index, field.key, value ?? 0),
         }),
@@ -391,16 +391,24 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           })
         }
         if (column.type === 'number') {
-          return h(TableInputNumber, {
+          const Input = moneyKeys.has(column.key) ? TableInputCurrency : TableInputNumber
+          const inputProps: Record<string, unknown> = {
             'modelValue': Number(row.original[column.key] || 0),
             'disabled': props.disabled || column.computed,
-            'increment': false,
-            'decrement': false,
             'size': cellSize.value,
             'class': ['w-full', columnCellClass(column)],
-            'ui': { base: 'text-right tabular-nums' },
             'onUpdate:modelValue': (value: number | null) => updateCell(index, column.key, value ?? 0),
-          })
+          }
+          if (moneyKeys.has(column.key)) {
+            inputProps.currency = String(row.original.currency || props.currency || '')
+            inputProps.align = 'right'
+          }
+          else {
+            inputProps.increment = false
+            inputProps.decrement = false
+            inputProps.ui = { base: 'text-right tabular-nums' }
+          }
+          return h(Input, inputProps)
         }
         const dateGranularity = lineDateGranularity(column)
         if (dateGranularity) {

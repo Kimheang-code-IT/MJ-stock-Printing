@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import { PAGE_PERMISSIONS, ROUTE_PERMISSION } from '../app/utils/role/page-permissions'
 import {
+  PERMISSION_MATRIX_PAGES,
   permissionRowsToFlatKeys,
   setFlatPermission,
 } from '../app/utils/role/permissions'
 
 describe('page access registry', () => {
   it('maps every sidebar page to a backend module.action code', () => {
-    expect(PAGE_PERMISSIONS.length).toBeGreaterThan(15)
+    expect(PAGE_PERMISSIONS.length).toBe(PERMISSION_MATRIX_PAGES.length)
     for (const page of PAGE_PERMISSIONS) {
-      expect(page.permission).toMatch(/^[a-z_]+\.[a-z_]+$/)
+      expect(page.permission).toMatch(/^[a-z_]+\.[a-z_.]+$/)
       expect(page.labelKey).toMatch(/^app\./)
+      expect(page.actions.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('lists every matrix action for each page block', () => {
+    for (const matrixPage of PERMISSION_MATRIX_PAGES) {
+      const page = PAGE_PERMISSIONS.find(item => item.id === matrixPage.value)
+      expect(page, `missing page block: ${matrixPage.value}`).toBeDefined()
+      expect(page!.actions.map(action => action.permission)).toEqual(
+        matrixPage.actions.map(action => action.permission),
+      )
     }
   })
 
@@ -22,6 +34,7 @@ describe('page access registry', () => {
     )
     expect(ROUTE_PERMISSION['/reports/customer-debts']).toBe('report.customer_debt')
     expect(ROUTE_PERMISSION['/stock/products']).toBe('stock.view')
+    expect(ROUTE_PERMISSION['/pos']).toBe('pos.access')
   })
 })
 

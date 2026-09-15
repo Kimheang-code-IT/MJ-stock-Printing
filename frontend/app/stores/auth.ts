@@ -79,12 +79,14 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * Frontend-only visibility check. Backend must still enforce authorization.
+   * The system Administrator (first setup super-admin) can always do everything.
    * `permissions` is authoritative when present. `pageAccess` remains a
    * backwards-compatible fallback for older sessions.
    */
   function canAccessPage(pageId: string): boolean {
     const currentUser = user.value
     if (!currentUser) return false
+    if (currentUser.role === 'Administrator') return true
     const access = currentUser.effectivePermissions ?? currentUser.permissions ?? currentUser.pageAccess
     if (!Array.isArray(access)) return false
     return access.includes('ALL_PAGES') || access.includes(pageId)

@@ -56,7 +56,7 @@ to double-click right after logging in.
 | `FRONTEND_PORT` | host port for the app (default `80`). |
 | `FRONTEND_BIND` | `127.0.0.1` = this PC only (default); set a LAN IP or `0.0.0.0` for LAN access. |
 | `TELEGRAM_BOT_TOKEN` | optional; leave empty to disable Telegram. |
-| `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | one-time administrator login. |
+| `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | unused at startup; kept only for an explicit `python -m app.seed` run. |
 | `COMPOSE_PROJECT_NAME` | defaults to `stock_pos`; set to `stockmanagement` only to reuse very old volumes. |
 
 > Never commit `.env` — it contains secrets. It is already git-ignored.
@@ -102,7 +102,7 @@ apply automatically and existing data is preserved.
 | Browser shows a connection error | `Start Stock POS.bat`, wait ~1 minute, retry. |
 | "Docker is not available yet" | Start **Docker Desktop** and enable *Start Docker Desktop when you sign in*. |
 | Port 80 already in use | set `FRONTEND_PORT=8080` in `.env`, then restart. |
-| Login fails after setup | the password is in `infrastructure\.env` (`SEED_ADMIN_PASSWORD`). |
+| Login fails after setup | the first administrator is created on the app's **Setup** page; no credentials are seeded. |
 | Need logs | `docker compose logs -f frontend api` (run from this folder). |
 | Wrong timezone/alerts | check `SCHEDULER_ENABLED` / `EXPIRY_ALERT_SCAN_HOUR` in the API settings. |
 

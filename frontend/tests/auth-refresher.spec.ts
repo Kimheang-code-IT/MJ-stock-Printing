@@ -5,18 +5,22 @@ interface Harness {
   posts: Array<{ url: string, body: Record<string, unknown> }>
   sessionExpired: number
   accessTokens: Array<string | null>
+  refreshTokens: Array<string | null>
 }
 
 function createHarness(overrides?: {
   refreshToken?: string | null
   post?: (url: string, body: Record<string, unknown>) => Promise<{ accessToken?: string }>
 }) {
-  const harness: Harness = { posts: [], sessionExpired: 0, accessTokens: [] }
+  const harness: Harness = { posts: [], sessionExpired: 0, accessTokens: [], refreshTokens: [] }
   const refresher = createAuthRefresher({
     refreshEndpoint: '/api/v1/auth/refresh',
     getRefreshToken: () => overrides?.refreshToken !== undefined ? overrides.refreshToken : 'refresh-token',
     setAccessToken: (token) => {
       harness.accessTokens.push(token)
+    },
+    setRefreshToken: (token) => {
+      harness.refreshTokens.push(token)
     },
     onSessionExpired: () => {
       harness.sessionExpired += 1
@@ -24,7 +28,7 @@ function createHarness(overrides?: {
     post: async (url, body) => {
       harness.posts.push({ url, body })
       if (overrides?.post) return overrides.post(url, body)
-      return { data: { accessToken: 'new-access-token' } }
+      return { data: { accessToken: 'new-access-token', refreshToken: 'new-refresh-token' } }
     },
   })
   return { refresher, harness }
@@ -41,8 +45,9 @@ describe('createAuthRefresher', () => {
     expect(ok).toBe(true)
     expect(harness.posts).toHaveLength(1)
     expect(harness.posts[0]?.url).toBe('/api/v1/auth/refresh')
-    expect(harness.posts[0]?.body).toEqual({ refreshToken: 'refresh-token' })
+    expect(harness.posts[0]?.body).toEqual({ refresh_token: 'refresh-token' })
     expect(harness.accessTokens).toEqual(['new-access-token'])
+    expect(harness.refreshTokens).toEqual(['new-refresh-token'])
     expect(harness.sessionExpired).toBe(0)
   })
 

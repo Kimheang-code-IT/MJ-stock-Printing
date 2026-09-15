@@ -11,12 +11,16 @@ export interface AuthRefresherOptions {
   timeoutMs?: number
   getRefreshToken: () => string | null
   setAccessToken: (token: string | null) => void
+  /** Persist the rotated refresh token; rotation revokes the old one. */
+  setRefreshToken?: (token: string | null) => void
   onSessionExpired: () => void
   /** Injectable request function returning the refresh response payload. */
   post?: (url: string, body: Record<string, unknown>, timeoutMs: number) => Promise<{ accessToken?: string }>
 }
 
-export type PostRefreshResponse = { data?: { accessToken?: string } } | { accessToken?: string }
+export type PostRefreshResponse =
+  | { data?: { accessToken?: string, refreshToken?: string, refresh_token?: string } }
+  | { accessToken?: string, refreshToken?: string, refresh_token?: string }
 
 export function createAuthRefresher(options: AuthRefresherOptions) {
   let refreshPromise: Promise<boolean> | null = null
@@ -48,14 +52,24 @@ export function createAuthRefresher(options: AuthRefresherOptions) {
         const endpoint = typeof options.refreshEndpoint === 'function'
           ? options.refreshEndpoint()
           : options.refreshEndpoint
-        const response = await post(endpoint, { refreshToken }, options.timeoutMs || 30000)
-        const payload = response as { data?: { accessToken?: string }, accessToken?: string }
+        const response = await post(endpoint, { refresh_token: refreshToken }, options.timeoutMs || 30000)
+        const payload = response as {
+          data?: { accessToken?: string, refreshToken?: string, refresh_token?: string }
+          accessToken?: string
+          refreshToken?: string
+          refresh_token?: string
+        }
         const accessToken = payload?.data?.accessToken || payload?.accessToken
         if (!accessToken) {
           options.onSessionExpired()
           return false
         }
+        const rotatedRefresh = payload?.data?.refreshToken
+          || payload?.data?.refresh_token
+          || payload?.refreshToken
+          || payload?.refresh_token
         options.setAccessToken(accessToken)
+        if (rotatedRefresh) options.setRefreshToken?.(rotatedRefresh)
         return true
       }
       catch {

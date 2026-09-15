@@ -5,7 +5,31 @@ export interface PasswordResetSession {
   verified: boolean
   /** Short-lived JWT returned by verification; required to submit the reset. */
   resetToken?: string
+  /** One-time /link code to send to the Telegram bot when no chat is linked. */
+  linkCode?: string | null
   updatedAt: string
+}
+
+/** Parsed `POST /auth/forgot-password` result (linked vs. link-required). */
+export interface PasswordResetStart {
+  channel: 'telegram' | 'telegram_link'
+  linkCode: string | null
+  expiresIn: number
+}
+
+/**
+ * Read the reset-start result. When the account has no linked Telegram chat
+ * the backend returns `channel: "telegram_link"` plus a one-time `/link` code
+ * the user sends to the bot; the bot then replies with the reset code.
+ */
+export function parsePasswordResetStart(data: unknown): PasswordResetStart {
+  const row = (data && typeof data === 'object') ? data as Record<string, unknown> : {}
+  const linkCode = row.linkCode ?? row.link_code
+  return {
+    channel: row.channel === 'telegram_link' ? 'telegram_link' : 'telegram',
+    linkCode: linkCode ? String(linkCode) : null,
+    expiresIn: Number(row.expiresIn ?? row.expires_in ?? 0) || 0,
+  }
 }
 
 function readRaw(): PasswordResetSession | null {
@@ -29,13 +53,23 @@ function writeRaw(session: PasswordResetSession | null) {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session))
 }
 
-/** Persist the email after "send reset code". */
-export function startPasswordReset(email: string) {
+/** Persist the email after "send reset code" (plus the bot link code if any). */
+export function startPasswordReset(email: string, linkCode: string | null = null) {
   writeRaw({
     email: email.trim().toLowerCase(),
     verified: false,
+    linkCode,
     updatedAt: new Date().toISOString(),
   })
+}
+
+/** Update the stored bot link code after a resend. */
+export function setPasswordResetLinkCode(linkCode: string | null) {
+  const current = readRaw()
+  if (!current?.email) return null
+  const next: PasswordResetSession = { ...current, linkCode, updatedAt: new Date().toISOString() }
+  writeRaw(next)
+  return next
 }
 
 export function getPasswordResetSession(): PasswordResetSession | null {

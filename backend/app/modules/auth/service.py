@@ -13,7 +13,7 @@ from app.core.exceptions import (
     RateLimitedError,
     ValidationError,
 )
-from app.core.permissions import SUPER_ADMIN_PERMISSION, SUPER_ADMIN_ROLE, build_all_permissions
+from app.core.permissions import SUPER_ADMIN_ROLE
 from app.core.rate_limit import RateLimited, enforce_rate_limit
 from app.core.redis import get_redis
 from app.core.security import (
@@ -27,6 +27,7 @@ from app.core.security import (
     utcnow,
     verify_password,
 )
+from app.modules.administration import get_setting_value
 from app.modules.auth.models import User
 from app.modules.auth.repository import RoleRepository, UserRepository
 from app.modules.auth.schemas import (
@@ -77,15 +78,18 @@ class AuthService:
         return await self.users.any_user_exists()
 
     async def setup(self, payload, *, ip_address: str | None, user_agent: str | None) -> UserOut:
+        # Serialize the one-time setup: without a lock two concurrent
+        # unauthenticated POST /auth/setup requests can both create a user.
+        from sqlalchemy import text
+
+        await self.session.execute(text("SELECT pg_advisory_xact_lock(914627)"))
         if await self.users.any_user_exists():
             raise ConflictError("Initial setup has already been completed")
 
-        await self.roles.sync_permission_catalog(build_all_permissions())
+        await self.roles.ensure_administrator_role()
         admin_role = await self.roles.get_by_name(SUPER_ADMIN_ROLE)
         if admin_role is None:
-            admin_role = await self.roles.create_system_role(
-                SUPER_ADMIN_ROLE, "Full system access", [SUPER_ADMIN_PERMISSION]
-            )
+            raise ConflictError("Administrator role could not be created")
 
         user = User(
             full_name=payload.full_name.strip(),
@@ -123,16 +127,19 @@ class AuthService:
         except RateLimited:
             raise RateLimitedError("Too many login attempts. Try again later.")
 
+        await self._ensure_not_locked(payload.email)
         user = await self.users.get_by_email(payload.email)
         if user is None or not verify_password(user.password_hash, payload.password):
             await self._audit_failed_login(payload.email, ip_address, user_agent)
+            await self._register_failed_login(payload.email)
             raise AuthRequiredError("Invalid email or password")
         if user.status != "ACTIVE":
             # Audit disabled-account attempts like any other failed login.
             await self._audit_failed_login(payload.email, ip_address, user_agent)
             raise AccessDeniedError("This account is disabled")
 
-        tokens = self._issue_tokens(user)
+        tokens = await self._issue_tokens(user)
+        await self._clear_failed_login(payload.email)
         await self.users.set_last_login(user)
         await record_audit(
             self.session,
@@ -164,9 +171,53 @@ class AuthService:
         )
         await self.session.commit()
 
-    def _issue_tokens(self, user: User) -> tuple[str, str]:
+    async def _security_int(self, key: str, default: int) -> int:
+        try:
+            return int(await get_setting_value(self.session, "security", key, default))
+        except (TypeError, ValueError):
+            return default
+
+    async def _ensure_not_locked(self, email: str) -> None:
+        client = get_redis()
+        try:
+            if await client.exists(f"loginlock:{email.lower()}"):
+                raise RateLimitedError("Account temporarily locked. Try again later.")
+        except RateLimitedError:
+            raise
+        except Exception:
+            return
+
+    async def _register_failed_login(self, email: str) -> None:
+        max_attempts = await self._security_int("max_login_attempts", 5)
+        if max_attempts <= 0:
+            return
+        lock_minutes = await self._security_int("account_lock_minutes", 15)
+        client = get_redis()
+        key = f"loginfail:{email.lower()}"
+        window = max(60, lock_minutes * 60)
+        try:
+            count = await client.incr(key)
+            if count == 1:
+                await client.expire(key, window)
+            if count >= max_attempts:
+                await client.set(f"loginlock:{email.lower()}", "1", ex=window)
+                await client.delete(key)
+        except Exception:
+            return
+
+    async def _clear_failed_login(self, email: str) -> None:
+        client = get_redis()
+        try:
+            await client.delete(f"loginfail:{email.lower()}")
+        except Exception:
+            pass
+
+    async def _issue_tokens(self, user: User) -> tuple[str, str]:
+        refresh_days = await self._security_int("jwt_refresh_token_days", settings.refresh_token_expire_days)
         access, _, _ = create_access_token(user.id, {"ver": user.token_version})
-        refresh, _, _, _ = create_refresh_token(user.id, extra_claims={"ver": user.token_version})
+        refresh, _, _, _ = create_refresh_token(
+            user.id, extra_claims={"ver": user.token_version}, expire_days=refresh_days
+        )
         return access, refresh
 
     # ---------------------------------------------------------------- refresh
@@ -186,7 +237,10 @@ class AuthService:
 
         await self._revoke(payload["jti"], settings.refresh_token_expire_days * 86400)
         access, _, _ = create_access_token(user.id, {"ver": user.token_version})
-        new_refresh, _, _, _ = create_refresh_token(user.id, extra_claims={"ver": user.token_version})
+        refresh_days = await self._security_int("jwt_refresh_token_days", settings.refresh_token_expire_days)
+        new_refresh, _, _, _ = create_refresh_token(
+            user.id, extra_claims={"ver": user.token_version}, expire_days=refresh_days
+        )
         await self.session.commit()
         return token_pair_payload(TokenPairResponse(
             access_token=access,
@@ -199,10 +253,15 @@ class AuthService:
         if refresh_token:
             try:
                 payload = decode_token(refresh_token, expected_type="refresh")
-                if payload.get("sub") == str(user.id) and not await self._is_revoked(payload["jti"]):
-                    await self._revoke(payload["jti"], settings.refresh_token_expire_days * 86400)
-            except AuthRequiredError:
-                raise
+                if payload.get("sub") == str(user.id):
+                    try:
+                        already_revoked = await self._is_revoked(payload["jti"])
+                    except AuthRequiredError:
+                        # Denylist unreachable: revocation is best-effort here,
+                        # the client still ends its session.
+                        already_revoked = True
+                    if not already_revoked:
+                        await self._revoke(payload["jti"], settings.refresh_token_expire_days * 86400)
             except Exception:
                 pass
         await self.session.commit()
@@ -211,8 +270,12 @@ class AuthService:
         client = get_redis()
         try:
             return bool(await client.exists(f"{REFRESH_DENYLIST_PREFIX}:{jti}"))
-        except Exception:
-            return False
+        except Exception as exc:
+            # Fail CLOSED: without the denylist we cannot prove a rotated JTI
+            # is still valid, so a refresh must be rejected (security over
+            # availability). Rate limits stay fail-open separately.
+            logger.error("Refresh denylist unavailable (%s); rejecting refresh", exc)
+            raise AuthRequiredError("Token revocation store unavailable") from exc
 
     async def _revoke(self, jti: str, ttl_seconds: int) -> None:
         client = get_redis()
@@ -223,44 +286,45 @@ class AuthService:
 
     # ---------------------------------------------------------- password reset
 
-    async def forgot_password(self, email: str, *, ip_address: str | None) -> str:
+    async def forgot_password(self, email: str, *, ip_address: str | None) -> dict:
         try:
             await enforce_rate_limit(
                 f"pwreset:{ip_address}:{email.lower()}", settings.rate_limit_reset_per_hour, 3600
             )
         except RateLimited:
-            return _GENERIC_RESET_MESSAGE
+            return {"message": _GENERIC_RESET_MESSAGE, "channel": "telegram"}
 
         user = await self.users.get_by_email(email)
-        if user is None or not user.telegram_chat_id:
-            return _GENERIC_RESET_MESSAGE
+        if user is None:
+            return {"message": _GENERIC_RESET_MESSAGE, "channel": "telegram"}
 
-        code = generate_reset_code()
-        client = get_redis()
-        state = {"code_hash": hash_token(code), "attempts": 0, "used": False}
-        try:
-            await client.set(
-                f"{RESET_CODE_PREFIX}:{user.id}",
-                json.dumps(state),
-                ex=settings.telegram_reset_code_expire_minutes * 60,
+        # No linked Telegram chat yet: hand out a one-time /link code. The user
+        # sends it to the bot and the bot replies with the reset code (the
+        # account has no other delivery channel).
+        if not user.telegram_chat_id:
+            link_code, link_ttl = await self.create_telegram_link_code(user, for_reset=True)
+            await record_audit(
+                self.session,
+                action="password_reset_link_requested",
+                module="auth",
+                user_id=user.id,
+                entity_type="user",
+                entity_id=user.id,
+                ip_address=ip_address,
             )
+            await self.session.commit()
+            return {
+                "message": _GENERIC_RESET_MESSAGE,
+                "channel": "telegram_link",
+                "link_code": link_code,
+                "expires_in": link_ttl,
+            }
+
+        try:
+            code, ttl_minutes, handoff_token = await self.issue_reset_code(user)
         except Exception as exc:
             logger.error("Failed to persist reset code state: %s", exc)
-            return _GENERIC_RESET_MESSAGE
-
-        # Single-use handoff token for the Telegram deep link
-        # (<frontend>/auth/reset-password?handoff=…). It exchanges for the
-        # same reset-token flow as verifying the code manually.
-        handoff_token = secrets.token_urlsafe(24)
-        try:
-            await client.set(
-                f"{HANDOFF_PREFIX}:{handoff_token}",
-                json.dumps({"user_id": str(user.id)}),
-                ex=settings.telegram_reset_code_expire_minutes * 60,
-            )
-        except Exception as exc:
-            logger.error("Failed to persist reset handoff token: %s", exc)
-            handoff_token = ""
+            return {"message": _GENERIC_RESET_MESSAGE, "channel": "telegram"}
 
         from app.shared.telegram import queue_reset_code_delivery
 
@@ -268,6 +332,7 @@ class AuthService:
             user.telegram_chat_id,
             code,
             handoff_token=handoff_token or None,
+            minutes=ttl_minutes,
         )
         await record_audit(
             self.session,
@@ -279,7 +344,41 @@ class AuthService:
             ip_address=ip_address,
         )
         await self.session.commit()
-        return _GENERIC_RESET_MESSAGE
+        return {"message": _GENERIC_RESET_MESSAGE, "channel": "telegram"}
+
+    async def issue_reset_code(self, user: User) -> tuple[str, int, str | None]:
+        """Generate a reset code + Telegram handoff token, stored in Redis.
+
+        Returns `(code, ttl_minutes, handoff_token)`. Never writes PostgreSQL,
+        so the Telegram bot can reuse it after linking a chat.
+        """
+        code = generate_reset_code()
+        ttl_minutes = await self._security_int(
+            "password_reset_code_expiry_minutes", settings.telegram_reset_code_expire_minutes
+        )
+        ttl_seconds = max(60, ttl_minutes * 60)
+        client = get_redis()
+        state = {"code_hash": hash_token(code), "attempts": 0, "used": False}
+        await client.set(
+            f"{RESET_CODE_PREFIX}:{user.id}",
+            json.dumps(state),
+            ex=ttl_seconds,
+        )
+
+        # Single-use handoff token for the Telegram deep link
+        # (<frontend>/auth/reset-password?handoff=…). It exchanges for the
+        # same reset-token flow as verifying the code manually.
+        handoff_token = secrets.token_urlsafe(24)
+        try:
+            await client.set(
+                f"{HANDOFF_PREFIX}:{handoff_token}",
+                json.dumps({"user_id": str(user.id)}),
+                ex=ttl_seconds,
+            )
+        except Exception as exc:
+            logger.error("Failed to persist reset handoff token: %s", exc)
+            handoff_token = None
+        return code, ttl_minutes, handoff_token
 
     async def verify_reset_code(self, email: str, code: str) -> tuple[str, int]:
         user = await self.users.get_by_email(email)
@@ -424,16 +523,22 @@ class AuthService:
         await self.session.refresh(user)
         return user
 
-    async def create_telegram_link_code(self, user: User) -> tuple[str, int]:
+    async def create_telegram_link_code(self, user: User, *, for_reset: bool = False) -> tuple[str, int]:
         """One-time code the user sends to the bot (`/link CODE`) to bind this
-        chat to their account. Stored in Redis, never in PostgreSQL."""
+        chat to their account. Stored in Redis, never in PostgreSQL.
+
+        When `for_reset` is true the bot replies with a password-reset code
+        right after linking (account recovery without a prior Telegram link)."""
         code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
         ttl_seconds = settings.telegram_link_code_expire_minutes * 60
+        payload: dict = {"user_id": str(user.id)}
+        if for_reset:
+            payload["reset"] = True
         client = get_redis()
         try:
             await client.set(
                 f"{TELEGRAM_LINK_PREFIX}:{code}",
-                json.dumps({"user_id": str(user.id)}),
+                json.dumps(payload),
                 ex=ttl_seconds,
             )
         except Exception as exc:

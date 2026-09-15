@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { allFrontendPermissionCodes } from '../app/utils/role/permissions'
+import { PAGE_PERMISSIONS } from '../app/utils/role/page-permissions'
 
 /**
  * Guards the RBAC contract: every frontend permission ID (page meta, module
@@ -81,11 +82,10 @@ describe('frontend permission IDs match the backend catalog', () => {
   })
 
   it('menu route guards are backend codes', () => {
-    const pagePermissions = readFileSync(
-      join(frontendRoot, 'app/utils/role/page-permissions.ts'),
-      'utf8',
-    )
-    const codes = [...pagePermissions.matchAll(/permission:\s*'([^']+)'/g)].map(match => match[1])
+    const codes = PAGE_PERMISSIONS.flatMap(page => [
+      page.permission,
+      ...page.actions.map(action => action.permission),
+    ])
     expect(codes.length).toBeGreaterThan(15)
     const unknown = codes.filter(code => !valid.has(code))
     expect(unknown, `unknown route permissions: ${unknown.join(', ')}`).toEqual([])

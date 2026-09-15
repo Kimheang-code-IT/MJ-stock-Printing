@@ -22,7 +22,6 @@ class Customer(Base):
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")

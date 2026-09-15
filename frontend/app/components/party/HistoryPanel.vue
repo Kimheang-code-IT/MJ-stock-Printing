@@ -6,6 +6,7 @@ import { h } from 'vue'
 import type { AppRecord } from '~/config/admin-seed'
 import { formatMoney } from '~/composables/module/useModule'
 import { usePartyLedger } from '~/composables/party/usePartyLedger'
+import { apiErrorMessage } from '~/utils/api/errors'
 import { listTableRowMetaColumn } from '~/utils/table/list-columns'
 import { partyDay, type PartyHistory, type PartyKind } from '~/utils/party/ledger'
 
@@ -54,7 +55,7 @@ async function load() {
     rows.value = await ledger.listHistory(props.kind, partyId.value)
   }
   catch (error: unknown) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
     rows.value = []
   }
   finally {

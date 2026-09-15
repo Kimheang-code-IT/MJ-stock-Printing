@@ -56,16 +56,11 @@ def send_payment_invoice(self, payload: dict) -> int:
     """
     from sqlalchemy import select
 
-    from app.core.config import settings
-
-    if not settings.telegram_enabled or not settings.telegram_bot_token:
-        return 0
-
     async def _deliver() -> tuple[int, int]:
         from app.core.database import SessionFactory
         from app.modules.administration.service import get_setting_value
         from app.modules.auth.models import User
-        from app.shared.telegram.client import send_message
+        from app.shared.telegram.client import resolve_bot_token, send_message
         from app.shared.telegram.service import format_payment_text
 
         async with SessionFactory() as session:
@@ -79,6 +74,7 @@ def send_payment_invoice(self, payload: dict) -> int:
             )
             recipients = [str(chat_id) for chat_id in result.scalars().all()]
             timezone_name = await get_setting_value(session, "system", "timezone", "UTC")
+            bot_token = await resolve_bot_token(session)
 
         text = format_payment_text(
             payload,
@@ -86,7 +82,7 @@ def send_payment_invoice(self, payload: dict) -> int:
         )
         sent = 0
         for chat_id in recipients:
-            if await send_message(chat_id, text):
+            if await send_message(chat_id, text, bot_token=bot_token):
                 sent += 1
         return sent, len(recipients)
 

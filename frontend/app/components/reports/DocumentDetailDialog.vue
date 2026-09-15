@@ -18,7 +18,9 @@ const open = defineModel<boolean>('open', { default: false })
 const { t } = useI18n()
 const preferences = usePreferencesStore()
 
-const currency = computed(() => props.currency || preferences.currency || 'USD')
+const currency = computed(() => String(
+  props.document?.currency || props.currency || preferences.currency || 'USD',
+))
 const title = computed(() => props.kind === 'sale'
   ? t('app.reports.saleDetail')
   : t('app.reports.purchaseDetail'))
@@ -40,9 +42,21 @@ const subtotal = computed(() => {
   return roundMoney(lines.value.reduce((sum, line) => sum + Number(line.total || 0), 0))
 })
 const discount = computed(() => Number(props.document?.discount || 0))
+const deliveryPrice = computed(() => Number(props.document?.deliveryPrice || 0))
 const total = computed(() => Number(props.document?.total || 0))
 const paidAmount = computed(() => Number(props.document?.paidAmount || 0))
 const remaining = computed(() => Number(props.document?.remaining ?? props.document?.remainingAmount ?? 0))
+const change = computed(() => Number(props.document?.changeAmount || 0))
+/** Payment method shown as saved (friendly label, canonical fallback). */
+const paymentMethod = computed(() => String(
+  props.document?.paymentMethodLabel || props.document?.paymentMethod || '',
+))
+const exchangeRate = computed(() => Number(props.document?.exchangeRate || 0))
+const dueDate = computed(() => {
+  const value = props.document?.dueDate
+  return value ? String(value).slice(0, 10) : ''
+})
+const note = computed(() => String(props.document?.note || ''))
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100
@@ -81,7 +95,7 @@ function money(value: unknown) {
         </p>
         <p>
           <span class="text-muted">{{ t('app.fields.paymentMethod') }}:</span>
-          <span class="ms-1 font-medium text-highlighted">{{ document.paymentMethod || '—' }}</span>
+          <span class="ms-1 font-medium text-highlighted">{{ paymentMethod || '—' }}</span>
         </p>
         <p>
           <span class="text-muted">{{ t('app.fields.user') }}:</span>
@@ -122,31 +136,75 @@ function money(value: unknown) {
         </table>
       </div>
 
+      <!-- Checkout / Payment: the SAVED original checkout of this completed
+           document (display only — no second charge/payment action here). -->
       <div class="rounded-lg bg-elevated p-3 text-sm">
+        <p class="mb-2 font-medium text-highlighted">
+          {{ t('app.reports.checkoutPayment') }}
+        </p>
+        <div class="flex items-center justify-between">
+          <span class="text-muted">{{ t('app.fields.paymentMethod') }}</span>
+          <span>{{ paymentMethod || '—' }}</span>
+        </div>
         <div class="flex items-center justify-between">
           <span class="text-muted">{{ t('app.fields.subtotal') }}</span>
-          <span>{{ money(subtotal) }}</span>
+          <span class="tabular-nums">{{ money(subtotal) }}</span>
         </div>
-        <div v-if="discount > 0" class="flex items-center justify-between">
+        <div class="flex items-center justify-between">
           <span class="text-muted">{{ t('app.fields.discount') }}</span>
-          <span>−{{ money(discount) }}</span>
+          <span class="tabular-nums">{{ discount > 0 ? `−${money(discount)}` : money(0) }}</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-muted">{{ t('app.pos.deliveryPrice') }}</span>
+          <span class="tabular-nums">{{ money(deliveryPrice) }}</span>
         </div>
         <div class="flex items-center justify-between">
           <span class="text-muted">{{ t('app.fields.total') }}</span>
-          <span class="font-semibold">{{ money(total) }}</span>
+          <span class="font-semibold tabular-nums">{{ money(total) }}</span>
         </div>
         <div class="flex items-center justify-between">
           <span class="text-muted">{{ t('app.fields.paid') }}</span>
-          <span>{{ money(paidAmount) }}</span>
+          <span class="tabular-nums">{{ money(paidAmount) }}</span>
         </div>
         <div
           class="flex items-center justify-between"
           :class="remaining > 0 ? 'text-warning' : ''"
         >
-          <span class="text-muted">{{ t('app.fields.remaining') }}</span>
-          <span class="font-semibold">{{ money(remaining) }}</span>
+          <span class="text-muted">{{ t('app.fields.outstanding') }}</span>
+          <span class="font-semibold tabular-nums">{{ money(remaining) }}</span>
+        </div>
+        <div v-if="change > 0" class="flex items-center justify-between">
+          <span class="text-muted">{{ t('app.pos.changeDue') }}</span>
+          <span class="tabular-nums">{{ money(change) }}</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-muted">{{ t('app.fields.currency') }}</span>
+          <span>{{ currency }}</span>
+        </div>
+        <div v-if="currency === 'KHR' && exchangeRate > 0" class="flex items-center justify-between">
+          <span class="text-muted">{{ t('app.pos.exchangeRate') }}</span>
+          <span class="tabular-nums">{{ exchangeRate }}</span>
+        </div>
+        <div v-if="dueDate" class="flex items-center justify-between">
+          <span class="text-muted">{{ t('app.fields.dueDate') }}</span>
+          <span>{{ dueDate }}</span>
+        </div>
+        <div v-if="note" class="mt-2 border-t border-default pt-2">
+          <span class="text-muted">{{ t('app.fields.note') }}:</span>
+          <span class="ms-1">{{ note }}</span>
         </div>
       </div>
     </div>
+
+    <template #footer>
+      <div class="flex w-full justify-end">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          :label="t('actions.close')"
+          @click="open = false"
+        />
+      </div>
+    </template>
   </CommonAppDialog>
 </template>

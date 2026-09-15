@@ -10,6 +10,7 @@ from app.modules.auth.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     ForgotPasswordResetRequest,
+    ForgotPasswordResponse,
     HandoffExchangeRequest,
     HandoffExchangeResponse,
     LoginRequest,
@@ -112,8 +113,8 @@ async def forgot_password(
     payload: ForgotPasswordRequest, request: Request, db: AsyncSession = Depends(get_db_session)
 ) -> dict:
     service = AuthService(db)
-    message = await service.forgot_password(payload.email, ip_address=_client_ip(request))
-    return envelope(MessageResponse(message=message or _GENERIC_RESET_MESSAGE))
+    result = await service.forgot_password(payload.email, ip_address=_client_ip(request))
+    return envelope(ForgotPasswordResponse(**result))
 
 
 @router.post("/verify-reset-code", response_model=None)
@@ -137,10 +138,11 @@ async def verify_reset_code_frontend(
 async def resend_reset_code(
     payload: ResendResetCodeRequest, request: Request, db: AsyncSession = Depends(get_db_session)
 ) -> dict:
-    """Re-send the verification code through Telegram (same generic reply)."""
+    """Re-send the verification code through Telegram (or re-issue the bot link
+    code when the account has no linked chat yet)."""
     service = AuthService(db)
-    message = await service.forgot_password(payload.email, ip_address=_client_ip(request))
-    return envelope(MessageResponse(message=message or _GENERIC_RESET_MESSAGE))
+    result = await service.forgot_password(payload.email, ip_address=_client_ip(request))
+    return envelope(ForgotPasswordResponse(**result))
 
 
 @router.post("/reset-password", response_model=None)

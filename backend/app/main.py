@@ -24,6 +24,17 @@ logger = logging.getLogger("stock_pos")
 async def lifespan(app: FastAPI):
     settings.assert_safe_for_production()
     logger.info("Stock & POS API starting (%s)", settings.environment)
+    # Keep the permission catalog and Administrator role in sync after code updates
+    # (e.g. replacing legacy *.manage codes with View/Add/Edit/Delete).
+    try:
+        from app.core.database import SessionFactory
+        from app.modules.auth.repository import RoleRepository
+
+        async with SessionFactory() as session:
+            await RoleRepository(session).ensure_administrator_role()
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to sync permission catalog / Administrator role on startup")
     stop_scheduler = None
     scheduler_task = None
     if settings.scheduler_enabled:

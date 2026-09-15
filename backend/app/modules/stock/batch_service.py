@@ -27,6 +27,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ValidationError
@@ -146,7 +147,13 @@ async def _lock_batch(
         status=BATCH_STATUS_ACTIVE,
     )
     session.add(batch)
-    await session.flush()
+    try:
+        # Savepoint so a concurrent creator losing the unique constraint race
+        # does not poison the caller's transaction; we then use its row.
+        async with session.begin_nested():
+            await session.flush()
+    except IntegrityError:
+        pass
     # Re-select under lock so a concurrent creator's row wins cleanly.
     result = await session.execute(
         select(BatchStockBalance)
@@ -155,6 +162,7 @@ async def _lock_batch(
             BatchStockBalance.batch_no == key,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one()
 
@@ -192,6 +200,7 @@ async def lock_batches_for_product(
             BatchStockBalance.id.asc(),
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return list(result.scalars().all())
 
@@ -357,7 +366,12 @@ async def restore_sale_batches(
         give_back = min(allocation.quantity_base, remaining)
         if give_back <= 0:
             continue
-        batch = await session.get(BatchStockBalance, allocation.batch_id)
+        batch = await session.get(
+            BatchStockBalance,
+            allocation.batch_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
         if batch is None:
             continue
         batch.remaining_quantity = _q4(batch.remaining_quantity + give_back)

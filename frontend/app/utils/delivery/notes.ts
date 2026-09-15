@@ -130,10 +130,6 @@ export function canTransitionDelivery(note: AppRecord, target: DeliveryStatus | 
   return allowedNextStatuses(note).includes(normalizeDeliveryStatusInput(target))
 }
 
-export function canTransitionAction(note: AppRecord, action: DeliveryStatusAction): boolean {
-  return canTransitionDelivery(note, ACTION_TO_STATUS[action])
-}
-
 export function deliveryLines(note: AppRecord | null | undefined): AppRecord[] {
   const items = note?.items
   return Array.isArray(items) ? items as AppRecord[] : []
@@ -153,12 +149,6 @@ export function noteSales(note: AppRecord | null | undefined): Array<{ saleId: s
   const invoiceNo = String(note?.invoiceNo ?? note?.saleNo ?? '')
   if (!saleId && !invoiceNo) return []
   return [{ saleId, invoiceNo }]
-}
-
-export function noteInvoiceNos(note: AppRecord | null | undefined): string[] {
-  const nos = note?.invoiceNos ?? note?.invoiceNo
-  if (Array.isArray(nos)) return nos.map(no => String(no)).filter(Boolean)
-  return noteSales(note).map(link => link.invoiceNo).filter(Boolean)
 }
 
 export function isDeliveryActive(note: AppRecord): boolean {

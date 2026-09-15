@@ -43,7 +43,6 @@ class SupplierService:
             name=payload.name.strip(),
             company_name=payload.company_name,
             phone=payload.phone,
-            email=None,
             address=payload.location or payload.address,
             contact_person=payload.contact_person,
             note=payload.note,
@@ -59,7 +58,6 @@ class SupplierService:
         data = payload.model_dump(exclude_unset=True, exclude_none=True)
         if "location" in data:
             data["address"] = data.pop("location")
-        data.pop("email", None)
         for key, value in data.items():
             setattr(supplier, key, value)
         await self.repo.flush()
@@ -154,6 +152,21 @@ class SupplierService:
             },
         )
         await self.session.commit()
+
+        # Telegram supplier-payment text strictly AFTER commit (best effort).
+        from app.shared.telegram.service import notify_supplier_payment_text
+
+        await notify_supplier_payment_text(
+            self.session,
+            document_no=debt.document_no,
+            payment_no=payment.payment_no,
+            supplier=supplier.name,
+            total=debt.original_amount,
+            paid=amount,
+            payment_method=payment.payment_method,
+            remaining=debt.remaining_amount,
+            cashier=actor.full_name,
+        )
         return payment
 
     async def pay_open_debts(self, supplier_id, payload, *, actor: User) -> list[Payment]:
@@ -223,6 +236,21 @@ class SupplierService:
             },
         )
         await self.session.commit()
+
+        # Telegram supplier-payment summary AFTER commit (best effort).
+        from app.shared.telegram.service import notify_supplier_payment_text
+
+        await notify_supplier_payment_text(
+            self.session,
+            document_no=payments[0].payment_no if len(payments) == 1 else None,
+            payment_no=", ".join(p.payment_no for p in payments),
+            supplier=supplier.name,
+            total=total_outstanding,
+            paid=amount,
+            payment_method=payload.payment_method,
+            remaining=total_outstanding - amount,
+            cashier=actor.full_name,
+        )
         return payments
 
     async def list_debt_payments(self, supplier_id, debt_id) -> list[Payment]:

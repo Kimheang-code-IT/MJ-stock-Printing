@@ -60,4 +60,4 @@ Write-Host "  1. (Optional) add TELEGRAM_BOT_TOKEN to infrastructure\.env for Te
 Write-Host "  2. Build and start: .\infrastructure\scripts\install-client.ps1"
 Write-Host "     or for GHCR images: .\infrastructure\scripts\deploy-from-registry.ps1"
 Write-Host "  3. Daily use: double-click infrastructure\Start Stock POS.bat"
-Write-Host "Login uses SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD from infrastructure\.env"
+Write-Host "No data is seeded: create the first administrator on the Setup page."

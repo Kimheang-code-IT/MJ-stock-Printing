@@ -2,22 +2,25 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import envelope, get_current_user
+from app.api.deps import envelope, get_current_user, get_db_session
 from app.core.exceptions import NotFoundError, ValidationError
+from app.modules.administration import get_setting_value
 from app.modules.auth.models import User
 from app.modules.image.service import ImageStorageService
 
 router = APIRouter(prefix="/images", tags=["images"])
 
-_ALLOWED_CONTENT_TYPES = frozenset(
-    {
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-        "image/gif",
-    }
-)
+_EXTENSION_CONTENT_TYPES = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+
+_ALLOWED_CONTENT_TYPES = frozenset(_EXTENSION_CONTENT_TYPES.values())
 
 _CONTENT_TYPE_BY_SUFFIX = {
     ".jpg": "image/jpeg",
@@ -40,10 +43,19 @@ async def upload_image(
     file: UploadFile = File(...),
     folder: str = Form(default="general"),
     actor: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ) -> dict:
+    # Allowed extensions are a persisted Security setting (falling back to the
+    # raster defaults); unknown extensions are ignored.
+    configured = await get_setting_value(db, "security", "allowed_upload_extensions", None)
+    allowed_types = {
+        _EXTENSION_CONTENT_TYPES[str(ext).strip().lstrip(".").lower()]
+        for ext in (configured or [])
+        if str(ext).strip().lstrip(".").lower() in _EXTENSION_CONTENT_TYPES
+    } or set(_ALLOWED_CONTENT_TYPES)
     content_type = (file.content_type or "").lower()
-    if content_type not in _ALLOWED_CONTENT_TYPES:
-        raise ValidationError("Unsupported image type. Allowed: jpeg, png, webp, gif")
+    if content_type not in allowed_types:
+        raise ValidationError("Unsupported image type. Allowed: " + ", ".join(sorted(allowed_types)))
 
     service = ImageStorageService.from_settings()
     max_bytes = service.max_bytes
@@ -77,8 +89,9 @@ async def upload_image(
 @router.get("/{object_key:path}")
 async def download_object(
     object_key: str,
-    actor: User = Depends(get_current_user),
 ):
+    """Public static media: the SPA renders product images with plain <img>,
+    which cannot attach a bearer token (see docs/API.md §12)."""
     key = _safe_object_key(object_key)
     service = ImageStorageService.from_settings()
     path = service.resolved_path(key)
@@ -95,5 +108,8 @@ async def download_object(
         path,
         media_type=content_type,
         filename=filename,
-        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"},
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}",
+            "Cache-Control": "public, max-age=86400",
+        },
     )

@@ -7,6 +7,7 @@ interface CapturedRequest {
   url: string
   query?: Record<string, unknown>
   body?: unknown
+  options?: Record<string, unknown>
 }
 
 function withFakeApi(handler: (request: CapturedRequest) => unknown) {
@@ -28,8 +29,8 @@ function withFakeApi(handler: (request: CapturedRequest) => unknown) {
       captured.push({ method: 'PATCH', url, body })
       return handler(captured[captured.length - 1]!)
     },
-    delete: async (url: string) => {
-      captured.push({ method: 'DELETE', url })
+    delete: async (url: string, options?: Record<string, unknown>) => {
+      captured.push({ method: 'DELETE', url, options })
       return handler(captured[captured.length - 1]!)
     },
   })
@@ -125,6 +126,39 @@ describe('http entity repository', () => {
     await repository.update('products', 'prd-001', { name: 'Renamed' })
     expect(captured[0]?.method).toBe('PATCH')
     expect(captured[0]?.url).toBe('/api/v1/products/prd-001')
+  })
+
+  it('normalizes the Active/Inactive UI dialect to canonical ACTIVE/INACTIVE', async () => {
+    const captured = withFakeApi(() => ({ data: { id: 'cat-1', code: 'CAT-1', status: 'ACTIVE' } }))
+    const repository = createHttpEntityRepository()
+
+    await repository.create('categories', { name: 'Drinks', status: 'Active' })
+    expect(captured[0]?.body).toMatchObject({ name: 'Drinks', status: 'ACTIVE' })
+
+    await repository.update('categories', 'cat-1', { status: 'Inactive' })
+    expect(captured[1]?.body).toMatchObject({ status: 'INACTIVE' })
+  })
+
+  it('maps setup-record status back to the Active/Inactive UI dialect', async () => {
+    withFakeApi(() => ({
+      data: [
+        { id: 'cat-1', code: 'CAT-1', status: 'ACTIVE' },
+        { id: 'cat-2', code: 'CAT-2', status: 'INACTIVE' },
+      ],
+      meta: { page: 1, limit: 100, total: 2 },
+    }))
+    const repository = createHttpEntityRepository()
+    const result = await repository.list('categories')
+    expect(result.items.map(row => row.status)).toEqual(['Active', 'Inactive'])
+  })
+
+  it('suppresses the generic API toast on delete so callers show the reason', async () => {
+    const captured = withFakeApi(() => ({ data: { message: 'deleted' } }))
+    const repository = createHttpEntityRepository()
+    await repository.remove('uoms', 'uom-1')
+    expect(captured[0]?.method).toBe('DELETE')
+    expect(captured[0]?.url).toBe('/api/v1/uoms/uom-1')
+    expect(captured[0]?.options).toMatchObject({ suppressErrorToast: true })
   })
 })
 

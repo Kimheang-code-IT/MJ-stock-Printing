@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
   configureFormats,
+  currencySymbol,
   DEFAULT_FORMAT_CONFIG,
   formatCompact,
   formatDate,
@@ -37,6 +38,17 @@ describe('format-service', () => {
   it('formats compact numbers', () => {
     configureFormats({ locale: 'en-US', numberFormat: '1,234.56' })
     expect(formatCompact(1500)).toMatch(/1\.5K|1,5K/i)
+  })
+
+  it('resolves the money input symbol from the record currency or shop default', () => {
+    configureFormats({ currency: 'USD' })
+    expect(currencySymbol('USD')).toBe('$')
+    expect(currencySymbol('KHR')).toBe('៛')
+    // No record currency → System Settings default.
+    expect(currencySymbol()).toBe('$')
+    configureFormats({ currency: 'KHR' })
+    expect(currencySymbol()).toBe('៛')
+    expect(currencySymbol('USD')).toBe('$')
   })
 
   it('formats time using configured timezone and 24h pattern', () => {

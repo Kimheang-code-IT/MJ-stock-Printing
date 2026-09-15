@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import type { PaginationState } from '@tanstack/vue-table'
-import { UButton, UInputNumber, USelect } from '#components'
+import { CommonAppCurrencyInput, UButton, UInputNumber, USelect } from '#components'
 import { h } from 'vue'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
+import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import type { AppRecord } from '~/config/admin-seed'
 import type { SalePriceVersionSelection, UomConversion } from '~/utils/stock/uom-conversions'
 
@@ -59,7 +60,7 @@ const baseUomLabel = computed(() => {
 /** Base-row sale price lives on the product record (`salePrice`), not only in `uomConversions`. */
 const baseSalePrice = computed(() => Number(recordAccess?.get('salePrice') ?? 0))
 
-function setBaseSalePrice(value: number | null) {
+function setBaseSalePrice(value: number | null | undefined) {
   recordAccess?.set?.('salePrice', Number(value ?? 0))
 }
 
@@ -94,7 +95,13 @@ function toRow(raw: Record<string, unknown>, index: number): PricingRow {
 
 const savedRows = computed<PricingRow[]>(() => {
   const list = Array.isArray(props.modelValue) ? props.modelValue as Array<Record<string, unknown>> : []
-  return list.map((row, index) => toRow(row, index))
+  return list.map((row, index) => {
+    const mapped = toRow(row, index)
+    // The base UOM row and the product's sale price are one value: keep them
+    // in sync so editing either side updates the other (spec §5.9 Pricing).
+    if (mapped.__base) mapped.salePrice = baseSalePrice.value
+    return mapped
+  })
 })
 
 /**
@@ -130,6 +137,40 @@ const isVersionPreview = computed(() => versionSelection.value !== null)
 // Version snapshots are always read-only; only "Add Version" changes prices.
 const previewReadOnly = computed(() => isVersionPreview.value)
 const effectiveDisabled = computed(() => props.disabled || previewReadOnly.value)
+
+/**
+ * Pricing table display currency. Product master prices are canonical USD;
+ * switching to KHR only changes what the table shows/accepts, converting at
+ * the entered rate (1 USD = ? KHR) and converting edits back to USD on save.
+ */
+const currencyOptions = [
+  { value: 'USD' as const, symbol: '$', labelKey: 'app.pos.currencyUsd' },
+  { value: 'KHR' as const, symbol: '៛', labelKey: 'app.pos.currencyKhr' },
+]
+const displayCurrency = ref<'USD' | 'KHR'>('USD')
+const exchangeRate = ref<number | undefined>()
+const {
+  dialogOpen: currencyRateDialogOpen,
+  toggle: toggleDisplayCurrency,
+  confirm: confirmDisplayCurrency,
+} = useCurrencyRateDialog({ currency: displayCurrency, rate: exchangeRate })
+
+/** KHR per 1 USD; guarded so a missing rate never mangles a price. */
+const conversionRate = computed(() => Number(exchangeRate.value || 0))
+
+/** Canonical USD → display currency (KHR rounded to 2 decimals). */
+function toDisplayPrice(usd: number) {
+  const value = Number(usd) || 0
+  if (displayCurrency.value !== 'KHR') return value
+  return conversionRate.value > 0 ? Math.round(value * conversionRate.value * 100) / 100 : value
+}
+
+/** Display currency → canonical USD (stored price is always USD). */
+function toUsdPrice(amount: number | undefined) {
+  const value = Number(amount) || 0
+  if (displayCurrency.value !== 'KHR') return value
+  return conversionRate.value > 0 ? Math.round((value / conversionRate.value) * 100) / 100 : value
+}
 
 const selectionRows = ref<PricingRow[]>([])
 
@@ -296,17 +337,21 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
     header: t('app.stock.convSale'),
     enableSorting: false,
     meta: { class: { td: 'whitespace-nowrap', th: '' } },
-    cell: ({ row }) => h(UInputNumber, {
-      modelValue: row.original.salePrice || undefined,
+    cell: ({ row }) => h(CommonAppCurrencyInput, {
+      modelValue: toDisplayPrice(row.original.salePrice) || undefined,
+      currency: displayCurrency.value,
       min: 0,
       step: 0.01,
       size: 'xs',
       class: 'w-28 tabular-nums',
+      align: 'right',
       disabled: effectiveDisabled.value,
-      'onUpdate:modelValue': (value: number | null) => {
+      'onUpdate:modelValue': (value: number | undefined) => {
+        // Entered in the display currency; stored in canonical USD.
+        const usd = toUsdPrice(value)
         // The base row's price stays in sync with the product sale price.
-        if (row.original.__base) setBaseSalePrice(value)
-        updateRow(row.original.__key, { salePrice: Number(value ?? 0) })
+        if (row.original.__base) setBaseSalePrice(usd)
+        updateRow(row.original.__key, { salePrice: usd })
       },
     }),
   },
@@ -372,6 +417,19 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
         :empty-actions="(disabled || isVersionPreview) ? [] : [{ icon: 'i-lucide-plus', label: t('app.stock.convAddRow'), onClick: addRow }]"
       >
         <template #actions>
+          <UFieldGroup size="sm">
+            <UButton
+              v-for="option in currencyOptions"
+              :key="option.value"
+              :label="option.symbol"
+              :color="displayCurrency === option.value ? 'primary' : 'neutral'"
+              :variant="displayCurrency === option.value ? 'soft' : 'outline'"
+              :title="t(option.labelKey)"
+              :aria-label="t(option.labelKey)"
+              :aria-pressed="displayCurrency === option.value"
+              @click="toggleDisplayCurrency(option.value)"
+            />
+          </UFieldGroup>
           <UButton
             v-if="!disabled && !isVersionPreview"
             size="sm"
@@ -383,6 +441,12 @@ const columns = computed<TableColumn<PricingRow>[]>(() => [
         </template>
       </TableAppListTable>
     </div>
+
+    <CommonAppExchangeRateDialog
+      v-model:open="currencyRateDialogOpen"
+      :initial-rate="exchangeRate"
+      @confirm="confirmDisplayCurrency"
+    />
 
     <!-- Sale-price version rail: version + effective date; click to preview. -->
     <StockPriceVersionsRail

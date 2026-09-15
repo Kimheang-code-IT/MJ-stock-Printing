@@ -93,7 +93,7 @@ async def get_sale(
     actor: User = Depends(require_permission("pos.access")),
 ) -> dict:
     service = POSService(db)
-    return envelope(sale_to_out(await service.get_sale(sale_id)))
+    return envelope(await service.get_sale_out(sale_id))
 
 
 @router.patch("/sales/{sale_id}")

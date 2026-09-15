@@ -14,7 +14,7 @@ describe('telegram settings', () => {
     expect(keys).toContain('telegram.enabled')
     expect(keys).toContain('telegram.botToken')
     expect(keys).toContain('telegram.chatId')
-    expect(keys).toContain('__telegramConnection')
+    expect(keys).not.toContain('__telegramConnection')
   })
 
   it('exposes the Phase 8 Telegram feature toggles', () => {
@@ -24,11 +24,11 @@ describe('telegram settings', () => {
     expect(byKey.get('telegram.stockInquiryEnabled')?.type).toBe('boolean')
   })
 
-  it('never exposes an editable bot token input (env-only secret)', () => {
+  it('exposes the bot token as an editable secret input', () => {
     const tokenField = telegramFields.find(field => field.key === 'telegram.botToken')
     expect(tokenField).toBeDefined()
-    expect(tokenField?.type).not.toBe('secret')
-    expect(tokenField?.readOnly).toBe(true)
+    expect(tokenField?.type).toBe('secret')
+    expect(tokenField?.readOnly).not.toBe(true)
   })
 
   it('does not expose legacy rental notification settings', () => {
@@ -110,6 +110,7 @@ describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
     expect(values).toEqual({
       telegram: {
         enabled: false,
+        chat_id: '',
         enable_password_reset: false,
         payment_invoice_notify_enabled: false,
         stock_inquiry_enabled: false,
@@ -123,10 +124,24 @@ describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
     })
   })
 
-  it('never sends the Telegram bot token (env-only secret)', () => {
+  it('does not send the masked token placeholder', () => {
     const values = toAdminSettingsValues(base) as Record<string, Record<string, unknown>>
     expect(values.telegram?.bot_token).toBeUndefined()
     expect(JSON.stringify(values)).not.toContain('bot_token')
+  })
+
+  it('sends a newly entered token and Chat ID', () => {
+    const values = toAdminSettingsValues({
+      telegram: {
+        ...base.telegram,
+        botToken: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd',
+        chatId: '-1001234567890',
+      },
+    })
+    expect(values.telegram).toMatchObject({
+      bot_token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd',
+      chat_id: '-1001234567890',
+    })
   })
 
   it('applies returned backend groups back onto the form model', () => {
@@ -140,6 +155,14 @@ describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
     expect(next.telegram.passwordResetEnabled).toBe(false)
     // Unmapped sections are untouched.
     expect(next.localization).toEqual(base.localization)
+  })
+
+  it('applies masked token and Chat ID returned by the backend', () => {
+    const next = applyAdminSettingsGroups(base, {
+      telegram: { bot_token: '********', chat_id: '-100998877' },
+    })
+    expect(next.telegram.botToken).toBe('********')
+    expect(next.telegram.chatId).toBe('-100998877')
   })
 
   it('returns an empty patch when no mappable sections change', () => {

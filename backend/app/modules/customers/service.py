@@ -42,7 +42,6 @@ class CustomerService:
             code=code,
             name=payload.name.strip(),
             phone=payload.phone,
-            email=None,
             address=payload.location or payload.address,
             note=payload.note,
             status=payload.status,
@@ -60,7 +59,6 @@ class CustomerService:
         data = payload.model_dump(exclude_unset=True, exclude_none=True)
         if "location" in data:
             data["address"] = data.pop("location")
-        data.pop("email", None)
         for key, value in data.items():
             setattr(customer, key, value)
         await self.repo.flush()

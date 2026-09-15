@@ -284,7 +284,9 @@ async def list_stock_operations(
     actor: User = Depends(require_permission("stock.view")),
 ) -> dict:
     """Stock operation documents (Stock In / purchase list read model)."""
-    from app.modules.suppliers.repository import SupplierRepository
+    from sqlalchemy import select
+
+    from app.modules.suppliers.models import Supplier
 
     service = StockOperationService(db)
     transactions, total = await service.list_operations(
@@ -297,14 +299,18 @@ async def list_stock_operations(
         page=params.page,
         limit=params.limit,
     )
-    suppliers = SupplierRepository(db)
-    rows = []
-    for transaction in transactions:
-        supplier_name = None
-        if transaction.supplier_id is not None:
-            supplier = await suppliers.get(transaction.supplier_id)
-            supplier_name = supplier.name if supplier else None
-        rows.append(service.operation_document_out(transaction, supplier_name))
+    # One IN query instead of a per-row supplier lookup (P3 N+1).
+    supplier_ids = {t.supplier_id for t in transactions if t.supplier_id is not None}
+    supplier_names: dict = {}
+    if supplier_ids:
+        result = await db.execute(
+            select(Supplier.id, Supplier.name).where(Supplier.id.in_(supplier_ids))
+        )
+        supplier_names = {row_id: name for row_id, name in result.all()}
+    rows = [
+        service.operation_document_out(transaction, supplier_names.get(transaction.supplier_id))
+        for transaction in transactions
+    ]
     return envelope(rows, list_meta(params.page, params.limit, total))
 
 

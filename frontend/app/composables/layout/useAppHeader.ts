@@ -133,11 +133,6 @@ export function useAppHeader() {
     badges.value = []
   }
 
-  /** @deprecated use clear() */
-  function clearTitle() {
-    clear()
-  }
-
   return {
     title,
     breadcrumbs,
@@ -151,6 +146,5 @@ export function useAppHeader() {
     setActions,
     clearActions,
     clear,
-    clearTitle,
   }
 }

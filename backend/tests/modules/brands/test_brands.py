@@ -56,6 +56,15 @@ async def test_brand_crud_flow(client):
     assert missing.status_code == 404
 
 
+async def test_brand_requires_code(client):
+    """Setup > Brands requires a non-empty, unique code."""
+    headers = await admin_headers(client)
+
+    missing = await client.post("/api/v1/brands", json={"name": "No Code Brand"}, headers=headers)
+    assert missing.status_code == 422, missing.text
+    assert "code" in missing.json()["detail"]["field_errors"]
+
+
 async def test_brand_options_lists_active_only(client):
     headers = await admin_headers(client)
     active = await _create_brand(client, headers, name="Active Option Brand")

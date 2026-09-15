@@ -53,6 +53,27 @@ def _q4(value) -> Decimal:
     return Decimal(value).quantize(FOUR, rounding=ROUND_HALF_UP)
 
 
+def _to_sale_currency(usd_price, exchange_rate) -> Decimal:
+    """Active-version prices are USD; the POS line is priced in the sale
+    currency (KHR documents convert by the sale exchange rate)."""
+    return (Decimal(usd_price) * Decimal(exchange_rate or 1)).quantize(TWO, rounding=ROUND_HALF_UP)
+
+
+def _uom_price_from_map(product: Product, uom_id, price_map: dict) -> Decimal | None:
+    """USD price of a line's UOM from a {uom_id: price} active-version map,
+    mirroring the cart fallbacks (map → conversion row → product base price)."""
+    key = str(uom_id or product.uom_id)
+    if key in price_map:
+        return Decimal(price_map[key])
+    for row in (product.uom_conversions or []):
+        if str(row.get("uom_id")) == key and row.get("sale_price") is not None:
+            return Decimal(str(row["sale_price"]))
+    if key == str(product.uom_id) and product.selling_price is not None:
+        return Decimal(product.selling_price)
+    return None
+
+
+
 async def get_walk_in_customer(session: AsyncSession) -> Customer | None:
     result = await session.execute(select(Customer).where(Customer.is_walk_in.is_(True)))
     return result.scalar_one_or_none()
@@ -234,19 +255,32 @@ class POSService:
         discount_total = Decimal("0.00")
         item_rows: list[SaleItem] = []
         version_prices: dict[uuid.UUID, dict[str, Decimal]] = {}
+        general_version_prices: dict[uuid.UUID, dict[str, Decimal]] = {}
         for item in payload.items:
             product = products[item.product_id]
             quantity = item.quantity
 
-            # Active price-version prices per UOM (batch-first resolution;
-            # POS cart lines carry no batch → the general active version).
+            # Active price-version prices per UOM. Batch-first priority:
+            # the sold (FEFO) lot's active version wins per UOM, then the
+            # general active version, then the product fallbacks.
             if item.product_id not in version_prices:
-                from app.modules.stock import sale_prices as sale_price_service
+                from app.modules.stock import batch_service, sale_prices as sale_price_service
 
-                version_prices[item.product_id] = await sale_price_service.active_version_uom_prices(
+                general_prices = await sale_price_service.active_version_uom_prices(
                     self.session, item.product_id
                 )
+                batch_prices: dict = {}
+                if product.track_batch:
+                    lots = await batch_service.lock_batches_for_product(self.session, product.id)
+                    fefo_batch = lots[0].batch_no if lots else None
+                    if fefo_batch:
+                        batch_prices = await sale_price_service.active_version_uom_prices(
+                            self.session, item.product_id, batch_no=fefo_batch
+                        )
+                general_version_prices[item.product_id] = general_prices
+                version_prices[item.product_id] = {**general_prices, **batch_prices}
             active_uom_prices = version_prices[item.product_id]
+            general_uom_prices = general_version_prices[item.product_id]
 
             # ---- line UOM resolution (stock is always mutated in base UOM) ----
             factor = item.factor_to_base
@@ -310,7 +344,25 @@ class POSService:
             if base_quantity <= 0:
                 raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
 
-            unit_price = item.unit_price if item.unit_price is not None else default_price
+            if item.unit_price is None:
+                # No client price → charge the batch-first active version.
+                unit_price = _to_sale_currency(default_price, payload.exchange_rate)
+            else:
+                unit_price = item.unit_price
+                # The POS cart always sends the general active price. When a
+                # batch-scoped active version changes that price, charge the
+                # batch price — unless the cashier manually overrode the line.
+                general_price = _uom_price_from_map(product, uom_id, general_uom_prices)
+                resolved_price = _uom_price_from_map(product, uom_id, active_uom_prices)
+                if (
+                    general_price is not None
+                    and resolved_price is not None
+                    and Decimal(item.unit_price)
+                    == _to_sale_currency(general_price, payload.exchange_rate)
+                    and _to_sale_currency(resolved_price, payload.exchange_rate)
+                    != _to_sale_currency(general_price, payload.exchange_rate)
+                ):
+                    unit_price = _to_sale_currency(resolved_price, payload.exchange_rate)
             gross = (quantity * unit_price).quantize(TWO, rounding=ROUND_HALF_UP)
             if item.discount_percent > 0:
                 discount = _q2(gross * item.discount_percent / Decimal("100"))
@@ -636,17 +688,29 @@ class POSService:
         discount_total = Decimal("0.00")
         item_rows: list[SaleItem] = []
         version_prices: dict[uuid.UUID, dict[str, Decimal]] = {}
+        general_version_prices: dict[uuid.UUID, dict[str, Decimal]] = {}
         for item in payload.items:
             product = products[item.product_id]
             quantity = item.quantity
 
             if item.product_id not in version_prices:
-                from app.modules.stock import sale_prices as sale_price_service
+                from app.modules.stock import batch_service, sale_prices as sale_price_service
 
-                version_prices[item.product_id] = await sale_price_service.active_version_uom_prices(
+                general_prices = await sale_price_service.active_version_uom_prices(
                     self.session, item.product_id
                 )
+                batch_prices: dict = {}
+                if product.track_batch:
+                    lots = await batch_service.lock_batches_for_product(self.session, product.id)
+                    fefo_batch = lots[0].batch_no if lots else None
+                    if fefo_batch:
+                        batch_prices = await sale_price_service.active_version_uom_prices(
+                            self.session, item.product_id, batch_no=fefo_batch
+                        )
+                general_version_prices[item.product_id] = general_prices
+                version_prices[item.product_id] = {**general_prices, **batch_prices}
             active_uom_prices = version_prices[item.product_id]
+            general_uom_prices = general_version_prices[item.product_id]
 
             factor = item.factor_to_base
             uom_id = item.uom_id
@@ -695,7 +759,25 @@ class POSService:
             if base_quantity <= 0:
                 raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
 
-            unit_price = item.unit_price if item.unit_price is not None else default_price
+            if item.unit_price is None:
+                # No client price → charge the batch-first active version.
+                unit_price = _to_sale_currency(default_price, payload.exchange_rate)
+            else:
+                unit_price = item.unit_price
+                # The POS cart always sends the general active price. When a
+                # batch-scoped active version changes that price, charge the
+                # batch price — unless the cashier manually overrode the line.
+                general_price = _uom_price_from_map(product, uom_id, general_uom_prices)
+                resolved_price = _uom_price_from_map(product, uom_id, active_uom_prices)
+                if (
+                    general_price is not None
+                    and resolved_price is not None
+                    and Decimal(item.unit_price)
+                    == _to_sale_currency(general_price, payload.exchange_rate)
+                    and _to_sale_currency(resolved_price, payload.exchange_rate)
+                    != _to_sale_currency(general_price, payload.exchange_rate)
+                ):
+                    unit_price = _to_sale_currency(resolved_price, payload.exchange_rate)
             gross = (quantity * unit_price).quantize(TWO, rounding=ROUND_HALF_UP)
             if item.discount_percent > 0:
                 discount = _q2(gross * item.discount_percent / Decimal("100"))
@@ -1018,6 +1100,20 @@ class POSService:
         if sale is None:
             raise NotFoundError("Sale not found")
         return sale
+
+    async def get_sale_out(self, sale_id: uuid.UUID) -> SaleOut:
+        """GET path detail with the customer name resolved (the SPA edit screen
+        shows the buyer without depending on the cached options list)."""
+        sale = await self.get_sale(sale_id)
+        customer_name: str | None = None
+        if sale.customer_id is not None:
+            from app.modules.customers.models import Customer
+
+            result = await self.session.execute(
+                select(Customer.name).where(Customer.id == sale.customer_id)
+            )
+            customer_name = result.scalar_one_or_none()
+        return sale_to_out(sale, customer_name=customer_name)
 
     async def list_sales(self, *, q, customer_id, start, end, page, limit):
         from app.shared.pagination.params import parse_date_range

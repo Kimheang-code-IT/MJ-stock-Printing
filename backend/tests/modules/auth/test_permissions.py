@@ -24,11 +24,11 @@ def test_permission_catalog_matches_spec():
         "delivery": {"view", "create", "update", "confirm", "deliver", "cancel"},
         "report": {"sales", "purchase", "customer_debt", "supplier_debt", "finance"},
         "expense": {"create"},  # Add Expense on Finance Report only (no Expense page)
-        "user": {"manage"},
-        "role": {"manage"},
-        "sequence": {"manage"},
+        "user": {"view", "create", "update", "delete"},
+        "role": {"view", "create", "update", "delete"},
+        "sequence": {"view", "create", "update", "delete"},
         "audit": {"view"},
-        "settings": {"manage"},
+        "settings": {"view", "update"},
     }
     assert {module: set(actions) for module, actions in PERMISSION_CATALOG.items()} == expected
 
@@ -48,16 +48,39 @@ def test_normalize_grants_implied_view_permission():
     assert "stock.view" in granted
 
 
+def test_normalize_grants_view_for_dotted_debt_permission():
+    granted = normalize_role_permissions(["supplier.debt.pay"])
+    assert "supplier.debt.pay" in granted
+    assert "supplier.view" in granted
+
+    customer_granted = normalize_role_permissions(["customer.debt.pay"])
+    assert "customer.view" in customer_granted
+
+
+def test_normalize_expands_legacy_manage_permissions():
+    granted = normalize_role_permissions(["user.manage", "settings.manage"])
+    assert "user.view" in granted
+    assert "user.create" in granted
+    assert "user.update" in granted
+    assert "user.delete" in granted
+    assert "settings.view" in granted
+    assert "settings.update" in granted
+    assert "user.manage" not in granted
+    assert "settings.manage" not in granted
+
+
 def test_effective_permissions_and_superuser_bypass():
     class Role:
         name = "Administrator"
-        permissions = [SUPER_ADMIN_PERMISSION]
+        permissions = []  # even with empty rows, Administrator is full access
 
     class User:
         role_ref = Role()
 
     assert effective_permissions(User()) == [SUPER_ADMIN_PERMISSION]
     assert user_has_permission(User(), "stock.in") is True
+    assert user_has_permission(User(), "user.create") is True
+    assert user_has_permission(User(), "role.update") is True
 
     class CashierRole:
         name = "Cashier"
@@ -67,4 +90,4 @@ def test_effective_permissions_and_superuser_bypass():
         role_ref = CashierRole()
 
     assert user_has_permission(Cashier(), "pos.access") is True
-    assert user_has_permission(Cashier(), "user.manage") is False
+    assert user_has_permission(Cashier(), "user.update") is False

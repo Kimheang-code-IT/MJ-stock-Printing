@@ -30,9 +30,10 @@ import {
   supportsStatusToggle,
 } from '~/utils/module/row-actions'
 import { selectedDebtsShareScope } from '~/utils/reports/debts'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
-import { STOCK_OPERATION_META, STOCK_OPERATION_TYPES, type StockHistoryKind, type StockOperationType } from '~/config/pos-options'
+import { STOCK_OPERATION_META, STOCK_OPERATION_PERMISSIONS, STOCK_OPERATION_TYPES, type StockHistoryKind, type StockOperationType } from '~/config/pos-options'
 import type { DebtPaymentKind } from '~/components/reports/DebtPaymentDialog.vue'
 
 const { module, route } = useModuleRoute()
@@ -120,10 +121,14 @@ const canDelete = computed(() => Boolean(
   && !current.value.readOnly
   && auth.canAccessPage(actionPermission('delete')),
 ))
+// Product row stock actions (Purchase Stock / Damage / Expiry) are each gated
+// by their own backend permission (`stock.*`), not by `product.update`.
 const canOperate = computed(() => Boolean(
   current.value
   && !current.value.readOnly
-  && (auth.canAccessPage(actionPermission('operate')) || auth.canAccessPage(actionPermission('edit'))),
+  && (auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.stock_in)
+    || auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.damage)
+    || auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.expiry)),
 ))
 // Editing a sale reuses the POS screen (PATCH /pos/sales/{id}); editing a
 // purchase reuses the purchase entry screen (PATCH /stock/in/{id}).
@@ -433,26 +438,19 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     }]]
   }
   const items: DropdownMenuItem[] = []
-  // Master/admin records own a detail page: Open views it, Edit opens the same
-  // combined view/edit surface (kept as two entries for a consistent order).
+  // Master/admin records own a detail page: Open views it.
   if (!isTableOnly.value) {
     items.push({
       label: t('app.ui.open'),
       icon: 'i-lucide-eye',
       onSelect: () => openRow(row),
     })
-    if (canEdit.value) {
-      items.push({
-        label: t('core.rowActions.edit'),
-        icon: 'i-lucide-pencil',
-        onSelect: () => openRow(row),
-      })
-    }
   }
   if (collection === 'products' && canOperate.value) {
     for (const type of STOCK_OPERATION_TYPES) {
       // Stock Adjustment is not offered as a row action on the Stock table.
       if (type === 'adjustment') continue
+      if (!auth.canAccessPage(STOCK_OPERATION_PERMISSIONS[type])) continue
       const meta = STOCK_OPERATION_META[type]
       items.push({
         label: meta.label,
@@ -634,11 +632,13 @@ async function submitDebtPayment(payload: {
     toast.add({ title: t('app.reports.paymentSaved'), color: 'success' })
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.reports.paymentFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.reports.paymentFailed'),
+        description: apiErrorMessage(error, t('app.reports.paymentFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     debtPayBusy.value = false
@@ -698,11 +698,13 @@ async function submitSelectedDebtPayment(payload: {
     toast.add({ title: t('app.reports.paymentSaved'), color: 'success' })
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.reports.paymentFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.reports.paymentFailed'),
+        description: apiErrorMessage(error, t('app.reports.paymentFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     debtPayBusy.value = false
@@ -748,11 +750,12 @@ async function deleteIds(ids: string[]) {
     toast.add({ title: t('core.actions.deletedItems', { n: ids.length }), color: 'success' })
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.ui.deleteFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: apiErrorMessage(error, t('app.ui.deleteFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     busyId.value = ''
@@ -761,6 +764,12 @@ async function deleteIds(ids: string[]) {
 
 async function deactivateIds(ids: string[]) {
   if (!current.value || !canEdit.value || !ids.length || busyId.value) return
+  const ok = await confirm({
+    kind: 'deactivate',
+    descriptionKey: 'core.confirm.deactivateSelected',
+    descriptionParams: { n: ids.length },
+  })
+  if (!ok) return
   busyId.value = ids[0] || ''
   try {
     const status = statusValueFor(current.value.collection, false)
@@ -778,6 +787,8 @@ async function deactivateIds(ids: string[]) {
 async function setRowStatus(row: Record<string, unknown>, active: boolean) {
   const module = current.value
   if (!module || !row.id || busyId.value) return
+  const ok = await confirm({ kind: active ? 'activate' : 'deactivate' })
+  if (!ok) return
   const id = String(row.id)
   busyId.value = id
   try {
@@ -788,11 +799,13 @@ async function setRowStatus(row: Record<string, unknown>, active: boolean) {
     })
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.ui.operationFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.ui.operationFailed'),
+        description: apiErrorMessage(error, t('app.ui.operationFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     busyId.value = ''
@@ -859,11 +872,13 @@ async function submitStockOperation() {
     })
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.ui.operationFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.ui.operationFailed'),
+        description: apiErrorMessage(error, t('app.ui.operationFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     stockOperationBusy.value = false

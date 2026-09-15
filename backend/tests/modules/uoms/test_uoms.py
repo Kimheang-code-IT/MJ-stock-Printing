@@ -75,6 +75,18 @@ async def test_uom_crud_and_unique_code(client):
 
 
 @pytest.mark.asyncio
+async def test_uom_requires_code(client):
+    """Setup > UOMs requires a non-empty, unique code."""
+    headers = await admin_headers(client)
+
+    missing = await client.post(
+        "/api/v1/uoms", json={"name": "No Code Unit", "symbol": "nc"}, headers=headers
+    )
+    assert missing.status_code == 422, missing.text
+    assert "code" in missing.json()["detail"]["field_errors"]
+
+
+@pytest.mark.asyncio
 async def test_uom_safe_delete_prefer_disable_when_linked(client):
     """A UOM linked to products cannot be hard-deleted; disable instead (spec 2.1.3)."""
     headers = await admin_headers(client)

@@ -54,6 +54,7 @@ defineEmits<{
     :size="size"
     :class="$props.class"
     :currency="currency"
+    :money="true"
     @update:model-value="$emit('update:modelValue', $event)"
     @update:currency="$emit('update:currency', $event)"
     @blur="$emit('blur', $event)"

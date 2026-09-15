@@ -7,6 +7,7 @@ import { STOCK_OPERATION_META } from '~/config/pos-options'
 import type { ProductBatchRow, ProductHistoryRow, SaleReceipt, StockHistoryKind } from '~/repositories/contracts/entities'
 import { usePosCommands, useStockQueries } from '~/repositories/index'
 import { formatMoney } from '~/utils/format/format-service'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { conversionForUom, convertToBase, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
 
 /**
@@ -209,7 +210,7 @@ async function loadHistory() {
     historyRows.value = result.items
   }
   catch (error: unknown) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
     historyRows.value = []
   }
   finally {
@@ -302,11 +303,13 @@ async function submitAdd() {
     })
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.ui.operationFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.ui.operationFailed'),
+        description: apiErrorMessage(error, t('app.ui.operationFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     addBusy.value = false
@@ -353,7 +356,7 @@ async function openInvoice(row: HistoryRow) {
     if (!invoice.value) invoiceError.value = t('app.stock.invoiceNotFound')
   }
   catch (error: unknown) {
-    invoiceError.value = error instanceof Error ? error.message : String(error)
+    invoiceError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
   }
   finally {
     invoiceLoading.value = false

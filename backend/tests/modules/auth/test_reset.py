@@ -40,7 +40,9 @@ async def admin_with_chat_id():
 def captured_deliveries(monkeypatch):
     deliveries: list[tuple[str, str, str | None]] = []  # (chat_id, code, handoff_token)
 
-    def fake_queue(chat_id: str, code: str, *, handoff_token: str | None = None) -> bool:
+    def fake_queue(
+        chat_id: str, code: str, *, handoff_token: str | None = None, minutes: int | None = None
+    ) -> bool:
         deliveries.append((chat_id, code, handoff_token))
         return True
 
@@ -158,3 +160,107 @@ async def test_forgot_password_without_telegram_chat(client, monkeypatch, captur
         "/api/v1/auth/verify-reset-code", json={"email": "nochat@example.com", "code": "123456"}
     )
     assert verify.status_code == 422
+
+
+async def test_forgot_password_unlinked_account_gets_bot_link_then_code(client, monkeypatch):
+    """An existing account with no linked Telegram gets a one-time /link code;
+    sending it to the bot links the chat and delivers the reset code."""
+    import re
+
+    from app.core.database import SessionFactory
+    from app.core.security import hash_password
+    from app.modules.auth.models import Role, User
+
+    email = "nochat-link@example.com"
+    async with SessionFactory() as session:
+        role = Role(name="NoLinkRole", is_system=False, status="ACTIVE")
+        session.add(role)
+        await session.flush()
+        session.add(
+            User(
+                full_name="No Link User",
+                email=email,
+                password_hash=hash_password("password123"),
+                telegram_chat_id=None,
+                role_id=role.id,
+                status="ACTIVE",
+            )
+        )
+        await session.commit()
+
+    captured: list[tuple[str, str]] = []
+
+    async def fake_send(chat_id: str, text: str) -> bool:
+        captured.append((chat_id, text))
+        return True
+
+    monkeypatch.setattr("app.shared.telegram.client.send_message", fake_send)
+
+    response = await client.post("/api/v1/auth/forgot-password", json={"email": email})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["channel"] == "telegram_link"
+    link_code = data["linkCode"] or data["link_code"]
+    assert link_code and len(link_code) == 8
+    assert data["expiresIn"] == data["expires_in"] > 0
+    assert not captured, "no reset code is delivered before the chat is linked"
+
+    # The bot consumes the /link code and sends the reset code to that chat.
+    from app.shared.telegram.linking import consume_link_code
+
+    async with SessionFactory() as session:
+        linked = await consume_link_code(session, link_code, "555000111")
+    assert linked is not None
+    assert linked.telegram_chat_id == "555000111"
+    assert linked.telegram_verified is True
+    assert captured, "the reset code should be sent to the newly linked chat"
+    chat_id, text = captured[-1]
+    assert chat_id == "555000111"
+    match = re.search(r"(\d{6})", text)
+    assert match, text
+    reset_code = match.group(1)
+
+    verified = await client.post(
+        "/api/v1/auth/verify-reset-code", json={"email": email, "code": reset_code}
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["data"]["reset_token"]
+
+
+async def test_forgot_password_link_code_single_use(client, monkeypatch):
+    """The /link code is consumed once; a resend issues a fresh one."""
+    from app.core.database import SessionFactory
+    from app.core.security import hash_password
+    from app.modules.auth.models import Role, User
+
+    email = "nochat-resend@example.com"
+    async with SessionFactory() as session:
+        role = Role(name="NoLinkResendRole", is_system=False, status="ACTIVE")
+        session.add(role)
+        await session.flush()
+        session.add(
+            User(
+                full_name="No Link Resend",
+                email=email,
+                password_hash=hash_password("password123"),
+                telegram_chat_id=None,
+                role_id=role.id,
+                status="ACTIVE",
+            )
+        )
+        await session.commit()
+
+    first = (await client.post("/api/v1/auth/forgot-password", json={"email": email})).json()["data"]
+    second = (await client.post("/api/v1/auth/forgot-password/resend", json={"email": email})).json()["data"]
+    assert first["channel"] == second["channel"] == "telegram_link"
+    first_code = first["linkCode"] or first["link_code"]
+    second_code = second["linkCode"] or second["link_code"]
+    assert first_code != second_code
+
+    from app.shared.telegram.linking import consume_link_code
+
+    async with SessionFactory() as session:
+        # The stale code no longer links once a newer request replaced it? It
+        # remains valid until its own TTL, but consuming it once is final.
+        assert await consume_link_code(session, first_code, "555000222") is not None
+        assert await consume_link_code(session, first_code, "555000222") is None

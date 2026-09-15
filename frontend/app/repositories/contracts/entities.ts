@@ -293,6 +293,16 @@ export interface SaleDetail {
   currency: 'USD' | 'KHR'
   exchangeRate: number
   items: SaleDetailItem[]
+  /** Saved checkout fields (canonical tender + amounts) — loaded by POS edit. */
+  paymentMethod: string
+  paymentStatus: string
+  subtotal: number
+  discount: number
+  deliveryPrice: number
+  paidAmount: number
+  debtAmount: number
+  note: string
+  dueDate: string | null
 }
 
 /** Printable receipt payload for a completed sale (no PDF/MinIO required). */

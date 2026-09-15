@@ -56,10 +56,12 @@ class UOMService:
 
     async def update(self, uom_id: uuid.UUID, payload) -> UOM:
         uom = await self.get(uom_id)
-        if payload.code is not None and payload.code.strip() != uom.code:
-            if await self.repo.get_by_code(payload.code.strip()):
-                raise ConflictError("A UOM with this code already exists")
-            uom.code = payload.code.strip()
+        if payload.code is not None:
+            code = payload.code.strip()
+            if code and code != uom.code:
+                if await self.repo.get_by_code(code):
+                    raise ConflictError("A UOM with this code already exists")
+                uom.code = code
         if payload.name is not None:
             uom.name = payload.name.strip()
         if payload.symbol is not None:

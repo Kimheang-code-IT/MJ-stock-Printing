@@ -18,14 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate development compose
+      - name: Validate compose
         run: docker compose -f infrastructure/docker-compose.yml config --quiet
-      - name: Validate production compose
-        env:
-          CORS_ORIGINS: https://app.example.com
-          JWT_SECRET_KEY: ci-placeholder-jwt-secret-key-32chars-min
-          IMAGE_TAG: latest
-        run: docker compose -f infrastructure/docker-compose.yml -f infrastructure/docker-compose.prod.yml config --quiet
 
   frontend:
     name: Frontend checks

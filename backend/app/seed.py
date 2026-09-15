@@ -1,4 +1,8 @@
-"""Seed entrypoint (`python -m app.seed`), run by the api container on start.
+"""Seed entrypoint (`python -m app.seed`) — tests / manual bootstrap only.
+
+The api container does NOT run this on start: the app boots empty and the first
+administrator is created on the Setup page. Kept for the test suite and for an
+operator who explicitly wants the default master data.
 
 - syncs the permission catalog and the Administrator system role
 - bootstraps the initial administrator from SEED_ADMIN_* when no user exists
@@ -16,7 +20,6 @@ from app.core.config import settings
 
 async def seed() -> None:
     from app.core.database import SessionFactory
-    from app.core.permissions import SUPER_ADMIN_PERMISSION, build_all_permissions
     from app.core.security import hash_password
 
     # Import every model module before any ORM work so SQLAlchemy can
@@ -42,12 +45,9 @@ async def seed() -> None:
         roles = RoleRepository(session)
         users = UserRepository(session)
 
-        await roles.sync_permission_catalog(build_all_permissions())
+        await roles.ensure_administrator_role()
         admin_role = await roles.get_by_name("Administrator")
-        if admin_role is None:
-            admin_role = await roles.create_system_role(
-                "Administrator", "Full system access", [SUPER_ADMIN_PERMISSION]
-            )
+        assert admin_role is not None
 
         if settings.seed_admin_enabled and not await users.any_user_exists():
             session.add(

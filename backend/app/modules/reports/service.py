@@ -34,6 +34,10 @@ from app.shared.pagination.params import parse_date_range
 Q2 = Decimal("0.01")
 Q4 = Decimal("0.0001")
 
+# CSV exports are bounded so a single request cannot materialize an unbounded
+# row set into memory (P4); the body is also streamed in chunks.
+EXPORT_ROW_LIMIT = 20000
+
 
 def _usd(expression, currency_col, rate_col):
     """Normalize a money expression recorded in a document currency to USD
@@ -69,6 +73,15 @@ class ReportsService:
     # ---------------------------------------------------------- sales report
 
     def _sales_query(self) -> select:
+        # Latest customer-debt due date for the sale (one debt row per sale).
+        due_date = (
+            select(CustomerDebt.due_date)
+            .where(CustomerDebt.sale_id == Sale.id)
+            .order_by(CustomerDebt.created_at.desc(), CustomerDebt.id)
+            .limit(1)
+            .correlate(Sale)
+            .scalar_subquery()
+        )
         return (
             select(
                 Sale.id,
@@ -85,12 +98,23 @@ class ReportsService:
                 SaleItem.line_total,
                 SaleItem.returned_quantity,
                 SaleItem.unit_cost,
+                SaleItem.factor_to_base,
                 User.full_name.label("cashier_name"),
                 Sale.debt_amount,
                 # Document currency of the sale — reprints and grouped report
                 # rows must use the stored rate, never the shop's current one.
                 Sale.currency,
                 Sale.exchange_rate,
+                # Saved sale header (repeat per line) so the SPA shows the real
+                # checkout values instead of recomputing them.
+                Sale.subtotal.label("subtotal"),
+                Sale.discount_amount.label("sale_discount"),
+                Sale.delivery_price.label("delivery_price"),
+                Sale.grand_total.label("grand_total"),
+                Sale.paid_amount.label("paid_amount"),
+                Sale.payment_status.label("payment_status"),
+                Sale.note.label("note"),
+                due_date.label("due_date"),
             )
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
@@ -105,10 +129,19 @@ class ReportsService:
         returned = Decimal(row.returned_quantity)
         line_total = Decimal(row.line_total)
         unit_cost = Decimal(row.unit_cost)
+        factor = Decimal(row.factor_to_base or 1)
         net_quantity = quantity - returned
         return_amount = (line_total * returned / quantity).quantize(Q2) if quantity else Q2 * 0
         net_sales = line_total - return_amount
-        cost = (unit_cost * net_quantity).quantize(Q2)
+        # unit_cost is per BASE unit in the canonical USD cost currency;
+        # quantity is in the entered UOM. Reconcile the factor, then convert
+        # to the document (sale) currency so the report line matches the invoice.
+        cost_usd = unit_cost * net_quantity * factor
+        cost = (
+            (cost_usd * Decimal(row.exchange_rate or 1)).quantize(Q2)
+            if str(row.currency or "USD").upper() == "KHR"
+            else cost_usd.quantize(Q2)
+        )
         return {
             "sale_id": row.id,
             "sale_item_id": row.sale_item_id,
@@ -131,6 +164,15 @@ class ReportsService:
             "debt_amount": Decimal(row.debt_amount or 0),
             "cashier_name": row.cashier_name,
             "payment_method": payment_method,
+            # Saved sale header — grouped report rows show these directly.
+            "subtotal": Decimal(row.subtotal or 0),
+            "sale_discount": Decimal(row.sale_discount or 0),
+            "delivery_price": Decimal(row.delivery_price or 0),
+            "grand_total": Decimal(row.grand_total or 0),
+            "paid_amount": Decimal(row.paid_amount or 0),
+            "payment_status": row.payment_status,
+            "note": row.note,
+            "due_date": row.due_date,
             # Document currency snapshot for grouped rows / invoice reprints.
             "currency": row.currency,
             "exchange_rate": row.exchange_rate,
@@ -221,7 +263,7 @@ class ReportsService:
 
     async def sales_report_export(self, **filters) -> list[dict]:
         filters["page"] = 1
-        filters["limit"] = 100000
+        filters["limit"] = EXPORT_ROW_LIMIT
         rows, _ = await self.sales_report(**filters)
         return rows
 
@@ -569,13 +611,13 @@ class ReportsService:
         expiry_loss = await loss("EXPIRE")
 
         sold = await self.session.execute(
-            select(func.coalesce(func.sum(_usd(SaleItem.unit_cost * SaleItem.quantity, Sale.currency, Sale.exchange_rate)), 0))
+            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity * SaleItem.factor_to_base), 0))
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
         )
         restocked = await self.session.execute(
-            select(func.coalesce(func.sum(_usd(SaleReturnItem.quantity * SaleItem.unit_cost, Sale.currency, Sale.exchange_rate)), 0))
+            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost * SaleItem.factor_to_base), 0))
             .select_from(SaleReturnItem)
             .join(SaleItem, SaleItem.id == SaleReturnItem.sale_item_id)
             .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)

@@ -1,30 +1,22 @@
-/** JWT user permission and API error contract types for the Stock & POS API. */
-
-export type ApiErrorCode =
-  | 'AUTH_REQUIRED'
-  | 'ACCESS_DENIED'
-  | 'REFERENCE_NOT_FOUND'
-
-export interface ApiErrorBody {
-  code: ApiErrorCode | string
-  message: string
-  request_id: string
-  field_errors?: Record<string, string>
-}
+/** JWT user permission contract types for the Stock & POS API. */
 
 /** Permission codes carried by the authenticated user's JWT claims. */
 export const SOURCE_PERMISSIONS = [
-  'settings.read',
+  'settings.view',
   'settings.update',
-  'user.read',
-  'user.manage',
-  'role.read',
-  'role.manage',
+  'user.view',
+  'user.create',
+  'user.update',
+  'user.delete',
+  'role.view',
+  'role.create',
+  'role.update',
+  'role.delete',
   'attachment.read',
   'attachment.upload',
   'attachment.delete',
-  'audit_log.read',
-  'report.read',
+  'audit.view',
+  'report.sales',
 ] as const
 
 export type SourcePermission = typeof SOURCE_PERMISSIONS[number]

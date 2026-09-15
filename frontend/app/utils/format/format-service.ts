@@ -34,10 +34,6 @@ export function configureFormats(next: Partial<AppConfigLocalization>) {
   }
 }
 
-export function getFormatConfig(): Readonly<AppConfigLocalization> {
-  return activeConfig
-}
-
 function numberLocale() {
   return NUMBER_FORMAT_LOCALES[activeConfig.numberFormat] || activeConfig.locale
 }
@@ -164,6 +160,16 @@ export function formatNumber(value: unknown, options: Intl.NumberFormatOptions =
 
 export function formatCurrency(value: unknown, currency = activeConfig.currency) {
   return formatNumber(value, { style: 'currency', currency })
+}
+
+/**
+ * Currency symbol shown at the end of money input fields: `៛` for KHR, `$`
+ * otherwise. Falls back to the System Settings default currency when the
+ * record/document does not carry one.
+ */
+export function currencySymbol(currency?: string): string {
+  const code = String(currency || activeConfig.currency || 'USD').trim().toUpperCase()
+  return code === 'KHR' ? '៛' : '$'
 }
 
 /** Money display: record currency when provided, otherwise System Settings default. */

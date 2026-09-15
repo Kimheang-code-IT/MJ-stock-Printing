@@ -44,11 +44,17 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
   submitting.value = true
   try {
     const email = payload.data.email.trim()
-    await requestPasswordReset(email)
-    startPasswordReset(email)
+    const result = await requestPasswordReset(email)
+    const start = result.data
+    const needsBotLink = start?.channel === 'telegram_link'
+    startPasswordReset(email, needsBotLink ? start.linkCode : null)
     toast.add({
-      title: t('pages.forgetPassword.sentTitle'),
-      description: t('pages.forgetPassword.sentDesc', { email }),
+      title: needsBotLink
+        ? t('pages.forgetPassword.linkRequiredTitle')
+        : t('pages.forgetPassword.sentTitle'),
+      description: needsBotLink
+        ? t('pages.forgetPassword.linkRequiredDesc')
+        : t('pages.forgetPassword.sentDesc', { email }),
       color: 'success',
     })
     await router.push('/auth/verify-code')

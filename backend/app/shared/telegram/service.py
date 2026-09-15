@@ -33,10 +33,11 @@ Sender = callable
 
 
 async def telegram_enabled(session: AsyncSession) -> bool:
-    """Master switch: settings.telegram.enabled AND env bot token."""
+    """Master switch: settings.telegram.enabled and a saved/env bot token."""
     from app.core.config import settings as app_settings
+    from app.shared.telegram.client import resolve_bot_token
 
-    if not app_settings.telegram_enabled or not app_settings.telegram_bot_token:
+    if not app_settings.telegram_enabled or not await resolve_bot_token(session):
         return False
     return bool(await get_setting_value(session, "telegram", "enabled", True))
 
@@ -50,7 +51,13 @@ async def recipients(session: AsyncSession) -> list[str]:
             User.telegram_chat_id != "",
         )
     )
-    return [str(chat_id) for chat_id in result.scalars().all()]
+    recipient_list = [str(chat_id) for chat_id in result.scalars().all()]
+    # The Settings Telegram "Chat/Group ID" is a global fallback recipient
+    # (e.g. a group chat) in addition to the verified per-user chats.
+    configured = str(await get_setting_value(session, "telegram", "chat_id", "") or "").strip()
+    if configured and configured not in recipient_list:
+        recipient_list.append(configured)
+    return recipient_list
 
 
 async def _broadcast(session: AsyncSession, text: str, *, sender=None) -> int:
@@ -101,6 +108,8 @@ async def notify_sale(
 ) -> bool:
     """Sale notification (after commit). Never raises."""
     try:
+        if not await get_setting_value(session, "telegram", "enabled", True):
+            return False
         if not await get_setting_value(session, "telegram", "sale_enabled", False):
             return False
         tz_name = await get_setting_value(session, "system", "timezone", "UTC")
@@ -150,6 +159,8 @@ async def notify_purchase(
 ) -> bool:
     """Stock In (purchase) notification (after commit). Never raises."""
     try:
+        if not await get_setting_value(session, "telegram", "enabled", True):
+            return False
         if not await get_setting_value(session, "telegram", "purchase_enabled", False):
             return False
         tz_name = await get_setting_value(session, "system", "timezone", "UTC")
@@ -196,6 +207,8 @@ async def notify_payment_text(
     Gated by the sale-notification toggle: debt payments are the payment
     stream of the sale, not invoice documents (no files are ever sent)."""
     try:
+        if not await get_setting_value(session, "telegram", "enabled", True):
+            return False
         if not await get_setting_value(session, "telegram", "sale_enabled", False):
             return False
         tz_name = await get_setting_value(session, "system", "timezone", "UTC")
@@ -217,6 +230,49 @@ async def notify_payment_text(
         return sent > 0
     except Exception:
         logger.exception("Telegram payment notification failed for %s", invoice_no)
+        return False
+
+
+async def notify_supplier_payment_text(
+    session: AsyncSession,
+    *,
+    document_no: str | None,
+    payment_no: str,
+    supplier: str | None,
+    total,
+    paid,
+    payment_method: str,
+    remaining,
+    cashier: str | None,
+    sender=None,
+) -> bool:
+    """Supplier debt-payment text notification (after commit). Never raises.
+
+    Supplier debts originate from Stock In, so the purchase toggle gates it."""
+    try:
+        if not await get_setting_value(session, "telegram", "enabled", True):
+            return False
+        if not await get_setting_value(session, "telegram", "purchase_enabled", False):
+            return False
+        tz_name = await get_setting_value(session, "system", "timezone", "UTC")
+        text = format_supplier_payment_text(
+            {
+                "document_no": document_no,
+                "payment_no": payment_no,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "supplier": supplier,
+                "total": str(total),
+                "paid": str(paid),
+                "payment_method": payment_method,
+                "remaining": str(remaining),
+                "cashier": cashier,
+            },
+            timezone_name=str(tz_name or "UTC"),
+        )
+        sent = await _broadcast(session, text, sender=sender)
+        return sent > 0
+    except Exception:
+        logger.exception("Telegram supplier payment notification failed for %s", payment_no)
         return False
 
 
@@ -317,6 +373,25 @@ def format_payment_text(payload: dict, *, timezone_name: str = "UTC") -> str:
         lines.append(f"Payment: {payload['payment_no']}")
     lines.append(f"Date: {_stamp(payload.get('occurred_at', ''), timezone_name)}")
     lines.append(f"Customer: {payload.get('customer') or 'Walk-in Customer'}")
+    lines.append(f"Total: {payload.get('total', '-')}")
+    lines.append(f"Paid: {payload.get('paid', '-')}")
+    lines.append(f"Method: {payload.get('payment_method', '-')}")
+    if payload.get("remaining") is not None:
+        lines.append(f"Remaining debt: {payload['remaining']}")
+    if payload.get("cashier"):
+        lines.append(f"Cashier: {payload['cashier']}")
+    return "\n".join(lines)
+
+
+def format_supplier_payment_text(payload: dict, *, timezone_name: str = "UTC") -> str:
+    """Plain-text supplier debt-payment summary."""
+    lines = ["Stock & POS — Supplier Payment"]
+    lines.append(f"Document: {payload.get('document_no') or '-'}")
+    if payload.get("payment_no"):
+        lines.append(f"Payment: {payload['payment_no']}")
+    lines.append(f"Date: {_stamp(payload.get('occurred_at', ''), timezone_name)}")
+    if payload.get("supplier"):
+        lines.append(f"Supplier: {payload['supplier']}")
     lines.append(f"Total: {payload.get('total', '-')}")
     lines.append(f"Paid: {payload.get('paid', '-')}")
     lines.append(f"Method: {payload.get('payment_method', '-')}")

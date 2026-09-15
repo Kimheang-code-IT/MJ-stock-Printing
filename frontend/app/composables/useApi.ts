@@ -2,8 +2,8 @@ import { useAuthStore } from '~/stores/auth'
 import { ref } from 'vue'
 import type { TableQueryParams } from '~/types/api'
 import { compactQuery } from '~/utils/api/query'
-import { normalizeApiError } from '~/utils/api/errors'
-import { getAccessToken, getRefreshToken, setAccessToken } from '~/utils/auth/tokens'
+import { markApiErrorHandled, normalizeApiError } from '~/utils/api/errors'
+import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from '~/utils/auth/tokens'
 import { createAuthRefresher } from '~/utils/api/auth-refresher'
 import { isAutoApiBase, isSameOriginApiBase, resolveApiBase } from '~/utils/api/base-url'
 import { useAccessAlert } from '~/composables/common/useAccessAlert'
@@ -37,6 +37,9 @@ type ApiFetchError = Error & {
 // request even when composables created separate useApi instances.
 const requestControllers = new Map<string, AbortController>()
 let authMeRefreshPromise: Promise<void> | null = null
+// Shared across every useApi() instance so concurrent 401s from separate
+// composables trigger exactly one refresh-token rotation.
+let sharedRefreshPromise: Promise<boolean> | null = null
 
 function refreshCurrentUserAfterForbidden(baseURL: string, timeout: number): Promise<void> {
   if (authMeRefreshPromise) return authMeRefreshPromise
@@ -60,23 +63,6 @@ function refreshCurrentUserAfterForbidden(baseURL: string, timeout: number): Pro
     authMeRefreshPromise = null
   })
   return authMeRefreshPromise
-}
-
-/**
- * Normalize any thrown request failure into a consistent error carrying
- * statusCode / code / message / fieldErrors parsed from the FastAPI payload.
- */
-export function toNormalizedApiError(error: unknown): Error & { statusCode: number, code: string, fieldErrors: Record<string, string>, data?: unknown } {
-  const fetchError = error as ApiFetchError
-  const statusCode = fetchError?.statusCode || 500
-  const normalized = normalizeApiError(fetchError?.data, statusCode)
-  const output = new Error(normalized.message) as Error & { statusCode: number, code: string, fieldErrors: Record<string, string>, data?: unknown }
-  output.statusCode = normalized.statusCode
-  output.code = normalized.code
-  output.message = normalized.message
-  output.fieldErrors = normalized.fieldErrors
-  output.data = fetchError?.data
-  return output
 }
 
 export function useApi() {
@@ -114,6 +100,7 @@ export function useApi() {
     timeoutMs: Number(config.public.apiTimeoutMs) || 30000,
     getRefreshToken: () => getRefreshToken(),
     setAccessToken: token => setAccessToken(token),
+    setRefreshToken: token => setRefreshToken(token),
     onSessionExpired: () => handleSessionFailure(),
   })
 
@@ -130,7 +117,11 @@ export function useApi() {
   }
 
   async function rotateRefreshToken(): Promise<boolean> {
-    return refresher.rotate()
+    if (sharedRefreshPromise) return sharedRefreshPromise
+    sharedRefreshPromise = refresher.rotate().finally(() => {
+      sharedRefreshPromise = null
+    })
+    return sharedRefreshPromise
   }
 
   function handleSessionFailure() {
@@ -237,6 +228,13 @@ export function useApi() {
             description: t('api.connectionErrorDescription'),
             color: 'error'
           })
+        }
+
+        // Feedback for this failure was already shown above (generic toast,
+        // permission alert, or session-expired alert). Flag it so callers do
+        // not add a second toast with the raw ofetch message.
+        if (!options.suppressErrorToast && fetchError.name === 'FetchError') {
+          markApiErrorHandled(fetchError)
         }
 
         throw err

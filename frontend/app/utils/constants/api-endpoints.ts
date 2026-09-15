@@ -14,6 +14,8 @@ export const ApiEndpoints = {
   AUTH_PROFILE_AVATAR: '/api/v1/auth/profile/avatar',
   AUTH_TELEGRAM_LINK_CODE: '/api/v1/auth/telegram/link-code',
 
+  IMAGE_UPLOAD: '/api/v1/images/upload',
+
   CATEGORIES: '/api/v1/categories',
   CATEGORY: (id: string) => `/api/v1/categories/${id}`,
 

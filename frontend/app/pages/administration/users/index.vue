@@ -1,7 +1,7 @@
 <script setup lang="ts">
 definePageMeta({
   titleKey: 'app.pages.users',
-  permission: 'user.manage',
+  permission: 'user.view',
 })
 </script>
 

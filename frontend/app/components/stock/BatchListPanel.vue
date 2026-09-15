@@ -7,6 +7,7 @@ import type { AppRecord } from '~/config/admin-seed'
 import type { ProductBatchRow } from '~/repositories/contracts/entities'
 import { useStockQueries } from '~/repositories/index'
 import { batchStatusColor } from '~/utils/stock/batch-lots'
+import { apiErrorMessage } from '~/utils/api/errors'
 import { formatMoney } from '~/utils/format/format-service'
 import { multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
 
@@ -61,7 +62,7 @@ async function loadBatches() {
     rows.value = result.items
   }
   catch (error: unknown) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
     rows.value = []
   }
   finally {

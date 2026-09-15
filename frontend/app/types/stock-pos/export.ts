@@ -11,22 +11,3 @@ export interface ExportRequest {
   scope: ExportScope
   fieldCodes: string[]
 }
-
-export type ExportJobStatus = 'queued' | 'processing' | 'completed' | 'failed'
-
-export interface ExportJob {
-  id: string
-  status: ExportJobStatus
-  resource: string
-  createdAt: string
-  downloadUrl?: string
-  expiresAt?: string
-  error?: string
-}
-
-export interface CreateExportJobInput extends ExportRequest {
-  resource: string
-  query?: Record<string, unknown>
-  selectedIds?: string[]
-  format: 'csv'
-}

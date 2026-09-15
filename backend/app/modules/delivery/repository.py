@@ -17,6 +17,17 @@ class DeliveryNoteRepository:
     async def get(self, delivery_note_id: uuid.UUID) -> DeliveryNote | None:
         return await self.session.get(DeliveryNote, delivery_note_id)
 
+    async def get_locked(self, delivery_note_id: uuid.UUID) -> DeliveryNote | None:
+        """Row-locked read for status transitions (serializes concurrent
+        out-for-delivery / deliver / cancel on the same note)."""
+        result = await self.session.execute(
+            select(DeliveryNote)
+            .where(DeliveryNote.id == delivery_note_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     @staticmethod
     def _sale_exists(sale_id: uuid.UUID) -> ColumnElement[bool]:
         return exists(

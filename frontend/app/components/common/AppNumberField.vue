@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { currencySymbol } from '~/utils/format/format-service'
+
 const props = withDefaults(defineProps<{
   modelValue?: number | null | undefined
   label?: string
@@ -18,6 +20,8 @@ const props = withDefaults(defineProps<{
   class?: string
   /** When set, renders a USD/KHR toggle at the end of the input. */
   currency?: 'USD' | 'KHR'
+  /** Money field: renders the currency symbol at the end of the input. */
+  money?: boolean
 }>(), {
   size: 'md',
 })
@@ -44,6 +48,8 @@ const value = computed({
   get: () => props.modelValue ?? undefined,
   set: (v: number | undefined) => emit('update:modelValue', v),
 })
+
+const moneySymbol = computed(() => (props.money ? currencySymbol(props.currency) : ''))
 </script>
 
 <template>
@@ -72,6 +78,9 @@ const value = computed({
         :max="max"
         :step="step"
         :size="size"
+        :increment="false"
+        :decrement="false"
+        :ui="{ base: 'pe-7' }"
         :class="[$props.class, fieldControlClass(Boolean(error))]"
         @blur="emit('blur', $event)"
         @focus="emit('focus', $event)"
@@ -89,6 +98,29 @@ const value = computed({
         @click="onCurrencySelect(option.value)"
       />
     </UFieldGroup>
+    <div
+      v-else-if="money"
+      class="relative w-full"
+    >
+      <UInputNumber
+        v-model="value"
+        :name="name"
+        :placeholder="placeholder"
+        :required="required"
+        :disabled="disabled"
+        :readonly="readonly"
+        :min="min"
+        :max="max"
+        :step="step"
+        :size="size"
+        :increment="false"
+        :decrement="false"
+        :class="[$props.class, fieldControlClass(Boolean(error))]"
+        @blur="emit('blur', $event)"
+        @focus="emit('focus', $event)"
+      />
+      <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted">{{ moneySymbol }}</span>
+    </div>
     <UInputNumber
       v-else
       v-model="value"

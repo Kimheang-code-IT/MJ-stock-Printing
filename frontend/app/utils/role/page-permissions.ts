@@ -1,43 +1,83 @@
 /**
- * Page-access registry — the single source of truth for which backend
- * permission each sidebar page requires. Used by `useMenu` (route gating) and
- * the Role & Permissions matrix ("Page access" list).
+ * Page-access registry — every sidebar page this system has, with the
+ * backend permission that unlocks the route and the full action block shown
+ * in the Role permission matrix.
  *
- * Each entry maps a **page/route** to the exact backend permission code the
- * page is gated by (the same code `definePageMeta` uses), so the matrix can
- * grant page access without the frontend/backend permission drift.
+ * Pages / actions are sourced from `PERMISSION_MATRIX_PAGES` so this file
+ * never invents codes the backend catalog does not expose.
  */
+import {
+  PERMISSION_MATRIX_PAGES,
+  type MatrixActionDefinition,
+  type MatrixGroupId,
+  type MatrixPageDefinition,
+} from '~/utils/role/permissions'
+
 export type PagePermission = {
+  /** Stable page id (matches the permission-matrix row). */
+  id: string
   /** Route path of the page. */
   path: string
   /** i18n label key for the page. */
   labelKey: string
-  /** Backend permission code that unlocks the page. */
+  /** Sidebar / matrix group. */
+  group: MatrixGroupId
+  /** Backend permission code that unlocks the page (menu + route gate). */
   permission: string
+  /** Every assignable action for this page block. */
+  actions: readonly MatrixActionDefinition[]
 }
 
-export const PAGE_PERMISSIONS: readonly PagePermission[] = [
-  { path: '/', labelKey: 'app.nav.dashboard', permission: 'dashboard.view' },
-  { path: '/stock/products', labelKey: 'app.stock.tabProducts', permission: 'stock.view' },
-  { path: '/stock/movements', labelKey: 'app.stock.tabMovements', permission: 'stock.view' },
-  { path: '/pos', labelKey: 'app.nav.pos', permission: 'pos.access' },
-  { path: '/delivery-notes', labelKey: 'app.nav.deliveryNotes', permission: 'delivery.view' },
-  { path: '/setup/categories', labelKey: 'app.nav.categories', permission: 'category.view' },
-  { path: '/setup/uoms', labelKey: 'app.nav.uoms', permission: 'uom.view' },
-  { path: '/setup/brands', labelKey: 'app.nav.brands', permission: 'brand.view' },
-  { path: '/setup/suppliers', labelKey: 'app.nav.suppliers', permission: 'supplier.view' },
-  { path: '/setup/customers', labelKey: 'app.nav.customers', permission: 'customer.view' },
-  { path: '/reports/sales', labelKey: 'app.pages.salesReport', permission: 'report.sales' },
-  { path: '/reports/purchases', labelKey: 'app.pages.purchaseReport', permission: 'report.purchase' },
-  { path: '/reports/customer-debts', labelKey: 'app.pages.customerDebtReport', permission: 'report.customer_debt' },
-  { path: '/reports/supplier-debts', labelKey: 'app.pages.supplierDebtReport', permission: 'report.supplier_debt' },
-  { path: '/reports/finance', labelKey: 'app.pages.financeReport', permission: 'report.finance' },
-  { path: '/administration/users', labelKey: 'app.pages.users', permission: 'user.manage' },
-  { path: '/administration/roles', labelKey: 'app.pages.roles', permission: 'role.manage' },
-  { path: '/administration/document-sequences', labelKey: 'app.pages.documentSequences', permission: 'sequence.manage' },
-  { path: '/administration/audit-logs', labelKey: 'app.pages.auditLogs', permission: 'audit.view' },
-  { path: '/administration/settings', labelKey: 'app.pages.settings', permission: 'settings.manage' },
-] as const
+/** Matrix page id → sidebar route path (only pages that exist in this app). */
+const PAGE_ROUTES: Readonly<Record<string, string>> = {
+  dashboard: '/',
+  products: '/stock/products',
+  stock_movements: '/stock/movements',
+  pos: '/pos',
+  delivery: '/delivery-notes',
+  categories: '/setup/categories',
+  uoms: '/setup/uoms',
+  brands: '/setup/brands',
+  suppliers: '/setup/suppliers',
+  customers: '/setup/customers',
+  sales_report: '/reports/sales',
+  purchase_report: '/reports/purchases',
+  customer_debt_report: '/reports/customer-debts',
+  supplier_debt_report: '/reports/supplier-debts',
+  finance_report: '/reports/finance',
+  users: '/administration/users',
+  roles: '/administration/roles',
+  document_sequences: '/administration/document-sequences',
+  audit_logs: '/administration/audit-logs',
+  settings: '/administration/settings',
+}
+
+/** Prefer View / Checkout as the route gate; otherwise the first action. */
+function gatePermission(page: MatrixPageDefinition): string {
+  const preferred = page.actions.find(action =>
+    action.key === 'view'
+    || action.key === 'checkout',
+  )
+  return (preferred || page.actions[0])!.permission
+}
+
+function toPagePermission(page: MatrixPageDefinition): PagePermission | null {
+  const path = PAGE_ROUTES[page.value]
+  if (!path || !page.actions.length) return null
+  return {
+    id: page.value,
+    path,
+    labelKey: page.labelKey,
+    group: page.group,
+    permission: gatePermission(page),
+    actions: page.actions,
+  }
+}
+
+/** Every page block this system ships, with its full action list. */
+export const PAGE_PERMISSIONS: readonly PagePermission[] = PERMISSION_MATRIX_PAGES
+  .map(toPagePermission)
+  .filter((page): page is PagePermission => page !== null)
 
 /** Route path → required permission (page gating in `useMenu`). */
 export const ROUTE_PERMISSION: Record<string, string> = Object.fromEntries(

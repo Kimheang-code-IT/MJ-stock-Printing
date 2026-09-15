@@ -21,6 +21,9 @@ class ProductCreate(BaseModel):
     category_id: UUID
     uom_id: UUID
     brand_id: UUID | None = None
+    supplier_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("supplier_id", "supplierId")
+    )
     cost_price: Decimal = Field(default=Decimal("0.00"), ge=0)
     selling_price: Decimal = Field(
         gt=0,
@@ -56,6 +59,9 @@ class ProductUpdate(BaseModel):
     category_id: UUID | None = None
     uom_id: UUID | None = None
     brand_id: UUID | None = None
+    supplier_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("supplier_id", "supplierId")
+    )
     cost_price: Decimal | None = Field(default=None, ge=0)
     # The UI sends salePrice; changing it adds + activates a new price version.
     selling_price: Decimal | None = Field(

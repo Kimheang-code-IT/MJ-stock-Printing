@@ -276,71 +276,80 @@ function partyTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): Do
  * and saved with the same Save as General, plus sale-price version history),
  * and **Movements** (read-only batch-traceable movement ledger). No Cost
  * column, no separate Convert UOM tab and no separate Expire tab.
+ *
+ * Create mode keeps only the editable inputs: the Expiry & Batches section
+ * (read-only nearest expiry + lots) and the Movements tab have no data yet,
+ * so they appear only once the product exists (detail/edit).
  */
 function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
-  return [
+  const generalSections: DocumentSectionSchema[] = [
+    ...fieldsToSections(module.fields, options.readOnlyKeys, options),
+    {
+      id: 'stock-costing',
+      titleKey: 'app.stock.costingTitle',
+      title: 'Stock Costing',
+      fields: [
+        {
+          key: 'trackBatch',
+          labelKey: 'app.stock.trackBatch',
+          label: 'Track Batch',
+          type: 'boolean',
+          helpKey: 'app.stock.trackBatchHint',
+        },
+        // Track Expiry implies Track Batch — an expiry lot is always a
+        // batch lot. Kept consistent on save (DocumentView).
+        {
+          key: 'expiryTracking',
+          labelKey: 'app.stock.expiryTracking',
+          label: 'Track Expiry',
+          type: 'boolean',
+          helpKey: 'app.stock.expiryTrackingHint',
+        },
+        {
+          key: 'fifo',
+          labelKey: 'app.stock.fifo',
+          label: 'FIFO (First In, First Out)',
+          type: 'boolean',
+          helpKey: 'app.stock.fifoHint',
+        },
+      ],
+    },
+  ]
+
+  if (!options.isCreate) {
+    generalSections.push({
+      id: 'stock-expire',
+      titleKey: 'app.stock.batchesTitle',
+      title: 'Expiry & Batches',
+      fields: [
+        // Read-only nearest-expiry readout from Stock In lots.
+        {
+          key: 'expiryDate',
+          labelKey: 'app.stock.expiryDate',
+          label: 'Expire Date',
+          type: 'date',
+          readOnly: true,
+          helpKey: 'app.stock.expiryDateHint',
+        },
+        // Read-only batch lots of this product (loaded only when the tab
+        // is open — no global batch fetch).
+        {
+          key: '__record',
+          labelKey: 'app.stock.batchesTab',
+          type: 'batches',
+          colSpan: 2,
+          helpKey: 'app.stock.batchesTitle',
+        },
+      ],
+    })
+  }
+
+  const tabs: DocumentTabSchema[] = [
     {
       id: 'general',
       labelKey: 'app.stock.tabGeneral',
       label: 'General',
-      sections: [
-        ...fieldsToSections(module.fields, options.readOnlyKeys, options),
-        {
-          id: 'stock-costing',
-          titleKey: 'app.stock.costingTitle',
-          title: 'Stock Costing',
-          fields: [
-            {
-              key: 'trackBatch',
-              labelKey: 'app.stock.trackBatch',
-              label: 'Track Batch',
-              type: 'boolean',
-              helpKey: 'app.stock.trackBatchHint',
-            },
-            // Track Expiry implies Track Batch — an expiry lot is always a
-            // batch lot. Kept consistent on save (DocumentView).
-            {
-              key: 'expiryTracking',
-              labelKey: 'app.stock.expiryTracking',
-              label: 'Track Expiry',
-              type: 'boolean',
-              helpKey: 'app.stock.expiryTrackingHint',
-            },
-            {
-              key: 'fifo',
-              labelKey: 'app.stock.fifo',
-              label: 'FIFO (First In, First Out)',
-              type: 'boolean',
-              helpKey: 'app.stock.fifoHint',
-            },
-          ],
-        },
-        {
-          id: 'stock-expire',
-          titleKey: 'app.stock.batchesTitle',
-          title: 'Expiry & Batches',
-          fields: [
-            // Read-only nearest-expiry readout from Stock In lots.
-            {
-              key: 'expiryDate',
-              labelKey: 'app.stock.expiryDate',
-              label: 'Expire Date',
-              type: 'date',
-              readOnly: true,
-              helpKey: 'app.stock.expiryDateHint',
-            },
-            // Read-only batch lots of this product (loaded only when the tab
-            // is open — no global batch fetch).
-            {
-              key: '__record',
-              labelKey: 'app.stock.batchesTab',
-              type: 'batches',
-              colSpan: 2,
-              helpKey: 'app.stock.batchesTitle',
-            },
-          ],
-        },
-      ],
+      sections: generalSections,
     },
     {
       id: 'pricing',
@@ -359,7 +368,10 @@ function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): 
         ],
       }],
     },
-    {
+  ]
+
+  if (!options.isCreate) {
+    tabs.push({
       id: 'movements',
       labelKey: 'app.stock.tabMovements',
       label: 'Stock Movements',
@@ -377,8 +389,10 @@ function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): 
           },
         ],
       }],
-    },
-  ]
+    })
+  }
+
+  return tabs
 }
 
 function defaultTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {

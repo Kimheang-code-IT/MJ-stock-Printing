@@ -57,3 +57,83 @@ async def test_me_requires_auth(client):
 
     response = await client.get("/api/v1/auth/me", headers={"Authorization": "Bearer garbage"})
     assert response.status_code == 401
+
+
+async def test_refresh_accepts_camel_case_spa_body(client):
+    """The SPA token layer posts { refreshToken } — the schema must accept it."""
+    response = await _login(client)
+    data = response.json()["data"]
+
+    refresh = await client.post("/api/v1/auth/refresh", json={"refreshToken": data["refresh_token"]})
+    assert refresh.status_code == 200, refresh.text
+    rotated = refresh.json()["data"]
+    assert rotated["accessToken"]
+    assert rotated["refreshToken"] != data["refresh_token"]
+
+
+async def test_logout_revokes_camel_case_refresh_token(client):
+    """Logout must revoke the refresh JTI even when the body uses camelCase."""
+    response = await _login(client)
+    data = response.json()["data"]
+    headers = {"Authorization": f"Bearer {data['access_token']}"}
+
+    logout = await client.post("/api/v1/auth/logout", json={"refreshToken": data["refresh_token"]}, headers=headers)
+    assert logout.status_code == 200, logout.text
+
+    replay = await client.post("/api/v1/auth/refresh", json={"refresh_token": data["refresh_token"]})
+    assert replay.status_code == 401
+
+
+async def test_refresh_fails_closed_when_denylist_unavailable(client, monkeypatch):
+    """If the revocation store (Redis) is unreachable, refresh must be denied
+    rather than accepted (fail closed)."""
+    response = await _login(client)
+    refresh_token = response.json()["data"]["refresh_token"]
+
+    import app.modules.auth.service as auth_service
+
+    class BrokenRedis:
+        async def exists(self, *args, **kwargs):
+            raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(auth_service, "get_redis", lambda: BrokenRedis())
+
+    refresh = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert refresh.status_code == 401, refresh.text
+
+
+async def test_e2e_security_settings_persist_and_lockout(client):
+    """Security settings persist (no longer frontend-only) and the configured
+    max login attempts actually locks the account."""
+    from tests.utils import admin_headers
+
+    admin = await admin_headers(client)
+    patched = await client.patch(
+        "/api/v1/settings/app-config",
+        json={"security": {"maxLoginAttempts": 2, "accountLockMinutes": 1, "jwtRefreshTokenDays": 21}},
+        headers=admin,
+    )
+    assert patched.status_code == 200, patched.text
+    security = patched.json()["data"]["security"]
+    assert security["maxLoginAttempts"] == 2
+    assert security["accountLockMinutes"] == 1
+    assert security["jwtRefreshTokenDays"] == 21
+
+    try:
+        target = "lockout-target@example.com"
+        for _ in range(2):
+            response = await client.post(
+                "/api/v1/auth/login", json={"email": target, "password": "wrong-password"}
+            )
+            assert response.status_code == 401, response.text
+
+        locked = await client.post(
+            "/api/v1/auth/login", json={"email": target, "password": "wrong-password"}
+        )
+        assert locked.status_code == 429, locked.text
+    finally:
+        await client.patch(
+            "/api/v1/settings/app-config",
+            json={"security": {"maxLoginAttempts": 5, "accountLockMinutes": 15, "jwtRefreshTokenDays": 14}},
+            headers=admin,
+        )

@@ -16,14 +16,3 @@ export function parsePageLimit(raw: unknown, defaultLimit = 10): number {
   if (n > 200) return 200
   return Math.min(Math.max(Math.round(n), 10), 100)
 }
-
-/** Serialize for URL query — omit when equal to default. */
-export function serializePageLimit(limit: number, defaultLimit = 10): string | undefined {
-  if (limit === defaultLimit) return undefined
-  return String(limit)
-}
-
-/** Items-per-page for UPagination when showing all (single page). */
-export function paginationItemsPerPage(limit: number): number {
-  return Math.max(limit, 1)
-}

@@ -15,7 +15,7 @@ async def test_app_config_exposes_full_document(client):
     config = response.json()["data"]
     for section in ("general", "localization", "email", "telegram", "stock", "notifications", "security", "system"):
         assert section in config, f"missing App Config section {section}"
-    assert config["telegram"]["botToken"] == "********"
+    assert config["telegram"]["botToken"] == ""
     assert set(config["stock"]) >= {"lowStockLevel", "expiryAlert1Days", "expiryAlert2Days"}
 
 

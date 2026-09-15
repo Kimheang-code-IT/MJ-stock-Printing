@@ -57,10 +57,17 @@ class RoleRepository:
     async def set_role_permissions(self, role: Role, permission_codes: list[str]) -> None:
         from sqlalchemy import delete
 
+        from app.core.permissions import build_all_permissions
+
+        await self.sync_permission_catalog(build_all_permissions())
         await self.session.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
         if permission_codes:
             result = await self.session.execute(select(Permission).where(Permission.code.in_(permission_codes)))
-            for permission in result.scalars().all():
+            found = {permission.code: permission for permission in result.scalars().all()}
+            missing = sorted(set(permission_codes) - set(found))
+            if missing:
+                raise ValueError(f"Unknown permissions: {', '.join(missing)}")
+            for permission in found.values():
                 self.session.add(RolePermission(role_id=role.id, permission_id=permission.id))
         await self.session.flush()
         # Re-sync the in-memory collection with the database without lazy IO.
@@ -86,3 +93,19 @@ class RoleRepository:
                 Permission(code=code, module=module_by_code.get(code, module), action=action)
             )
         await self.session.flush()
+
+    async def ensure_administrator_role(self) -> Role:
+        """Sync the catalog and guarantee the system Administrator keeps ALL_PAGES."""
+        from app.core.permissions import SUPER_ADMIN_PERMISSION, SUPER_ADMIN_ROLE, build_all_permissions
+
+        await self.sync_permission_catalog(build_all_permissions())
+        role = await self.get_by_name(SUPER_ADMIN_ROLE)
+        if role is None:
+            return await self.create_system_role(
+                SUPER_ADMIN_ROLE, "Full system access", [SUPER_ADMIN_PERMISSION]
+            )
+        role.is_system = True
+        role.status = "ACTIVE"
+        if SUPER_ADMIN_PERMISSION not in role.permissions:
+            await self.set_role_permissions(role, [SUPER_ADMIN_PERMISSION])
+        return role

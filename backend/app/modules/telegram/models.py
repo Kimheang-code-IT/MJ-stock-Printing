@@ -16,7 +16,6 @@ from sqlalchemy import (
     Index,
     SmallInteger,
     String,
-    UniqueConstraint,
     func,
     text,
 )
@@ -30,7 +29,9 @@ class TelegramExpiryAlertState(Base):
     __tablename__ = "telegram_expiry_alert_state"
     __table_args__ = (
         # Spec UNIQUE (product_id, batch_no, expiry_date, alert_level) with
-        # NULL-safe batch handling for lots without a batch number.
+        # NULL-safe batch handling for lots without a batch number. Matches
+        # migration 0009 (a plain UniqueConstraint is NOT created in prod: it
+        # would treat NULL batch_no values as distinct).
         Index(
             "uq_telegram_expiry_alert_state_lot",
             "product_id",
@@ -38,13 +39,6 @@ class TelegramExpiryAlertState(Base):
             "expiry_date",
             "alert_level",
             unique=True,
-        ),
-        UniqueConstraint(
-            "product_id",
-            "batch_no",
-            "expiry_date",
-            "alert_level",
-            name="uq_telegram_expiry_alert_state_spec",
         ),
         Index("ix_telegram_expiry_alert_state_product_id", "product_id"),
     )

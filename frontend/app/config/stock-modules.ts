@@ -42,6 +42,9 @@ function createModule(partial: Omit<ModuleConfig, 'canCreate' | 'titleKm' | 'sin
 }
 
 const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Payment', 'Bank Transfer', 'Credit'] as const
+// Canonical tender values the backend records on sale payments (and that the
+// grouped Sales Report rows expose), so the toolbar filter can match them.
+const SALE_PAYMENT_METHODS = ['CASH', 'BANK_QR', 'CUSTOMER_DEBT'] as const
 const SALE_STATUS = ['Paid', 'Partial', 'Unpaid', 'Returned'] as const
 const DEBT_STATUS = ['UNPAID', 'PARTIAL', 'PAID'] as const
 const STOCK_MOVEMENT_TYPES = [
@@ -75,7 +78,7 @@ export const stockModules: ModuleConfig[] = [
     ],
     fields: [
       f('name', 'Name', 'General Information', 'text', undefined, { required: true }),
-      f('code', 'Code', 'General Information', 'text', undefined, { help: 'Unique short code. Leave blank to let the system generate one.' }),
+      f('code', 'Code', 'General Information', 'text', undefined, { required: true, help: 'Unique short code for this record.' }),
       f('description', 'Description', 'General Information', 'textarea', undefined, { colSpan: 2 }),
       f('status', 'Status', 'Status', 'select', ACTIVE_INACTIVE, { required: true }),
     ],
@@ -104,7 +107,7 @@ export const stockModules: ModuleConfig[] = [
     ],
     fields: [
       f('name', 'Name', 'General Information', 'text', undefined, { required: true }),
-      f('code', 'Code', 'General Information', 'text', undefined, { help: 'Unique short code. Leave blank to let the system generate one.' }),
+      f('code', 'Code', 'General Information', 'text', undefined, { required: true, help: 'Unique short code for this record.' }),
       f('symbol', 'Symbol', 'General Information', 'text', undefined, { required: true, help: 'Short form shown on lists and invoices, e.g. pcs, box, kg.' }),
       f('description', 'Description', 'General Information', 'textarea', undefined, { colSpan: 2 }),
       f('status', 'Status', 'Status', 'select', ACTIVE_INACTIVE, { required: true }),
@@ -133,7 +136,7 @@ export const stockModules: ModuleConfig[] = [
     ],
     fields: [
       f('name', 'Brand Name', 'General Information', 'text', undefined, { required: true }),
-      f('code', 'Code', 'General Information', 'text', undefined, { help: 'Unique short code. Leave blank to let the system generate one.' }),
+      f('code', 'Code', 'General Information', 'text', undefined, { required: true, help: 'Unique short code for this record.' }),
       f('description', 'Description', 'General Information', 'textarea', undefined, { colSpan: 2 }),
       f('status', 'Status', 'Status', 'select', ACTIVE_INACTIVE, { required: true }),
     ],
@@ -171,7 +174,7 @@ export const stockModules: ModuleConfig[] = [
       f('categoryId', 'Category', 'General Information', 'select', undefined, { required: true, optionsCollection: 'categories' }),
       f('imageUrl', 'Image', 'General Information', 'image'),
       f('brandId', 'Brand', 'General Information', 'select', undefined, { optionsCollection: 'brands' }),
-      f('barcode', 'Barcode', 'General Information', 'text'),
+      f('barcode', 'Barcode', 'General Information', 'text', undefined, { hideOnCreate: true, help: 'Generated automatically. Shown once the product is saved.' }),
       f('uomId', 'Unit of Measure', 'General Information', 'select', undefined, { required: true, optionsCollection: 'uoms' }),
       f('supplierId', 'Supplier', 'General Information', 'select', undefined, { optionsCollection: 'suppliers' }),
       // Spec §5.9 General tab: identity only. Sale price lives on the Pricing
@@ -265,11 +268,13 @@ export const stockModules: ModuleConfig[] = [
       col('customer', 'Customer'),
       col('lineCount', 'Items'),
       col('subtotal', 'Subtotal'),
-      col('discount', 'Discount'),
-      col('total', 'Total'),
-      col('paidAmount', 'Paid'),
-      col('remaining', 'Remaining'),
-      col('paymentMethod', 'Payment Method'),
+      col('discountAmount', 'Discount'),
+      col('deliveryPrice', 'Delivery'),
+      col('total', 'Grand Total'),
+      col('paidAmount', 'Paid Amount'),
+      col('remainingAmount', 'Remaining'),
+      col('paymentMethodLabel', 'Payment Method'),
+      col('currency', 'Currency'),
       col('status', 'Status'),
     ],
     fields: [
@@ -282,7 +287,7 @@ export const stockModules: ModuleConfig[] = [
     filters: [
       f('customer', 'Customer', '', 'select'),
       f('status', 'Status', '', 'select', SALE_STATUS),
-      f('paymentMethod', 'Payment Method', '', 'select', PAYMENT_METHODS),
+      f('paymentMethod', 'Payment Method', '', 'select', SALE_PAYMENT_METHODS),
     ],
   }),
   createModule({

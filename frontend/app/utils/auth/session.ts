@@ -5,7 +5,7 @@ export const AUTH_STORAGE_KEY = 'stockpos:auth:user'
 /** Cookie-safe user: drop bulky permission lists that overflow the 4KB cookie limit. */
 export function compactAuthUser(user: AuthUser): AuthUser {
   const effective = user.effectivePermissions ?? user.permissions ?? user.pageAccess ?? []
-  const isAllAccess = effective.includes('ALL_PAGES')
+  const isAllAccess = user.role === 'Administrator' || effective.includes('ALL_PAGES')
   return {
     id: user.id,
     name: user.name,

@@ -95,7 +95,7 @@ export type ModuleDocumentForm = 'roles' | 'product' | 'party'
 
 /** Explicit backend permission codes for a module's mutation actions. The
  *  backend catalog does not follow a single `{module}.{action}` convention
- *  (e.g. `stock.view` vs `product.update`, `user.manage`), so modules declare
+ *  (e.g. `stock.view` vs `product.update`, `user.update`), so modules declare
  *  the exact codes instead of deriving them. */
 export type ModuleActionPermissions = {
   create?: string

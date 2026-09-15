@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AccessDeniedError, ConflictError, NotFoundError, ValidationError
@@ -638,21 +638,21 @@ class DeliveryNoteService:
         return note
 
     async def out_for_delivery(self, delivery_note_id: uuid.UUID, *, actor: User) -> DeliveryNote:
-        note = await self.get(delivery_note_id)
+        note = await self._get_locked(delivery_note_id)
         await self._transition(note, DeliveryNote.STATUS_OUT_FOR_DELIVERY, actor=actor)
         await self.session.commit()
         await self.session.refresh(note, attribute_names=["items", "sales"])
         return note
 
     async def deliver(self, delivery_note_id: uuid.UUID, *, actor: User) -> DeliveryNote:
-        note = await self.get(delivery_note_id)
+        note = await self._get_locked(delivery_note_id)
         await self._transition(note, DeliveryNote.STATUS_DELIVERED, actor=actor)
         await self.session.commit()
         await self.session.refresh(note, attribute_names=["items", "sales"])
         return note
 
     async def cancel(self, delivery_note_id: uuid.UUID, payload, *, actor: User) -> DeliveryNote:
-        note = await self.get(delivery_note_id)
+        note = await self._get_locked(delivery_note_id)
         reason = getattr(payload, "reason", None) or getattr(payload, "cancel_reason", None)
         await self._transition(note, DeliveryNote.STATUS_CANCELLED, actor=actor, reason=reason)
         await self.session.commit()
@@ -724,6 +724,14 @@ class DeliveryNoteService:
             raise NotFoundError("Delivery note not found")
         return note
 
+    async def _get_locked(self, delivery_note_id: uuid.UUID) -> DeliveryNote:
+        """Locked header read for status transitions so concurrent transitions
+        cannot both read the same old status and lost-update each other."""
+        note = await self.repo.get_locked(delivery_note_id)
+        if note is None:
+            raise NotFoundError("Delivery note not found")
+        return note
+
     async def list(self, *, q, status, customer_id, start, end, page, limit) -> tuple[list[DeliveryNote], int]:
         return await self.repo.list(
             q=q,
@@ -761,24 +769,50 @@ class DeliveryNoteService:
     ) -> dict[uuid.UUID, str]:
         """Derived delivery status per invoice (NOT_DELIVERED /
         PARTIALLY_DELIVERED / FULLY_DELIVERED) from delivered quantities
-        across all non-cancelled delivery notes."""
-        if not sale_ids:
+        across all non-cancelled delivery notes.
+
+        Batched (3 queries total regardless of how many invoices) — this is
+        called once per list page instead of once per note (P2 N+1)."""
+        unique = set(sale_ids)
+        if not unique:
             return {}
+        items_result = await self.session.execute(
+            select(SaleItem.sale_id, SaleItem.id, SaleItem.quantity, SaleItem.returned_quantity)
+            .where(SaleItem.sale_id.in_(unique))
+        )
+        ordered: dict[uuid.UUID, list[tuple[uuid.UUID, Decimal]]] = {}
+        for sale_id, item_id, quantity, returned in items_result.all():
+            ordered.setdefault(sale_id, []).append((item_id, _q4(quantity - returned)))
+
+        delivered_result = await self.session.execute(
+            select(
+                DeliveryNoteItem.sale_id,
+                DeliveryNoteItem.sale_item_id,
+                func.coalesce(func.sum(DeliveryNoteItem.qty_delivered), 0),
+            )
+            .join(DeliveryNote, DeliveryNote.id == DeliveryNoteItem.delivery_note_id)
+            .where(
+                DeliveryNoteItem.sale_id.in_(unique),
+                DeliveryNote.status != DeliveryNote.STATUS_CANCELLED,
+            )
+            .group_by(DeliveryNoteItem.sale_id, DeliveryNoteItem.sale_item_id)
+        )
+        delivered_map = {
+            (sale_id, item_id): Decimal(total)
+            for sale_id, item_id, total in delivered_result.all()
+        }
+
         statuses: dict[uuid.UUID, str] = {}
-        for sale_id in set(sale_ids):
-            sale = await self.session.get(Sale, sale_id)
-            if sale is None:
-                continue
-            sale_items = await self._sale_items(sale_id)
-            delivered = await self.repo.delivered_by_sale_item(sale_id)
+        for sale_id in unique:
             ordered_total = Decimal("0")
             delivered_total = Decimal("0")
-            for item in sale_items:
-                ordered = _q4(item.quantity - item.returned_quantity)
-                if ordered <= 0:
+            for item_id, ordered_qty in ordered.get(sale_id, []):
+                if ordered_qty <= 0:
                     continue
-                ordered_total += ordered
-                delivered_total += min(_q4(delivered.get(item.id, Decimal("0"))), ordered)
+                ordered_total += ordered_qty
+                delivered_total += min(
+                    _q4(delivered_map.get((sale_id, item_id), Decimal("0"))), ordered_qty
+                )
             if ordered_total <= 0 or delivered_total <= 0:
                 statuses[sale_id] = "NOT_DELIVERED"
             elif delivered_total >= ordered_total:

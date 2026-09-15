@@ -474,15 +474,14 @@ function onNeedsDelivery(value: unknown) {
             :label="t('app.pos.depositTotal')"
             size="md"
           >
-            <UInputNumber
+            <CommonAppCurrencyInput
               :model-value="depositInput"
+              :currency="saleCurrency"
               :min="0"
               :step="0.01"
-              :increment="false"
-              :decrement="false"
               class="w-full"
               size="lg"
-              :ui="{ base: 'text-base tabular-nums' }"
+              align="right"
               :disabled="disabled || saleCurrency === 'KHR'"
               @update:model-value="emitDeposit($event)"
             />
@@ -512,16 +511,15 @@ function onNeedsDelivery(value: unknown) {
             :label="t('app.pos.paidNow')"
             size="md"
           >
-            <UInputNumber
+            <CommonAppCurrencyInput
               :model-value="paidInput"
+              :currency="saleCurrency"
               :min="0"
               :max="due"
               :step="0.01"
-              :increment="false"
-              :decrement="false"
               class="w-full"
               size="lg"
-              :ui="{ base: 'text-base tabular-nums' }"
+              align="right"
               :placeholder="String(due.toFixed(2))"
               :disabled="disabled || paymentMethod === 'Credit'"
               @update:model-value="emitPaid($event)"
@@ -571,6 +569,7 @@ function onNeedsDelivery(value: unknown) {
       :customer-phone="customerPhone"
       :customer-location="customerLocation"
       :delivery-price="deliveryPrice"
+      :currency="saleCurrency"
       :disabled="disabled"
       @update:delivery-phone="emit('update:deliveryPhone', $event)"
       @update:delivery-location="emit('update:deliveryLocation', $event)"

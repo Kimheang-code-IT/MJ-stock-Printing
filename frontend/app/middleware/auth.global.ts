@@ -2,20 +2,13 @@ import { useAccessAlert } from '~/composables/common/useAccessAlert'
 import { safeInternalPath } from '~/utils/auth/session'
 import { resolveApiBase } from '~/utils/api/base-url'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
+import { PAGE_PERMISSIONS } from '~/utils/role/page-permissions'
 
-const PERMITTED_LANDING_ROUTES = [
-  ['/', 'dashboard.view'],
-  ['/setup/categories', 'category.view'],
-  ['/setup/uoms', 'uom.view'],
-  ['/setup/brands', 'brand.view'],
-  ['/stock/products', 'stock.view'],
-  ['/setup/suppliers', 'supplier.view'],
-  ['/pos', 'pos.access'],
-  ['/setup/customers', 'customer.view'],
-  ['/reports/sales', 'report.sales'],
-  ['/administration/users', 'user.manage'],
-  ['/administration/settings', 'settings.manage'],
-] as const
+// Single source of truth (page-permissions.ts) so a direct URL denial always
+// has an authorized landing page for the user's granted permissions.
+const PERMITTED_LANDING_ROUTES = PAGE_PERMISSIONS.map(
+  page => [page.path, page.permission] as const,
+)
 
 // Public `GET /auth/setup/status`, cached only once completed (it never flips
 // back). Fail-open so a transient API error still shows the login page.

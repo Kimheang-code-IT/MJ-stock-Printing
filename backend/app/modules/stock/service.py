@@ -85,6 +85,7 @@ class ProductService:
         await self._validate_category(payload.category_id)
         await self._validate_uom(payload.uom_id)
         await self._validate_brand(payload.brand_id)
+        await self._validate_supplier(payload.supplier_id)
 
         data = payload.model_dump()
         conversions = data.pop("uom_conversions", None)
@@ -111,7 +112,7 @@ class ProductService:
             self.session, product, actor_id=None
         )
         await self.session.commit()
-        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "uom_ref", "balance"])
+        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "uom_ref", "supplier_ref", "balance"])
         return product_to_out(product)
 
     async def update(self, product_id: uuid.UUID, payload, *, actor: User) -> dict:
@@ -123,6 +124,9 @@ class ProductService:
         # image_object_key=None explicitly clears the product image.
         if "image_object_key" in payload.model_fields_set and payload.image_object_key is None:
             changes["image_object_key"] = None
+        # supplier_id=None explicitly clears the product's default supplier.
+        if "supplier_id" in payload.model_fields_set and payload.supplier_id is None:
+            changes["supplier_id"] = None
         if "uom_conversions" in payload.model_fields_set:
             from app.modules.stock import sale_prices as sale_price_service
 
@@ -146,6 +150,8 @@ class ProductService:
             await self._validate_uom(changes["uom_id"])
         if "brand_id" in changes:
             await self._validate_brand(changes["brand_id"])
+        if changes.get("supplier_id") is not None:
+            await self._validate_supplier(changes["supplier_id"])
 
         # A selling-price change becomes "add + activate a new sale-price
         # version" so POS (which reads the active version) never diverges.
@@ -187,7 +193,7 @@ class ProductService:
                 },
             )
         await self.session.commit()
-        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "uom_ref", "balance"])
+        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "uom_ref", "supplier_ref", "balance"])
         return product_to_out(product)
 
     async def delete(self, product_id: uuid.UUID) -> None:
@@ -250,6 +256,15 @@ class ProductService:
                 field_errors={"brand_id": "Brand is inactive"},
             )
 
+    async def _validate_supplier(self, supplier_id) -> None:
+        """Default supplier is optional, but when set it must exist."""
+        if supplier_id is None:
+            return
+        from app.modules.suppliers.models import Supplier
+
+        if await self.session.get(Supplier, supplier_id) is None:
+            raise NotFoundError("Supplier not found")
+
 # ============================================================================
 # Canonical stock mutation service
 # ============================================================================
@@ -279,6 +294,18 @@ def _q4(value) -> Decimal:
 
 def _q2(value) -> Decimal:
     return Decimal(value).quantize(TWO, rounding=ROUND_HALF_UP)
+
+
+def _usd_unit_cost(amount, currency, exchange_rate) -> Decimal:
+    """Convert a document-currency unit cost to the canonical cost currency
+    (USD) using the document exchange rate (KHR per 1 USD). Cost ledgers
+    (movements, balances, batches, sale-item snapshots) are ALWAYS USD so a
+    KHR purchase and a USD sale never contaminate each other (F2)."""
+    value = Decimal(amount)
+    rate = Decimal(exchange_rate or 1)
+    if str(currency or "USD").upper() == "KHR" and rate > 0:
+        return (value / rate).quantize(TWO, rounding=ROUND_HALF_UP)
+    return value.quantize(TWO, rounding=ROUND_HALF_UP)
 
 
 async def _lock_balance(session: AsyncSession, product_id) -> StockBalance:
@@ -569,8 +596,11 @@ class StockOperationService:
                     "Line quantity must be greater than zero",
                     field_errors={"items": "Invalid quantity"},
                 )
-            # unit_cost is per selected UOM; the ledger keeps the base-unit cost.
+            # unit_cost is per selected UOM; the transaction line keeps the
+            # document-currency cost, while the cost ledger keeps the base-unit
+            # cost converted to the canonical USD currency.
             base_unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
+            ledger_unit_cost = _usd_unit_cost(base_unit_cost, transaction.currency, transaction.exchange_rate)
             line_total = (Decimal(item.quantity) * Decimal(item.unit_cost)).quantize(TWO, rounding=ROUND_HALF_UP)
             # Line UOM symbol snapshot: the caller's value or the product's
             # base UOM symbol (display only — quantities stay in base UOM).
@@ -602,7 +632,7 @@ class StockOperationService:
                 batch_no=item.batch_no,
                 expiry_date=item.expiry_date,
                 quantity_base=base_quantity,
-                unit_cost_per_base=base_unit_cost,
+                unit_cost_per_base=ledger_unit_cost,
                 supplier_id=transaction.supplier_id,
                 document_no=document_no,
             )
@@ -611,7 +641,7 @@ class StockOperationService:
                 product_id=item.product_id,
                 movement_type="STOCK_IN",
                 quantity_delta=base_quantity,
-                unit_cost=base_unit_cost,
+                unit_cost=ledger_unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,
@@ -784,12 +814,17 @@ class StockOperationService:
                     include_expired=True,
                 )
                 await batch_service.deduct_allocations(self.session, allocations)
+            # Reverse cost in canonical USD (the original document currency is
+            # still on the header at this point).
+            reverse_unit_cost = _usd_unit_cost(
+                row.unit_cost, transaction.currency, transaction.exchange_rate
+            )
             await apply_stock_movement(
                 self.session,
                 product_id=row.product_id,
                 movement_type="PURCHASE_RETURN",
                 quantity_delta=-quantity,
-                unit_cost=row.unit_cost,
+                unit_cost=reverse_unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,
@@ -848,6 +883,7 @@ class StockOperationService:
             if base_quantity <= 0:
                 raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
             base_unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
+            ledger_unit_cost = _usd_unit_cost(base_unit_cost, payload.currency, payload.exchange_rate)
             line_total = (Decimal(item.quantity) * Decimal(item.unit_cost)).quantize(TWO, rounding=ROUND_HALF_UP)
             line_uom_symbol = (
                 item.uom_symbol
@@ -872,7 +908,7 @@ class StockOperationService:
                 batch_no=item.batch_no,
                 expiry_date=item.expiry_date,
                 quantity_base=base_quantity,
-                unit_cost_per_base=base_unit_cost,
+                unit_cost_per_base=ledger_unit_cost,
                 supplier_id=transaction.supplier_id,
                 document_no=transaction.document_no,
             )
@@ -881,7 +917,7 @@ class StockOperationService:
                 product_id=item.product_id,
                 movement_type="STOCK_IN",
                 quantity_delta=base_quantity,
-                unit_cost=base_unit_cost,
+                unit_cost=ledger_unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,

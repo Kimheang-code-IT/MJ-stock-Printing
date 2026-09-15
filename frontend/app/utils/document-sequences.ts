@@ -11,8 +11,6 @@ export const DEFAULT_DOCUMENT_SEQUENCE_TYPES = [
   'PRODUCT',
 ] as const
 
-export const DOCUMENT_SEQUENCE_TYPES = DEFAULT_DOCUMENT_SEQUENCE_TYPES
-
 export const DOCUMENT_SEQUENCE_STATUSES = ['ACTIVE', 'INACTIVE'] as const
 
 const TYPE_LABELS: Record<string, string> = {
@@ -38,11 +36,6 @@ const LEGACY_TYPES: Record<string, string> = {
 export function normalizeDocumentSequenceType(value: unknown) {
   const raw = String(value || '').trim().toUpperCase().replace(/\s+/g, '_')
   return LEGACY_TYPES[raw] || LEGACY_TYPES[String(value || '')] || raw
-}
-
-export function isDocumentSequenceType(value: string) {
-  const normalized = normalizeDocumentSequenceType(value)
-  return (DEFAULT_DOCUMENT_SEQUENCE_TYPES as readonly string[]).includes(normalized)
 }
 
 export function documentSequenceTypeLabel(value: unknown) {

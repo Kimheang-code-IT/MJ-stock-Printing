@@ -59,21 +59,3 @@ export function extractText(input: ExtractInput): string {
   const context = input.contextTitle ? `Related to: ${input.contextTitle}.` : ''
   return [name, context, seeded].filter(Boolean).join('\n')
 }
-
-/** Build a short snippet around the first query match. */
-export function makeSnippet(text: string, query: string, radius = 72): string {
-  const body = text.replace(/\s+/g, ' ').trim()
-  if (!body) return ''
-  const q = query.trim().toLowerCase()
-  if (!q) return body.slice(0, radius * 2) + (body.length > radius * 2 ? '…' : '')
-
-  const lower = body.toLowerCase()
-  const idx = lower.indexOf(q)
-  if (idx < 0) return body.slice(0, radius * 2) + (body.length > radius * 2 ? '…' : '')
-
-  const start = Math.max(0, idx - radius)
-  const end = Math.min(body.length, idx + q.length + radius)
-  const prefix = start > 0 ? '…' : ''
-  const suffix = end < body.length ? '…' : ''
-  return `${prefix}${body.slice(start, end)}${suffix}`
-}

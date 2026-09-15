@@ -23,14 +23,9 @@ export type AppFontSize = 'sm' | 'md' | 'lg' | 'xl'
 
 export interface AppBranding {
   mainLogoUrl?: string
-  sidebarLogoUrl?: string
-  faviconUrl?: string
-  loginBackgroundUrl?: string
   /** System primary color (hex, e.g. #e8472a). */
   primaryColor: string
   secondaryColor: string
-  /** @deprecated Per-user preference — use preferences store / user menu. */
-  fontSize?: AppFontSize
 }
 
 export interface AppFooterInfo {
@@ -72,8 +67,8 @@ export interface EmailConfig {
 
 /**
  * Telegram bot config (spec section 3.6).
- * The bot token is env-only (TELEGRAM_BOT_TOKEN): it is never editable in the
- * UI and is only surfaced masked / as connection status.
+ * The bot token is editable by settings managers and is always returned
+ * masked after it has been saved. Never log or display its plaintext value.
  */
 export interface TelegramConfig {
   enabled: boolean

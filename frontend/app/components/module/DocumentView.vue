@@ -15,6 +15,7 @@ import { normalizePermissionRows, permissionRowsToFlatKeys } from '~/utils/role/
 import { normalizeUomConversions } from '~/utils/stock/uom-conversions'
 import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
 import { documentSequencePreview, documentSequenceTypeLabel, documentSequenceTypeOptions, normalizeDocumentSequenceType } from '~/utils/document-sequences'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import {
   isRecordInactive,
   statusValueFor,
@@ -144,6 +145,22 @@ watch([title, () => module.value, () => model.value.status], () => {
 onBeforeUnmount(clear)
 usePageSeo({ title: () => title.value })
 
+/**
+ * The product document renders store-backed reference lists (Pricing UOM
+ * picker, base UOM label). The list page loads them; a direct detail URL must
+ * too, otherwise those selects fall back to raw ids.
+ */
+watch(
+  () => module.value?.collection,
+  (collection) => {
+    if (!import.meta.client || collection !== 'products') return
+    void store.fetchList('uoms')
+    void store.fetchList('brands')
+    void store.fetchList('categories')
+  },
+  { immediate: true },
+)
+
 const related = computed(() => module.value && !isCreate.value ? store.related(module.value, model.value) : [])
 /** Exact backend code for a document action (falls back to `{module}.{action}`). */
 function moduleActionPermission(action: 'create' | 'edit' | 'delete'): string {
@@ -157,7 +174,8 @@ function moduleActionPermission(action: 'create' | 'edit' | 'delete'): string {
 const readOnly = computed(() => {
   if (!module.value) return true
   if (module.value.readOnly) return true
-  if (module.value.collection === 'roles' && model.value.name === 'SuperAdmin') return true
+  // System Administrator keeps full access locked in the matrix, but the
+  // signed-in super-admin can still edit description / other non-permission fields.
   return !auth.canAccessPage(moduleActionPermission(isCreate.value ? 'create' : 'edit'))
 })
 const canMutateRecord = computed(() => Boolean(module.value) && !readOnly.value && !isCreate.value && Boolean(model.value.id))
@@ -373,11 +391,13 @@ async function save() {
         )
       }
       catch (error: unknown) {
-        toast.add({
-          title: t('app.stock.convInvalid'),
-          description: error instanceof Error ? error.message : String(error),
-          color: 'error',
-        })
+        if (!isApiErrorHandled(error)) {
+          toast.add({
+            title: t('app.stock.convInvalid'),
+            description: apiErrorMessage(error, t('app.stock.convInvalid')),
+            color: 'error',
+          })
+        }
         return
       }
     }
@@ -403,6 +423,8 @@ async function save() {
 
 async function setRecordStatus(active: boolean) {
   if (!module.value || !canMutateRecord.value || saving.value) return
+  const ok = await confirm({ kind: active ? 'activate' : 'deactivate' })
+  if (!ok) return
   saving.value = true
   try {
     const status = statusValueFor(module.value.collection, active)
@@ -432,11 +454,12 @@ async function deleteRecord() {
     await navigateTo(module.value.path)
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.ui.deleteFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: apiErrorMessage(error, t('app.ui.deleteFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     saving.value = false

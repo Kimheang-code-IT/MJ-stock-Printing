@@ -342,7 +342,12 @@ async def add_sale_price(
         row.uom_prices.append(ProductSalePriceUom(**uom_row))
     session.add(row)
 
-    product.selling_price = default_price
+    # Only the GENERAL (product-wide) version mirrors products.selling_price.
+    # A batch-scoped version must not overwrite it: POS resolves the general
+    # active version (no batch at cart time), so mirroring a batch price would
+    # desync the Stock list from the price POS actually charges.
+    if scope is None:
+        product.selling_price = default_price
     await session.flush()
 
     await record_audit(
@@ -392,7 +397,10 @@ async def activate_sale_price(session: AsyncSession, *, price_id, actor: User) -
     )
     row.is_active = True
     default_price = row.default_uom_price()
-    product.selling_price = Decimal(default_price).quantize(TWO, rounding=ROUND_HALF_UP)
+    # General versions mirror products.selling_price; batch-scoped versions do
+    # not (POS always resolves the general version — see add_sale_price).
+    if _batch_scope(row.batch_no) is None:
+        product.selling_price = Decimal(default_price).quantize(TWO, rounding=ROUND_HALF_UP)
     await session.flush()
 
     await record_audit(

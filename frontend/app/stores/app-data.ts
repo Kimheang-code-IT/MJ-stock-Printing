@@ -8,6 +8,7 @@ import { isApiCollection } from '~/utils/constants/api-endpoints'
 import { documentSequencePreview, normalizeDocumentSequenceRecord } from '~/utils/document-sequences'
 import { matchesFilter, parseFilterQuery } from '~/utils/filter/values'
 import { normalizeAuditLog } from '~/utils/module/audit-logs'
+import { apiErrorMessage } from '~/utils/api/errors'
 
 export const useAppDataStore = defineStore('app-data', () => {
   const entityRepository = useEntityRepository()
@@ -71,7 +72,7 @@ export const useAppDataStore = defineStore('app-data', () => {
       return result.items
     }
     catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = apiErrorMessage(error, 'Unable to load data.')
       collectionErrors.value = { ...collectionErrors.value, [collection]: message }
       return []
     }

@@ -4,11 +4,13 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import AccessDeniedError, ConflictError, NotFoundError, ValidationError
 from app.core.permissions import (
     SUPER_ADMIN_PERMISSION,
+    SUPER_ADMIN_ROLE,
     normalize_role_permissions,
     permission_catalog,
+    user_has_permission,
 )
 from app.modules.administration.models import SystemSetting
 from app.modules.administration.repository import RoleRepository, SettingsRepository, UserRepository
@@ -38,6 +40,7 @@ SETTING_GROUPS: dict[str, dict[str, object]] = {
     },
     "telegram": {
         "bot_token": "",
+        "chat_id": "",
         "enabled": True,
         "enable_password_reset": True,
         "payment_invoice_notify_enabled": True,
@@ -58,7 +61,26 @@ SETTING_GROUPS: dict[str, dict[str, object]] = {
         "auto_print": False,
         "show_exchange_rate": False,
     },
-    "system": {"language": "en", "date_format": "YYYY-MM-DD", "timezone": "UTC"},
+    "system": {
+        "language": "en",
+        "date_format": "YYYY-MM-DD",
+        "timezone": "UTC",
+        "time_format": "HH:mm",
+        "first_day_of_week": 1,
+        "number_format": "1,234.56",
+        "display_locale": "en-US",
+    },
+    "security": {
+        "max_login_attempts": 5,
+        "account_lock_minutes": 15,
+        "password_expiry_days": 180,
+        "audit_retention_days": 365,
+        "require_password_change": False,
+        "password_reset_channel": "telegram",
+        "password_reset_code_expiry_minutes": 10,
+        "jwt_refresh_token_days": 14,
+        "allowed_upload_extensions": ["jpg", "jpeg", "png", "webp", "gif"],
+    },
 }
 
 SECRET_SETTING_KEYS = frozenset({"telegram.bot_token"})
@@ -66,7 +88,11 @@ _MASK = "********"
 
 
 async def get_setting_value(session: AsyncSession, group: str, key: str, default=None):
-    """Public cross-module read of a single setting value (no secrets)."""
+    """Read one raw setting value.
+
+    Secret values must only be used by trusted backend code and must never be
+    returned directly from an API response or written to logs.
+    """
     result = await session.execute(select(SystemSetting).where(SystemSetting.key == f"{group}.{key}"))
     setting = result.scalar_one_or_none()
     if setting is None:
@@ -86,12 +112,20 @@ class AdministrationService:
     async def list_users(self, *, q, status, page, limit) -> tuple[list[User], int]:
         return await self.users.list(q=q, status=status, page=page, limit=limit)
 
+    @staticmethod
+    def _assert_privileged_role_allowed(actor: User, role) -> None:
+        """Granting/keeping the system Administrator role requires role.update;
+        user CRUD alone must not be an Administrator-takeover path."""
+        if role is not None and role.name == SUPER_ADMIN_ROLE and not user_has_permission(actor, "role.update"):
+            raise AccessDeniedError("Assigning the Administrator role requires role.update")
+
     async def create_user(self, payload, *, actor: User) -> User:
         if await self.users.get_by_email(payload.email):
             raise ConflictError("A user with this email already exists")
         role = await self.roles.get(payload.role_id)
         if role is None or role.status != "ACTIVE":
             raise ValidationError("Selected role does not exist or is inactive", field_errors={"role_id": "Invalid role"})
+        self._assert_privileged_role_allowed(actor, role)
 
         from app.core.security import hash_password
 
@@ -151,6 +185,13 @@ class AdministrationService:
             role = await self.roles.get(payload.role_id)
             if role is None or role.status != "ACTIVE":
                 raise ValidationError("Selected role does not exist or is inactive", field_errors={"role_id": "Invalid role"})
+            self._assert_privileged_role_allowed(actor, role)
+            if (
+                user.role_ref is not None
+                and user.role_ref.name == SUPER_ADMIN_ROLE
+                and not user_has_permission(actor, "role.update")
+            ):
+                raise AccessDeniedError("Changing an Administrator account requires role.update")
             if user.id == actor.id or await self._is_last_active_admin(user):
                 raise ConflictError("Cannot change the role of the last active administrator")
             user.role_id = role.id
@@ -177,6 +218,12 @@ class AdministrationService:
         user = await self.users.get(user_id)
         if user is None:
             raise NotFoundError("User not found")
+        if (
+            user.role_ref is not None
+            and user.role_ref.name == SUPER_ADMIN_ROLE
+            and not user_has_permission(actor, "role.update")
+        ):
+            raise AccessDeniedError("Resetting an Administrator password requires role.update")
         from app.core.security import hash_password
 
         user.password_hash = hash_password(new_password)
@@ -193,6 +240,11 @@ class AdministrationService:
         await self.session.commit()
 
     async def _is_last_active_admin(self, user: User) -> bool:
+        # Serialize concurrent disable/demote decisions so two actors cannot
+        # both observe another active administrator and leave zero admins.
+        from sqlalchemy import text
+
+        await self.session.execute(text("SELECT pg_advisory_xact_lock(914628)"))
         return (
             (user.role_ref.name == "Administrator" if user.role_ref else False)
             and user.status == "ACTIVE"
@@ -449,16 +501,36 @@ class AdministrationService:
             for key, value in values.items():
                 if key not in allowed:
                     raise ValidationError(f"Unknown settings key '{group}.{key}'")
-                if value is _MASK or value == _MASK:
-                    raise ValidationError(f"Cannot write masked value for '{group}.{key}'")
                 full_key = f"{group}.{key}"
-                if full_key == "telegram.bot_token" and value:
-                    # Secrets stay server-side: the bot token comes from the
-                    # TELEGRAM_BOT_TOKEN environment variable, never the DB.
-                    raise ValidationError(
-                        "The bot token is configured via the TELEGRAM_BOT_TOKEN environment variable",
-                        field_errors={"telegram.bot_token": "Managed by environment"},
-                    )
+                if value is _MASK or value == _MASK:
+                    if full_key in SECRET_SETTING_KEYS:
+                        # Masked values are round-tripped by settings forms and
+                        # mean "keep the existing secret".
+                        continue
+                    raise ValidationError(f"Cannot write masked value for '{group}.{key}'")
+                if full_key == "telegram.bot_token":
+                    if not isinstance(value, str):
+                        raise ValidationError(
+                            "The Telegram bot token must be text",
+                            field_errors={"telegram.bot_token": "Invalid bot token"},
+                        )
+                    value = value.strip()
+                    if value and (
+                        len(value) > 512
+                        or ":" not in value
+                        or any(character.isspace() for character in value)
+                    ):
+                        raise ValidationError(
+                            "The Telegram bot token is invalid",
+                            field_errors={"telegram.bot_token": "Paste the token provided by BotFather"},
+                        )
+                elif full_key == "telegram.chat_id":
+                    value = str(value or "").strip()
+                    if len(value) > 128:
+                        raise ValidationError(
+                            "The Telegram Chat ID is too long",
+                            field_errors={"telegram.chat_id": "Maximum length is 128 characters"},
+                        )
                 await self.settings.upsert(
                     group,
                     full_key,

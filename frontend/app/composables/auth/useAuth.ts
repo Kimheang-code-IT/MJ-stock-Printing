@@ -1,5 +1,6 @@
 import type { AuthUser } from '~/types/auth-user'
 import { clearTokens, getAccessToken, hasTokens, setTokens } from '~/utils/auth/tokens'
+import { parsePasswordResetStart } from '~/utils/auth/password-reset'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 
 type LoginResult = { user: AuthUser }
@@ -65,8 +66,10 @@ export function useAuth() {
   }
 
   async function requestPasswordReset(email: string) {
-    await api.post(ApiEndpoints.AUTH_FORGOT_PASSWORD, { email }, { isAuthRequest: true })
-    return ok({ sent: true, channel: 'telegram' as const })
+    const result = await unwrap<Record<string, unknown>>(
+      await api.post(ApiEndpoints.AUTH_FORGOT_PASSWORD, { email }, { isAuthRequest: true }),
+    )
+    return ok({ sent: true, ...parsePasswordResetStart(result) })
   }
 
   async function verifyPasswordResetCode(email: string, code: string) {
@@ -79,8 +82,10 @@ export function useAuth() {
   }
 
   async function resendPasswordResetCode(email: string) {
-    await api.post(ApiEndpoints.AUTH_RESET_RESEND, { email }, { isAuthRequest: true })
-    return ok({ sent: true, channel: 'telegram' as const })
+    const result = await unwrap<Record<string, unknown>>(
+      await api.post(ApiEndpoints.AUTH_RESET_RESEND, { email }, { isAuthRequest: true }),
+    )
+    return ok({ sent: true, ...parsePasswordResetStart(result) })
   }
 
   async function resetPasswordWithCode(input: {

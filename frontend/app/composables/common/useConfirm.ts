@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 
-export type ConfirmKind = 'delete' | 'save' | 'submit' | 'update' | 'unsaved' | 'generic'
+export type ConfirmKind = 'delete' | 'save' | 'submit' | 'update' | 'unsaved' | 'activate' | 'deactivate' | 'generic'
 
 export type ConfirmColor = 'error' | 'primary' | 'neutral' | 'warning'
 
@@ -39,7 +39,8 @@ type ConfirmState = {
   loading: boolean
 }
 
-const PRESETS: Record<ConfirmKind, Partial<ConfirmOptions> & { confirmColor: ConfirmColor }> = {
+/** Preset content per confirmation type (title / body / primary action). */
+export const CONFIRM_PRESETS: Record<ConfirmKind, Partial<ConfirmOptions> & { confirmColor: ConfirmColor }> = {
   delete: {
     titleKey: 'core.confirm.deleteTitle',
     descriptionKey: 'core.actions.deleteConfirm',
@@ -69,6 +70,18 @@ const PRESETS: Record<ConfirmKind, Partial<ConfirmOptions> & { confirmColor: Con
     descriptionKey: 'core.common.unsavedDescription',
     confirmLabelKey: 'core.common.discardChanges',
     cancelLabelKey: 'core.common.keepEditing',
+    confirmColor: 'warning',
+  },
+  activate: {
+    titleKey: 'core.confirm.activateTitle',
+    descriptionKey: 'core.confirm.activateDescription',
+    confirmLabelKey: 'core.rowActions.activate',
+    confirmColor: 'primary',
+  },
+  deactivate: {
+    titleKey: 'core.confirm.deactivateTitle',
+    descriptionKey: 'core.confirm.deactivateDescription',
+    confirmLabelKey: 'core.rowActions.deactivate',
     confirmColor: 'warning',
   },
   generic: {
@@ -105,7 +118,7 @@ export function useConfirm() {
     if (!import.meta.client) return Promise.resolve(false)
 
     const kind = options.kind || 'generic'
-    const preset = PRESETS[kind]
+    const preset = CONFIRM_PRESETS[kind]
     const count = options.count ?? 1
 
     // If a dialog is already open, reject the previous waiter.

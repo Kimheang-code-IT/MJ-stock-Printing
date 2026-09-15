@@ -4,7 +4,9 @@ import { usePageSeo } from '~/composables/usePageSeo'
 import {
   getPasswordResetSession,
   markPasswordResetVerified,
+  setPasswordResetLinkCode,
 } from '~/utils/auth/password-reset'
+import { useClipboard } from '@vueuse/core'
 
 definePageMeta({
   layout: 'auth',
@@ -14,11 +16,14 @@ const { t } = useI18n()
 const router = useRouter()
 const toast = useToast()
 const { resendPasswordResetCode, verifyPasswordResetCode } = useAuth()
+const { copy } = useClipboard()
 
 const verifying = ref(false)
 const resending = ref(false)
 const code = ref<string[]>(['', '', '', '', '', ''])
 const session = ref(getPasswordResetSession())
+
+const linkCode = computed(() => String(session.value?.linkCode || ''))
 
 usePageSeo({
   title: () => t('pages.forgetPassword.verifyTitle'),
@@ -70,12 +75,24 @@ async function onResendCode() {
   if (resending.value || !session.value?.email) return
   resending.value = true
   try {
-    await resendPasswordResetCode(session.value.email)
-    code.value = ['', '', '', '', '', '']
-    toast.add({
-      title: t('pages.forgetPassword.codeResent'),
-      color: 'success',
-    })
+    const result = await resendPasswordResetCode(session.value.email)
+    const start = result.data
+    if (start?.channel === 'telegram_link') {
+      setPasswordResetLinkCode(start.linkCode)
+      session.value = getPasswordResetSession()
+      toast.add({
+        title: t('pages.forgetPassword.linkRequiredTitle'),
+        description: t('pages.forgetPassword.linkRequiredDesc'),
+        color: 'success',
+      })
+    }
+    else {
+      code.value = ['', '', '', '', '', '']
+      toast.add({
+        title: t('pages.forgetPassword.codeResent'),
+        color: 'success',
+      })
+    }
   }
   catch {
     toast.add({
@@ -86,6 +103,11 @@ async function onResendCode() {
   finally {
     resending.value = false
   }
+}
+
+async function onCopyLinkCode() {
+  await copy(linkCode.value)
+  toast.add({ title: t('pages.forgetPassword.linkCodeCopied'), color: 'success' })
 }
 </script>
 
@@ -100,6 +122,32 @@ async function onResendCode() {
       </h2>
       <p class="text-center text-sm text-muted">
         {{ t('pages.forgetPassword.verifyDesc') }}
+      </p>
+    </div>
+
+    <div
+      v-if="linkCode"
+      class="mb-5 w-full rounded-lg border border-primary/40 bg-primary/10 p-4 text-sm"
+    >
+      <p class="font-medium text-highlighted">
+        {{ t('pages.forgetPassword.linkRequiredTitle') }}
+      </p>
+      <p class="mt-1 text-muted">
+        {{ t('pages.forgetPassword.linkStep1') }}
+      </p>
+      <div class="mt-2 flex items-center justify-center gap-2">
+        <code class="rounded bg-elevated px-3 py-1 text-base font-semibold tracking-widest">/link {{ linkCode }}</code>
+        <UButton
+          variant="ghost"
+          color="neutral"
+          size="xs"
+          icon="i-lucide-copy"
+          :aria-label="t('pages.forgetPassword.copyLinkCode')"
+          @click="onCopyLinkCode"
+        />
+      </div>
+      <p class="mt-2 text-muted">
+        {{ t('pages.forgetPassword.linkStep2') }}
       </p>
     </div>
 

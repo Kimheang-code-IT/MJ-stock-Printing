@@ -46,6 +46,10 @@ async def list_delivery_notes(
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("delivery.view")),
 ) -> dict:
+    from sqlalchemy import select
+
+    from app.modules.customers.models import Customer
+
     service = DeliveryNoteService(db)
     notes, total = await service.list(
         q=params.q,
@@ -56,7 +60,19 @@ async def list_delivery_notes(
         page=params.page,
         limit=params.limit,
     )
-    data = [await _note_out(service, n) for n in notes]
+    # Batched list page: one status computation + one customer lookup (P2 N+1).
+    all_sale_ids = [link.sale_id for note in notes for link in note.sales]
+    statuses = await service.invoice_delivery_statuses(all_sale_ids)
+    customer_ids = {note.customer_id for note in notes}
+    customer_names: dict = {}
+    if customer_ids:
+        result = await db.execute(
+            select(Customer.id, Customer.name).where(Customer.id.in_(customer_ids))
+        )
+        customer_names = {row_id: name for row_id, name in result.all()}
+    data = [
+        note_to_out(note, customer_names.get(note.customer_id), statuses) for note in notes
+    ]
     return envelope(data, {"page": params.page, "limit": params.limit, "total": total})
 
 

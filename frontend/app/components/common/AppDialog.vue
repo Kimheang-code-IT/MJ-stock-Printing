@@ -124,6 +124,8 @@ function requestClose(value: boolean) {
     :ui="mergedUi"
     @update:open="requestClose"
   >
+    <!-- Standard header: optional icon + title only. Descriptions live in the
+         body so a dialog with only a message never renders an empty body. -->
     <template #title>
       <div class="flex items-center gap-2.5">
         <span
@@ -137,20 +139,21 @@ function requestClose(value: boolean) {
       </div>
     </template>
 
-    <template v-if="resolvedDescription" #description>
-      <p class="text-sm text-muted">{{ resolvedDescription }}</p>
-    </template>
-
+    <!-- Standard body: description/message first, then any form or details. -->
     <template #body>
-      <slot />
+      <div class="space-y-4">
+        <p
+          v-if="resolvedDescription"
+          class="text-sm leading-relaxed text-muted"
+        >
+          {{ resolvedDescription }}
+        </p>
+        <slot />
+      </div>
     </template>
 
     <template v-if="$slots.footer" #footer>
       <slot name="footer" />
-    </template>
-
-    <template v-if="$slots.header" #header>
-      <slot name="header" />
     </template>
   </UModal>
 </template>

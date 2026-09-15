@@ -10,8 +10,12 @@ import type { PrintPaperSize } from '~/utils/print/html'
  */
 const open = defineModel<boolean>('open', { default: false })
 
+/** True while the parent is printing — blocks duplicate A4/A5 clicks. */
+const props = withDefaults(defineProps<{ busy?: boolean }>(), { busy: false })
+
 const emit = defineEmits<{
   confirm: [size: PrintPaperSize]
+  cancel: []
 }>()
 
 const { t } = useI18n()
@@ -22,9 +26,16 @@ const paperOptions: Array<{ value: PrintPaperSize, icon: string, labelKey: strin
   { value: 'A5', icon: 'i-lucide-file', labelKey: 'app.pos.paperA5' },
 ]
 
+/** The parent owns closing: it prints on `confirm`, then closes the dialog. */
 function choose(size: PrintPaperSize) {
-  open.value = false
+  if (props.busy) return
   emit('confirm', size)
+}
+
+/** X / Cancel / Esc / overlay: close without printing (sale already saved). */
+function requestCancel() {
+  if (props.busy) return
+  emit('cancel')
 }
 </script>
 
@@ -34,6 +45,7 @@ function choose(size: PrintPaperSize) {
     :title="t('app.pos.printSizeTitle')"
     icon="i-lucide-printer"
     size="sm"
+    @close="requestCancel"
   >
     <div>
       <p class="mb-1.5 text-sm font-medium text-highlighted">
@@ -48,6 +60,8 @@ function choose(size: PrintPaperSize) {
           size="xl"
           :icon="option.icon"
           :label="t(option.labelKey)"
+          :disabled="busy"
+          :loading="busy && option.primary"
           class="justify-center"
           @click="choose(option.value)"
         />
@@ -60,7 +74,8 @@ function choose(size: PrintPaperSize) {
           color="neutral"
           variant="ghost"
           :label="t('common.cancel')"
-          @click="open = false"
+          :disabled="busy"
+          @click="requestCancel"
         />
       </div>
     </template>

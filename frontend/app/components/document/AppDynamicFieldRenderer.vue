@@ -12,6 +12,7 @@ import { useReferenceOptions } from '~/composables/common/useReferenceOptions'
 import type { ModuleRelated, ModuleTable } from '~/config/modules'
 import type { AppRecord } from '~/config/admin-seed'
 import { asNumber } from '~/composables/module/useModule'
+import { isMoneyKey } from '~/utils/module/field-keys'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import {
@@ -146,15 +147,20 @@ const connectionValue = computed(() => {
 
 const remoteOptions = ref<FieldOption[]>([])
 const optionsPending = ref(false)
+/** Last full (unfiltered) option list — keeps the selected label resolvable. */
+const allOptions = ref<FieldOption[]>([])
 
 const resolvedOptionsEndpoint = computed(() => props.field.optionsEndpoint || undefined)
 
 watch(resolvedOptionsEndpoint, async (endpoint) => {
   remoteOptions.value = []
+  allOptions.value = []
   if (!endpoint) return
   optionsPending.value = true
   try {
-    remoteOptions.value = await loadReferenceOptions(endpoint)
+    const loaded = await loadReferenceOptions(endpoint)
+    allOptions.value = loaded
+    remoteOptions.value = loaded
   }
   catch {
     remoteOptions.value = []
@@ -167,8 +173,24 @@ watch(resolvedOptionsEndpoint, async (endpoint) => {
 const searchRemoteOptions = useDebounceFn(async (search: string) => {
   const endpoint = resolvedOptionsEndpoint.value
   if (!endpoint) return
+  const term = String(search ?? '').trim()
+  // Clearing the search restores the full list.
+  if (!term) {
+    remoteOptions.value = allOptions.value
+    return
+  }
+  // The combobox echoes the selected id as its search term (e.g. a UUID);
+  // searching for it would wipe the list and leave the raw id on screen.
+  if (term === String(props.modelValue ?? '')) return
   optionsPending.value = true
-  try { remoteOptions.value = await loadReferenceOptions(endpoint, search) }
+  try {
+    const loaded = await loadReferenceOptions(endpoint, term)
+    // Keep the selected option available so its label still renders.
+    const selected = allOptions.value.find(o => o.value === String(props.modelValue ?? ''))
+    remoteOptions.value = selected && !loaded.some(o => o.value === selected.value)
+      ? [selected, ...loaded]
+      : loaded
+  }
   finally { optionsPending.value = false }
 }, 250)
 
@@ -235,6 +257,11 @@ const isFile = computed(() => props.field.type === 'file')
 
 const lineAction = inject(moduleDocumentLineActionKey, undefined)
 const recordAccess = inject(moduleDocumentRecordKey, null)
+
+/** System roles (Administrator) keep the locked `ALL_PAGES` full-access state. */
+const isSystemRole = computed(() =>
+  Boolean(recordAccess?.get?.('is_system') ?? recordAccess?.get?.('isSystem')),
+)
 
 /** Whole loaded record for the party ledger panels (id, name, phone…). */
 const partyRecord = computed(() => (recordAccess?.get('__record') as AppRecord | null) ?? null)
@@ -303,6 +330,9 @@ const { formatMoney } = useAppLocalization()
 
 const documentCurrency = computed(() => String(recordAccess?.get('currency') || '').trim() || undefined)
 
+/** A plain `number` field that stores money (gets the currency symbol suffix). */
+const isMoneyField = computed(() => props.field.type === 'number' && isMoneyKey(props.field.key))
+
 function moneyAmount(key: string) {
   return asNumber(recordAccess?.get(key))
 }
@@ -349,6 +379,7 @@ watch(() => props.field.key, () => {
     v-if="isPermissionMatrix"
     v-model="permissionRows"
     :disabled="disabled || field.readOnly"
+    :system-role="isSystemRole"
   />
 
   <div
@@ -383,16 +414,15 @@ watch(() => props.field.key, () => {
       </div>
       <div class="flex items-center justify-between gap-6">
         <span class="text-muted">{{ $t('app.fields.discount') }}</span>
-        <UInputNumber
+        <CommonAppCurrencyInput
           v-if="editableTotals"
           :model-value="moneyAmount('discount')"
+          :currency="docCurrency"
           :min="0"
           :step="0.01"
-          :increment="false"
-          :decrement="false"
           size="sm"
+          align="right"
           class="w-32"
-          :ui="{ base: 'text-right tabular-nums' }"
           :aria-label="$t('app.fields.discount')"
           @update:model-value="setMoney('discount', $event)"
         />
@@ -406,16 +436,15 @@ watch(() => props.field.key, () => {
         class="flex items-center justify-between gap-6"
       >
         <span class="text-muted">{{ $t('app.fields.tax') }}</span>
-        <UInputNumber
+        <CommonAppCurrencyInput
           v-if="editableTotals"
           :model-value="moneyAmount('tax')"
+          :currency="docCurrency"
           :min="0"
           :step="0.01"
-          :increment="false"
-          :decrement="false"
           size="sm"
+          align="right"
           class="w-32"
-          :ui="{ base: 'text-right tabular-nums' }"
           :aria-label="$t('app.fields.tax')"
           @update:model-value="setMoney('tax', $event)"
         />
@@ -431,17 +460,16 @@ watch(() => props.field.key, () => {
       <template v-if="showPaidRemaining">
         <div class="flex items-center justify-between gap-6">
           <span class="text-muted">{{ $t('app.pos.paidNow') }}</span>
-          <UInputNumber
+          <CommonAppCurrencyInput
             v-if="editableTotals"
             :model-value="moneyAmount('paidNow')"
+            :currency="docCurrency"
             :min="0"
             :max="moneyAmount('total')"
             :step="0.01"
-            :increment="false"
-            :decrement="false"
             size="sm"
+            align="right"
             class="w-32"
-            :ui="{ base: 'text-right tabular-nums' }"
             :aria-label="$t('app.pos.paidNow')"
             @update:model-value="setMoney('paidNow', $event)"
           />
@@ -525,6 +553,7 @@ watch(() => props.field.key, () => {
     :label="labelText"
     :help="helpText"
     :compact="Boolean(field.meta?.compact)"
+    :folder="String(field.meta?.folder || 'products')"
     :disabled="disabled || field.readOnly"
   />
 
@@ -634,6 +663,15 @@ watch(() => props.field.key, () => {
           size="md"
           class="w-full"
         />
+        <CommonAppCurrencyInput
+          v-else-if="isMoneyField"
+          v-model="numberValue"
+          :currency="documentCurrency"
+          :disabled="disabled || field.readOnly"
+          align="right"
+          size="md"
+          class="w-full"
+        />
         <UInputNumber
           v-else-if="field.type === 'number'"
           v-model="numberValue"
@@ -672,7 +710,7 @@ watch(() => props.field.key, () => {
           class="w-full"
           @create="onCreateSelectItem"
         />
-        <UInputMenu
+        <USelectMenu
           v-else-if="field.type === 'select' && field.optionsEndpoint"
           v-model="selectValue"
           :items="selectItems"
@@ -680,6 +718,8 @@ watch(() => props.field.key, () => {
           :placeholder="placeholderText"
           :disabled="disabled || field.readOnly"
           :loading="optionsPending"
+          :search-input="{ placeholder: placeholderText }"
+          ignore-filter
           size="md"
           class="w-full"
           @update:search-term="searchRemoteOptions"

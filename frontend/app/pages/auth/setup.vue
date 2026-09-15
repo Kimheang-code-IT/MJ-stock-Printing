@@ -15,6 +15,7 @@ definePageMeta({
 const { t } = useI18n()
 const router = useRouter()
 const toast = useToast()
+const auth = useAuthStore()
 const { setupAdministrator } = useAuth()
 const submitting = ref(false)
 
@@ -55,6 +56,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     })
     const user = result.data?.user
     if (!user) throw new Error('Setup failed')
+    auth.login(user)
     toast.add({ title: t('pages.auth.setupDone'), color: 'success' })
     await router.replace('/')
   }
@@ -86,6 +88,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 
       <UFormField :label="t('pages.auth.email')" name="email" required>
         <UInput
+v-model="state.email"
 name="email"
 type="email"
 size="lg"
@@ -94,6 +97,7 @@ placeholder="admin@stockpos.local" />
       </UFormField>
       <UFormField :label="t('pages.auth.password')" name="password" required>
         <UInput
+v-model="state.password"
 name="password"
 type="password"
 size="lg"
@@ -101,6 +105,7 @@ class="w-full" />
       </UFormField>
       <UFormField :label="t('pages.auth.passwordConfirm')" name="passwordConfirmation" required>
         <UInput
+v-model="state.passwordConfirmation"
 name="passwordConfirmation"
 type="password"
 size="lg"

@@ -5,6 +5,7 @@ import PosProductBrowser from '~/components/pos/PosProductBrowser.vue'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { usePosChrome } from '~/composables/layout/usePosChrome'
+import { usePosPrintSizeDialog } from '~/composables/pos/usePosPrintSizeDialog'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { usePosCommands, useSettingsRepositories } from '~/repositories/index'
 import type { PosCartLine } from '~/utils/pos/cart'
@@ -27,9 +28,12 @@ import {
   type CheckoutDebtRow,
 } from '~/utils/pos/checkout'
 import { printSaleInvoice, type SaleInvoicePrintInput } from '~/utils/print/invoice'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { saleEditCartLines, saleReturnCartLines } from '~/utils/pos/return'
 import type { PrintPaperSize } from '~/utils/print/html'
 import { conversionForUom, salePriceForUom } from '~/utils/stock/uom-conversions'
+
+definePageMeta({ titleKey: 'app.nav.pos', permission: 'pos.access' })
 
 /**
  * POS workspace: product card grid + cart, then checkout (customer/summary/payment).
@@ -145,6 +149,17 @@ const editMode = ref(false)
 const editSaleId = ref('')
 const editInvoiceNo = ref('')
 const editLoading = ref(false)
+/** Original header-level discount + note preserved across an edit save (the
+ *  POS has no header-discount UI, so it must round-trip unchanged). */
+const editHeaderDiscount = ref(0)
+const editNote = ref('')
+
+/** Canonical backend tender method → the POS checkout label. */
+const SALE_METHOD_TO_UI: Record<string, string> = {
+  CASH: 'Cash',
+  BANK_QR: 'Card',
+  CUSTOMER_DEBT: 'Credit',
+}
 
 onBeforeUnmount(() => {
   hidePosAppHeader.value = false
@@ -179,6 +194,10 @@ onMounted(async () => {
 
 const canOperate = computed(() =>
   auth.canAccessPage('pos.access'))
+
+/** Line discounts are gated by `pos.discount` (backend re-checks on save). */
+const canDiscount = computed(() =>
+  auth.canAccessPage('pos.discount'))
 
 const currency = computed(() => preferences.currency)
 
@@ -251,9 +270,11 @@ const selectedDeposit = computed(() => checkoutDepositTotal(
 ))
 const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(needsDelivery.value, deliveryPrice.value))
+/** Header discount preserved from the edited invoice (never in a new sale). */
+const headerDiscount = computed(() => (editMode.value ? editHeaderDiscount.value : 0))
 // Cart prices, delivery fee and deposit are all in the sale currency.
 const due = computed(() => checkoutDue(
-  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value, 0) + appliedDeliveryPrice.value,
+  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value + headerDiscount.value, 0) + appliedDeliveryPrice.value,
   Number(depositInput.value || 0),
 ))
 const isCredit = computed(() => paymentMethod.value === 'Credit')
@@ -478,12 +499,13 @@ async function loadReturnSale(saleId: string) {
     step.value = 'cart'
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.pos.returnLoadFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
-    await navigateTo('/reports/sales')
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.pos.returnLoadFailed'),
+        description: apiErrorMessage(error, t('app.pos.returnLoadFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     returnLoading.value = false
@@ -541,11 +563,13 @@ async function completeReturn() {
     await navigateTo(`/reports/sales?q=${encodeURIComponent(invoiceNo || saleId)}`)
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.reports.returnFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.reports.returnFailed'),
+        description: apiErrorMessage(error, t('app.reports.returnFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     completing.value = false
@@ -568,16 +592,34 @@ async function loadEditSale(saleId: string) {
     customerName.value = sale.customerName
     editInvoiceNo.value = sale.invoiceNo
     cart.value = saleEditCartLines(sale, productById)
+    // Restore the saved checkout values so an edit never zeroes them. Header
+    // discount = sale total discount minus the per-line discounts already on
+    // the cart (the POS only edits line discounts).
+    const lineDiscounts = roundMoney(sale.items.reduce(
+      (sum, item) => sum + Number(item.discountAmount || 0),
+      0,
+    ))
+    editHeaderDiscount.value = roundMoney(Math.max(0, Number(sale.discount || 0) - lineDiscounts))
+    editNote.value = sale.note || ''
+    paymentMethod.value = SALE_METHOD_TO_UI[sale.paymentMethod] || 'Cash'
+    deliveryPrice.value = Number(sale.deliveryPrice || 0)
+    needsDelivery.value = Number(sale.deliveryPrice || 0) > 0
+    // The paymentMethod watcher clears the tender input; set it after the
+    // watcher flush so the saved paid amount survives.
+    await nextTick()
+    paidInput.value = Number(sale.paidAmount || 0) > 0 ? Number(sale.paidAmount) : undefined
     editMode.value = true
     editSaleId.value = saleId
     step.value = 'cart'
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.pos.updateFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.pos.updateFailed'),
+        description: apiErrorMessage(error, t('app.pos.updateFailed')),
+        color: 'error',
+      })
+    }
     await navigateTo('/reports/sales')
   }
   finally {
@@ -589,6 +631,8 @@ function exitEditMode() {
   editMode.value = false
   editSaleId.value = ''
   editInvoiceNo.value = ''
+  editHeaderDiscount.value = 0
+  editNote.value = ''
   cart.value = []
   customerId.value = undefined
   customerName.value = ''
@@ -619,7 +663,10 @@ async function saveEditSale() {
       })),
       paymentMethod: paymentMethod.value,
       paidAmount: paidAmount.value,
-      discount: discountTotal.value,
+      // Header-level discount only — line discounts ride on the items, so
+      // sending the line total here would double-discount the sale.
+      discount: editHeaderDiscount.value,
+      note: editNote.value || null,
       deliveryPrice: appliedDeliveryPrice.value,
       currency: saleCurrency.value,
       exchangeRate: saleRate.value,
@@ -637,11 +684,13 @@ async function saveEditSale() {
     await navigateTo(`/reports/sales?q=${encodeURIComponent(invoice)}`)
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.pos.updateFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.pos.updateFailed'),
+        description: apiErrorMessage(error, t('app.pos.updateFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     completing.value = false
@@ -651,30 +700,25 @@ async function saveEditSale() {
 /* ------------------------------ Invoice print size ------------------------------ */
 
 /** Paper-size chooser opened after a successful Submit (A4 default). The
- *  invoice always prints in the sale's own currency (KHR sale → KHR). */
-const printSizeOpen = ref(false)
-let printSizeResolver: ((size: PrintPaperSize | null) => void) | null = null
-
-/** Resolves with the chosen size, or null when the cashier closes/cancels. */
-function choosePrintSize(): Promise<PrintPaperSize | null> {
-  return new Promise((resolve) => {
-    printSizeResolver = resolve
-    printSizeOpen.value = true
-  })
-}
-
-function onPrintSizeConfirm(size: PrintPaperSize) {
-  printSizeOpen.value = false
-  printSizeResolver?.(size)
-  printSizeResolver = null
-}
-
-watch(printSizeOpen, (open) => {
-  if (!open && printSizeResolver) {
-    const resolve = printSizeResolver
-    printSizeResolver = null
-    resolve(null) // closed/cancelled — sale already succeeded, skip print
-  }
+ *  invoice always prints in the sale's own currency (KHR sale → KHR). The
+ *  parent owns the open state: choosing A4/A5 prints then closes, while
+ *  X/Cancel only closes — the sale is already saved and is never re-submitted.
+ *  `pendingDelivery` is snapshotted before the checkout reset so the post-sale
+ *  Create Delivery Note target survives until the chooser closes. */
+const pendingDelivery = ref<{ saleId: string, phone: string, location: string } | null>(null)
+const { open: printSizeOpen, printing: printingInvoice, requestPrint: requestInvoicePrint, confirm: confirmInvoicePrint, cancel: cancelInvoicePrint } = usePosPrintSizeDialog<SaleInvoicePrintInput, PrintPaperSize>({
+  print: printSaleInvoice,
+  onClose: () => {
+    // Completed-sale state is only needed until the chooser closes; delivery
+    // info is snapshotted before the checkout reset so it survives.
+    lastSaleNo.value = ''
+    lastSaleId.value = ''
+    const delivery = pendingDelivery.value
+    pendingDelivery.value = null
+    if (delivery) {
+      void navigateTo(`/delivery-notes/new?saleId=${delivery.saleId}&phone=${encodeURIComponent(delivery.phone)}&location=${encodeURIComponent(delivery.location)}`)
+    }
+  },
 })
 
 async function completeSale() {
@@ -713,7 +757,10 @@ async function completeSale() {
       })),
       paymentMethod: paymentMethod.value,
       paidAmount: paidAmount.value,
-      discount: discountTotal.value,
+      // POS discounts are per-line and ride on `items[].discountPercent`;
+      // there is no header discount on a new sale, so never resend the line
+      // discount total here (it would be applied twice by the backend).
+      discount: 0,
       deliveryPrice: appliedDeliveryPrice.value,
       deposit: depositInput.value,
       includedDebtIds: includedDebtIds.value,
@@ -760,6 +807,11 @@ async function completeSale() {
       title: `${t('app.pos.saleCompleted')} · ${lastSaleNo.value}`,
       color: 'success',
     })
+    // Capture the post-sale delivery target before the checkout reset below
+    // clears the delivery fields.
+    pendingDelivery.value = shouldOpenDelivery
+      ? { saleId: lastSaleId.value, phone: deliveryPhone.value, location: deliveryLocation.value }
+      : null
     cart.value = []
     paidInput.value = undefined
     customerId.value = undefined
@@ -782,19 +834,18 @@ async function completeSale() {
     void store.fetchList('customerDebts')
     void store.fetchList('stockMovements')
     // Ask which paper size to use (invoice prints in the sale's own currency);
-    // closing skips print.
-    const printSize = await choosePrintSize()
-    if (printSize) await printSaleInvoice(printInput, printSize)
-    if (shouldOpenDelivery) {
-      await navigateTo(`/delivery-notes/new?saleId=${lastSaleId.value}&phone=${encodeURIComponent(deliveryPhone.value)}&location=${encodeURIComponent(deliveryLocation.value)}`)
-    }
+    // X/Cancel skips print. The chooser is parent-owned and always returns to
+    // the normal POS screen, so a new sale can start immediately.
+    requestInvoicePrint(printInput)
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.pos.saleFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.pos.saleFailed'),
+        description: apiErrorMessage(error, t('app.pos.saleFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     completing.value = false
@@ -877,6 +928,7 @@ async function completeSale() {
         :cart="cart"
         :sale-currency="saleCurrency"
         :disabled="!canOperate"
+        :can-discount="canDiscount"
         :return-mode="returnMode"
         @change-qty="changeQty"
         @change-uom="changeUom"
@@ -920,7 +972,9 @@ async function completeSale() {
 
     <PosPrintSizeDialog
       v-model:open="printSizeOpen"
-      @confirm="onPrintSizeConfirm"
+      :busy="printingInvoice"
+      @confirm="confirmInvoicePrint"
+      @cancel="cancelInvoicePrint"
     />
 
     <!-- Shared KHR exchange-rate dialog: opened when the cart currency

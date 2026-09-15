@@ -47,6 +47,24 @@ async def test_category_crud_flow(client):
     assert missing.status_code == 404
 
 
+async def test_category_requires_code(client):
+    """Setup > Categories requires a non-empty, unique code."""
+    headers = await admin_headers(client)
+
+    missing = await client.post("/api/v1/categories", json={"name": "No Code"}, headers=headers)
+    assert missing.status_code == 422, missing.text
+    assert "code" in missing.json()["detail"]["field_errors"]
+
+    blank = await client.post("/api/v1/categories", json={"code": "", "name": "Blank Code"}, headers=headers)
+    assert blank.status_code == 422, blank.text
+
+    created = await client.post(
+        "/api/v1/categories", json={"code": "REQ-1", "name": "With Code", "status": "ACTIVE"}, headers=headers
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["data"]["code"] == "REQ-1"
+
+
 async def test_category_view_only_cannot_create(client, viewer_headers):
     response = await client.post(
         "/api/v1/categories", json={"code": "NOPE2", "name": "Nope"}, headers=viewer_headers

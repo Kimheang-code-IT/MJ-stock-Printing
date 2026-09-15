@@ -22,6 +22,7 @@ class SalesReportRow(BaseModel):
     returned_quantity: Decimal = Decimal("0")
     returnable_quantity: Decimal = Decimal("0")
     selling_price: Decimal
+    # Line discount (this sold line only).
     discount_amount: Decimal
     sales_amount: Decimal
     return_amount: Decimal
@@ -35,6 +36,17 @@ class SalesReportRow(BaseModel):
     # Document currency snapshot (reprints / grouped rows keep the stored rate).
     currency: str = "USD"
     exchange_rate: Decimal = Decimal("1")
+    # Saved sale header (authoritative checkout values, repeated per line so the
+    # SPA groups without recomputing from current product prices).
+    subtotal: Decimal = Decimal("0")
+    # Sale-level discount total (line + header) = sales.discount_amount.
+    sale_discount: Decimal = Decimal("0")
+    delivery_price: Decimal = Decimal("0")
+    grand_total: Decimal = Decimal("0")
+    paid_amount: Decimal = Decimal("0")
+    payment_status: str | None = None
+    note: str | None = None
+    due_date: date | None = None
 
 
 class PurchaseReportRow(BaseModel):

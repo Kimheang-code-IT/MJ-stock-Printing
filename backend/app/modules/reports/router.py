@@ -2,6 +2,7 @@
 
 import csv
 import io
+from collections.abc import Iterable, Iterator
 from datetime import date
 from uuid import UUID
 
@@ -23,7 +24,7 @@ from app.modules.reports.schemas import (
     SaleReturnRow,
     SupplierDebtReportRow,
 )
-from app.modules.reports.service import ReportsService
+from app.modules.reports.service import EXPORT_ROW_LIMIT, ReportsService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -214,14 +215,30 @@ async def create_expense(
 # ------------------------------------------------------------------- exports
 
 
-def _csv_response(filename: str, header: list[str], rows: list[list]) -> StreamingResponse:
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(header)
-    writer.writerows(rows)
-    buffer.seek(0)
+def _csv_response(filename: str, header: list[str], rows: Iterable[list]) -> StreamingResponse:
+    """Stream CSV in chunks: the body is never fully buffered in memory (P4)."""
+    chunk_rows = 500
+
+    def generate() -> Iterator[str]:
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(header)
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        count = 0
+        for row in rows:
+            writer.writerow(row)
+            count += 1
+            if count % chunk_rows == 0:
+                yield buffer.getvalue()
+                buffer.seek(0)
+                buffer.truncate(0)
+        if buffer.tell():
+            yield buffer.getvalue()
+
     return StreamingResponse(
-        iter([buffer.getvalue()]),
+        generate(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -329,7 +346,7 @@ async def purchase_report_export(
         start=params.start_date,
         end=params.end_date,
         page=1,
-        limit=100000,
+        limit=EXPORT_ROW_LIMIT,
     )
     return _csv_response(
         "purchase-report.csv",
@@ -367,7 +384,7 @@ async def customer_debt_report_export(
         start=params.start_date,
         end=params.end_date,
         page=1,
-        limit=100000,
+        limit=EXPORT_ROW_LIMIT,
     )
     return _csv_response(
         "customer-debt-report.csv",
@@ -404,7 +421,7 @@ async def supplier_debt_report_export(
         start=params.start_date,
         end=params.end_date,
         page=1,
-        limit=100000,
+        limit=EXPORT_ROW_LIMIT,
     )
     return _csv_response(
         "supplier-debt-report.csv",

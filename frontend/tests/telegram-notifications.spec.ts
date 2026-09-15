@@ -38,7 +38,7 @@ describe('telegram notifications settings (Administration → Settings)', () => 
     const connectionSection = sections.find(section => section.id === 'telegram')
     const keys = connectionSection?.fields.map(field => field.key) ?? []
     expect(keys).toContain('telegram.enabled')
-    expect(keys).toContain('__telegramConnection')
+    expect(keys).not.toContain('__telegramConnection')
     // No separate Telegram sidebar page — everything lives in Settings.
     expect(telegramTab).toBeTruthy()
   })
@@ -66,7 +66,7 @@ describe('telegram notifications settings (Administration → Settings)', () => 
     })
   })
 
-  it('never sends the bot token and never writes an empty summary time', () => {
+  it('never sends the masked bot token and never writes an empty summary time', () => {
     const base = structuredClone(MOCK_APP_CONFIG) as AppConfig
     const values = toAdminSettingsValues({
       telegram: { ...base.telegram, dailySummaryTime: '   ' },

@@ -180,6 +180,282 @@ async def test_sales_report_metrics_and_filters(client):
 
 
 @pytest.mark.asyncio
+async def test_sales_report_carries_saved_checkout_header(client):
+    """Grouped report rows expose the SAVED sale header (subtotal, discount,
+    delivery, grand total, paid, debt, payment status, currency) so the SPA
+    shows the real checkout values instead of zeros."""
+    headers = await admin_headers(client)
+    seeded = await _seed(client, headers)
+    product_id = seeded["product"]["id"]
+
+    response = await client.get(f"/api/v1/reports/sales?product_id={product_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    rows = {r["payment_method"]: r for r in response.json()["data"]}
+
+    # Cash sale: 3 × 10 = 30, fully paid (amount_received 100 → change, paid 30).
+    cash = rows["CASH"]
+    assert Decimal(cash["subtotal"]) == Decimal("30.00")
+    assert Decimal(cash["sale_discount"]) == Decimal("0.00")
+    assert Decimal(cash["delivery_price"]) == Decimal("0.00")
+    assert Decimal(cash["grand_total"]) == Decimal("30.00")
+    assert Decimal(cash["paid_amount"]) == Decimal("30.00")
+    assert Decimal(cash["debt_amount"]) == Decimal("0.00")
+    assert cash["payment_status"] == "PAID"
+    assert cash["currency"] == "USD"
+
+    # Debt sale: 2 × 10 = 20, deposit 5 → debt 15 (PARTIAL).
+    debt = rows["CUSTOMER_DEBT"]
+    assert Decimal(debt["subtotal"]) == Decimal("20.00")
+    assert Decimal(debt["grand_total"]) == Decimal("20.00")
+    assert Decimal(debt["paid_amount"]) == Decimal("5.00")
+    assert Decimal(debt["debt_amount"]) == Decimal("15.00")
+    assert debt["payment_status"] == "PARTIAL"
+    assert debt["due_date"] is None
+
+
+@pytest.mark.asyncio
+async def test_sales_report_saved_discount_delivery_and_note(client):
+    """Header discount, delivery fee and note survive into the report row."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    tag = _uuid.uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"REP-HDR-{tag}", "name": "Rep Hdr Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={"sku": f"REPHDR-{tag}", "name": f"Rep Hdr {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "10.00"},
+            headers=headers,
+        )
+    ).json()["data"]
+    stock_in = await client.post(
+        "/api/v1/stock/in",
+        json={"paid_amount": "20.00", "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}]},
+        headers=headers,
+    )
+    assert stock_in.status_code == 201, stock_in.text
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "100.00",
+            "discount": "2.00",
+            "delivery_price": "1.50",
+            "note": "ring the bell",
+            "items": [{"product_id": product["id"], "quantity": "1"}],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    sale = sale.json()["data"]
+    # 10 subtotal − 2 discount + 1.50 delivery = 9.50 grand total.
+    assert Decimal(sale["subtotal"]) == Decimal("10.00")
+    assert Decimal(sale["discount_amount"]) == Decimal("2.00")
+    assert Decimal(sale["delivery_price"]) == Decimal("1.50")
+    assert Decimal(sale["grand_total"]) == Decimal("9.50")
+
+    response = await client.get(f"/api/v1/reports/sales?q={sale['invoice_no']}", headers=headers)
+    assert response.status_code == 200, response.text
+    row = response.json()["data"][0]
+    assert Decimal(row["subtotal"]) == Decimal("10.00")
+    assert Decimal(row["sale_discount"]) == Decimal("2.00")
+    assert Decimal(row["delivery_price"]) == Decimal("1.50")
+    assert Decimal(row["grand_total"]) == Decimal("9.50")
+    assert Decimal(row["paid_amount"]) == Decimal("9.50")
+    assert row["note"] == "ring the bell"
+
+
+@pytest.mark.asyncio
+async def test_sales_report_khr_bank_qr_saved_currency(client):
+    """A KHR Bank/QR sale reports its own currency, rate and tendered amount."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    tag = _uuid.uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"REP-KQ-{tag}", "name": "Rep KQ Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={"sku": f"REPKQ-{tag}", "name": f"Rep KQ {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "1.00"},
+            headers=headers,
+        )
+    ).json()["data"]
+    stock_in = await client.post(
+        "/api/v1/stock/in",
+        json={"paid_amount": "100.00", "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "1.00"}]},
+        headers=headers,
+    )
+    assert stock_in.status_code == 201, stock_in.text
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "BANK_QR",
+            "amount_received": "8200",
+            "currency": "KHR",
+            "exchange_rate": "4100",
+            "items": [{"product_id": product["id"], "quantity": "2"}],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    sale = sale.json()["data"]
+
+    response = await client.get(f"/api/v1/reports/sales?q={sale['invoice_no']}", headers=headers)
+    assert response.status_code == 200, response.text
+    row = response.json()["data"][0]
+    assert row["payment_method"] == "BANK_QR"
+    assert row["currency"] == "KHR"
+    assert Decimal(str(row["exchange_rate"])) == Decimal("4100")
+    assert Decimal(row["subtotal"]) == Decimal("8200.00")
+    assert Decimal(row["grand_total"]) == Decimal("8200.00")
+    assert Decimal(row["paid_amount"]) == Decimal("8200.00")
+    assert row["payment_status"] == "PAID"
+
+
+@pytest.mark.asyncio
+async def test_sales_report_carries_debt_due_date(client):
+    """A debt sale's saved due date is exposed on the report row (detail view)."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    tag = _uuid.uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"REP-DD-{tag}", "name": "Rep Due Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={"sku": f"REPDD-{tag}", "name": f"Rep Due {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "5.00"},
+            headers=headers,
+        )
+    ).json()["data"]
+    customer = (
+        await client.post(
+            "/api/v1/customers", json={"code": f"REP-DDC-{tag}", "name": "Due Customer"}, headers=headers
+        )
+    ).json()["data"]
+    stock_in = await client.post(
+        "/api/v1/stock/in",
+        json={"paid_amount": "50.00", "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "1.00"}]},
+        headers=headers,
+    )
+    assert stock_in.status_code == 201, stock_in.text
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": customer["id"],
+            "amount_received": "0",
+            "deposit_method": "CASH",
+            "due_date": "2026-12-31",
+            "items": [{"product_id": product["id"], "quantity": "2"}],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    sale = sale.json()["data"]
+
+    response = await client.get(f"/api/v1/reports/sales?q={sale['invoice_no']}", headers=headers)
+    assert response.status_code == 200, response.text
+    row = response.json()["data"][0]
+    assert row["payment_status"] == "UNPAID"
+    assert str(row["due_date"]).startswith("2026-12-31")
+
+
+@pytest.mark.asyncio
+async def test_sales_report_cost_applies_uom_factor(client):
+    """COGS must be base-unit cost × quantity × factor_to_base, not the raw
+    entered-UOM quantity (spec §2.1.10). Regression for the understated cost."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    tag = _uuid.uuid4().hex[:6]
+    pack = (
+        await client.post(
+            "/api/v1/uoms",
+            json={"code": f"PKT{tag[:4]}", "name": "Pack", "symbol": "pk"},
+            headers=headers,
+        )
+    ).json()["data"]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"CF-{tag}", "name": "Factor Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={
+                "sku": f"CF-{tag}",
+                "name": f"Factor Widget {tag}",
+                "category_id": category["id"],
+                "uom_id": str(DEFAULT_UOM_ID),
+                "selling_price": "12.00",
+                "uom_conversions": [
+                    {"uom_id": str(DEFAULT_UOM_ID), "factor_to_base": "1", "sale_price": "12.00", "is_default_sale": True},
+                    {"uom_id": pack["id"], "factor_to_base": "10", "sale_price": "110.00", "is_default_sale": False},
+                ],
+            },
+            headers=headers,
+        )
+    ).json()["data"]
+
+    stock_in = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "200.00",
+            "items": [
+                {
+                    "product_id": product["id"],
+                    "uom_id": pack["id"],
+                    "factor_to_base": "10",
+                    "quantity": "2",
+                    "unit_cost": "100.00",
+                }
+            ],
+        },
+        headers=headers,
+    )
+    assert stock_in.status_code == 201, stock_in.text  # 20 base @ 10.00
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "200.00",
+            "items": [
+                {"product_id": product["id"], "quantity": "1", "uom_id": pack["id"], "factor_to_base": "10"}
+            ],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    assert Decimal(sale.json()["data"]["items"][0]["factor_to_base"]) == Decimal("10")
+
+    report = await client.get(f"/api/v1/reports/sales?product_id={product['id']}", headers=headers)
+    assert report.status_code == 200, report.text
+    row = report.json()["data"][0]
+    assert Decimal(row["quantity"]) == Decimal("1")
+    assert Decimal(row["sales_amount"]) == Decimal("110.00")
+    # True COGS = 10.00/base × 10 base units = 100.00 (not 10.00).
+    assert Decimal(row["cost"]) == Decimal("100.00")
+    assert Decimal(row["gross_profit"]) == Decimal("10.00")
+
+
+@pytest.mark.asyncio
 async def test_purchase_report_shows_paid_and_remaining(client):
     headers = await admin_headers(client)
     seeded = await _seed(client, headers)
@@ -695,3 +971,86 @@ async def test_return_history_reports(client):
     assert Decimal(row["debt_reduction"]) == Decimal("4.00")
     assert Decimal(row["credit_amount"]) == Decimal("0.00")
     assert row["supplier_name"] == f"Rep Supplier {seeded['supplier']['code'].split('-')[-1]}"
+
+
+@pytest.mark.asyncio
+async def test_cross_currency_cogs_is_normalized_to_sale_currency(client):
+    """F2: cost ledgers are canonical USD, so a purchase in one currency and a
+    sale in another no longer contaminate COGS / gross profit."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    tag = _uuid.uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"FX-{tag}", "name": "FX Cat"}, headers=headers
+        )
+    ).json()["data"]
+
+    async def make_product(suffix: str, selling_price: str) -> dict:
+        return (
+            await client.post(
+                "/api/v1/products",
+                json={
+                    "sku": f"FX-{tag}-{suffix}",
+                    "name": f"FX Widget {tag} {suffix}",
+                    "category_id": category["id"],
+                    "uom_id": str(DEFAULT_UOM_ID),
+                    "selling_price": selling_price,
+                },
+                headers=headers,
+            )
+        ).json()["data"]
+
+    async def stock_in(product_id: str, *, unit_cost: str, currency: str, rate: str) -> None:
+        response = await client.post(
+            "/api/v1/stock/in",
+            json={
+                "paid_amount": str(Decimal(unit_cost) * Decimal("10")),
+                "currency": currency,
+                "exchange_rate": rate,
+                "items": [{"product_id": product_id, "quantity": "10", "unit_cost": unit_cost}],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+
+    async def sell(product_id: str, *, quantity: str, currency: str = "USD", rate: str = "1") -> None:
+        response = await client.post(
+            "/api/v1/pos/sales",
+            json={
+                "payment_method": "CASH",
+                "amount_received": "100000000.00",
+                "currency": currency,
+                "exchange_rate": rate,
+                "items": [{"product_id": product_id, "quantity": quantity}],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+
+    async def cost_of(product_id: str) -> tuple[str, Decimal]:
+        report = await client.get(
+            f"/api/v1/reports/sales?product_id={product_id}", headers=headers
+        )
+        assert report.status_code == 200, report.text
+        row = report.json()["data"][0]
+        return row["currency"], Decimal(row["cost"])
+
+    # KHR purchase @ 2000/base, rate 4000 -> 0.50 USD canonical; sold in USD.
+    p_khr_to_usd = await make_product("KU", "5.00")
+    await stock_in(p_khr_to_usd["id"], unit_cost="2000", currency="KHR", rate="4000")
+    await sell(p_khr_to_usd["id"], quantity="2")
+    assert await cost_of(p_khr_to_usd["id"]) == ("USD", Decimal("1.00"))  # 0.50 × 2
+
+    # KHR purchase @ 2000/base; sold in KHR @ 4000 -> 0.50 × 3 × 4000 = 6000 KHR.
+    p_khr_to_khr = await make_product("KK", "5000")
+    await stock_in(p_khr_to_khr["id"], unit_cost="2000", currency="KHR", rate="4000")
+    await sell(p_khr_to_khr["id"], quantity="3", currency="KHR", rate="4000")
+    assert await cost_of(p_khr_to_khr["id"]) == ("KHR", Decimal("6000.00"))
+
+    # USD purchase @ 0.50/base; sold in KHR @ 4000 -> 0.50 × 2 × 4000 = 4000 KHR.
+    p_usd_to_khr = await make_product("UK", "5000")
+    await stock_in(p_usd_to_khr["id"], unit_cost="0.50", currency="USD", rate="1")
+    await sell(p_usd_to_khr["id"], quantity="2", currency="KHR", rate="4000")
+    assert await cost_of(p_usd_to_khr["id"]) == ("KHR", Decimal("4000.00"))

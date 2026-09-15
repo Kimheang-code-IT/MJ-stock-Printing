@@ -1,7 +1,36 @@
+# ruff: noqa: E402
+
 import os
 import tempfile
+from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://stock_pos:stock_pos@localhost:55432/stock_pos_test")
+
+def _env_file_value(path: Path, key: str) -> str | None:
+    """Read a single KEY=VALUE from an env file without mutating the process env."""
+    if not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, value = stripped.partition("=")
+        if name.strip() == key:
+            return value.strip().strip('"').strip("'")
+    return None
+
+
+# The documented local workflow generates infrastructure/.env (strong Postgres
+# password) rather than exporting POSTGRES_*. Derive the test URL from it so
+# `up -d db redis` + `pytest` works without hand-exporting DATABASE_URL.
+if not os.environ.get("DATABASE_URL"):
+    _infra_env = Path(__file__).resolve().parents[2] / "infrastructure" / ".env"
+    _user = os.environ.get("POSTGRES_USER") or _env_file_value(_infra_env, "POSTGRES_USER") or "stock_pos"
+    _password = os.environ.get("POSTGRES_PASSWORD") or _env_file_value(_infra_env, "POSTGRES_PASSWORD") or "stock_pos"
+    _database = os.environ.get("POSTGRES_DB") or _env_file_value(_infra_env, "POSTGRES_DB") or "stock_pos"
+    _test_db = _database if _database.endswith("_test") else f"{_database}_test"
+    os.environ["DATABASE_URL"] = (
+        f"postgresql+asyncpg://{_user}:{_password}@localhost:55432/{_test_db}"
+    )
 os.environ.setdefault("REDIS_URL", "redis://localhost:56379/5")
 os.environ.setdefault("SEED_ADMIN_EMAIL", "admin@gmail.com")
 os.environ.setdefault("SEED_ADMIN_PASSWORD", "123456")
@@ -49,7 +78,30 @@ def _prepare_database() -> None:
             )
             if exists.scalar() is None:
                 await conn.execute(text(f'CREATE DATABASE "{TEST_DB_NAME}"'))
+            # An interrupted pytest run can leave pooled connections holding
+            # locks in the dedicated test database.  Disconnect only those
+            # stale test sessions before rebuilding the schema; production and
+            # development databases are never targeted here.
+            await conn.execute(
+                text(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = :name AND pid <> pg_backend_pid()"
+                ),
+                {"name": TEST_DB_NAME},
+            )
         await admin_engine.dispose()
+
+        # Authentication/reset/denylist state is intentionally transient, but
+        # Redis survives between local test runs.  Start every suite with the
+        # configured test Redis database empty so a previous lockout or token
+        # revocation cannot cascade into unrelated failures.
+        from redis.asyncio import from_url as redis_from_url
+
+        redis_client = redis_from_url(os.environ["REDIS_URL"], decode_responses=True)
+        try:
+            await redis_client.flushdb()
+        finally:
+            await redis_client.aclose()
 
         from app.core import database as db_module
         from app.core.database import Base

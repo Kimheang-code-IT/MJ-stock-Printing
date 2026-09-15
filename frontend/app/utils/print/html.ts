@@ -27,7 +27,9 @@ export const PRINT_FONT_LINKS = `<link rel="preconnect" href="https://fonts.goog
 
 /**
  * Print paper metrics. There is **one** invoice style; A5 is the same style
- * scaled down (px metrics × scalePx) on a smaller printable area.
+ * scaled down (px metrics × scalePx) on a smaller printable area. Each size
+ * also carries its own mm layout budget so filler rows are computed for that
+ * exact paper — never one hardcoded row count for both.
  */
 export const PAPER_STYLES: Record<PrintPaperSize, {
   page: 'A4' | 'A5'
@@ -36,11 +38,41 @@ export const PAPER_STYLES: Record<PrintPaperSize, {
   scalePx: number
   /** Printable height after @page margins (mm). */
   printableMm: number
-  /** Typical line-row height on paper (mm) — used for layout estimates. */
+  /** Product/filler line-row height on paper (mm). */
   rowMm: number
+  /** Estimated table-header row height (mm). */
+  tableHeadMm: number
+  /** Estimated title + customer/cashier meta block (mm). */
+  headerMm: number
+  /** Estimated totals + signatures block, kept together as one unit (mm). */
+  footerMm: number
+  /** Page-1 slack so rounding never spills the footer onto page 2 (mm). */
+  safetyMm: number
 }> = {
-  A4: { page: 'A4', marginMm: 8, scalePx: 1, printableMm: 281, rowMm: 7.5 },
-  A5: { page: 'A5', marginMm: 6, scalePx: 0.8, printableMm: 198, rowMm: 6 },
+  // A4: 297mm page − 2 × 8mm margins. rowMm includes a little extra padding.
+  A4: {
+    page: 'A4',
+    marginMm: 8,
+    scalePx: 1,
+    printableMm: 281,
+    rowMm: 8.5,
+    tableHeadMm: 12,
+    headerMm: 35,
+    footerMm: 56,
+    safetyMm: 6,
+  },
+  // A5: 210mm page − 2 × 6mm margins. Independent budget from A4.
+  A5: {
+    page: 'A5',
+    marginMm: 6,
+    scalePx: 0.8,
+    printableMm: 198,
+    rowMm: 6.8,
+    tableHeadMm: 10,
+    headerMm: 28,
+    footerMm: 44,
+    safetyMm: 5,
+  },
 }
 
 /** Base (A4-scale) invoice px metrics used by printPageCss. */
@@ -79,6 +111,26 @@ html, body {
   font-weight: 400;
 }
 .doc { width: 100%; }
+.invoice-page {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: ${style.printableMm}mm;
+  overflow: hidden;
+  break-after: page;
+  page-break-after: always;
+}
+.invoice-page.last {
+  break-after: auto;
+  page-break-after: auto;
+}
+.page-number {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: ${px(BASE_PX.font - 2)};
+  font-weight: 400;
+}
 .title {
   text-align: center;
   font-size: ${px(BASE_PX.title)};
@@ -111,6 +163,9 @@ table.lines {
 /* Multi-page sales: repeat the header row and never split an item row. */
 table.lines thead { display: table-header-group; }
 table.lines tbody tr {
+  /* Uniform line height for product AND filler rows so the layout budget
+     (rowMm) matches what the printer renders. */
+  height: ${style.rowMm}mm;
   page-break-inside: avoid;
   break-inside: avoid;
 }
@@ -136,12 +191,16 @@ td.num { text-align: right; }
 /* Unit / Qty / Price / Discount read centred on the product lines. */
 td.center, th.center { text-align: center; }
 td.product { text-align: left; word-wrap: break-word; overflow-wrap: anywhere; }
-/* Product lines: a touch taller + bigger for easier reading. */
+/* Product lines: slightly taller + bigger for easier reading, still compact
+   enough that the page-1 budget holds many rows. */
 table.lines th, table.lines td {
-  padding: ${px(BASE_PX.padY + 1)} ${px(BASE_PX.padX)};
+  padding: ${px(BASE_PX.padY + 3)} ${px(BASE_PX.padX)};
   font-size: ${px(BASE_PX.font + 1)};
 }
-tr.empty td { height: ${style.rowMm}mm; }
+tr.empty.stretch td {
+  padding: 0;
+  vertical-align: top;
+}
 .num { white-space: nowrap; }
 .col-no { width: 5%; }
 .col-product { width: 28%; }

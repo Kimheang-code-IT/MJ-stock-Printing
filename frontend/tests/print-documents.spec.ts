@@ -38,7 +38,7 @@ describe('print documents', () => {
     expect(css).toContain('table.summary')
     expect(css).toContain('.col-product { width: 28%; }')
     expect(css).toContain('th.num { text-align: center; }')
-    expect(css).toContain('tr.empty td')
+    expect(css).toContain('tr.empty.stretch td')
     expect(css).toContain('border-top: none')
     expect(css).toContain('table.summary td.spacer')
     expect(PRINT_IFRAME_SIZES.A4).toEqual({ width: '210mm', height: '297mm' })
@@ -49,7 +49,7 @@ describe('print documents', () => {
     expect(css).toContain('@page { size: A5; margin: 6mm; }')
     expect(css).toContain('font-size: 10.4px')
     expect(css).toContain('border: 0.5px solid #000')
-    expect(css).toContain('tr.empty td')
+    expect(css).toContain('tr.empty.stretch td')
     expect(PRINT_IFRAME_SIZES.A5).toEqual({ width: '148mm', height: '210mm' })
   })
 
@@ -107,7 +107,7 @@ describe('print documents', () => {
     expect(html).toContain('ខ្វះសរុប')
     expect(html).toContain('table class="lines"')
     expect(html).toContain('table class="summary"')
-    expect(html).toContain('tr class="empty"')
+    expect(html).toContain('tr class="empty stretch"')
     expect(html).toContain('class="spacer"')
     expect(html).toContain('colspan="2"')
     expect(html).toContain('class="line"')
@@ -215,7 +215,8 @@ describe('print documents', () => {
       depositAmount: 0,
       outstandingAmount: 3.15,
     }
-    const countFillers = (html: string) => (html.match(/<tr class="empty">/g) || []).length
+    const countFillers = (html: string) => [...html.matchAll(/data-filler-rows="(\d+)"/g)]
+      .reduce((sum, match) => sum + Number(match[1]), 0)
     const a4Fillers = countFillers(buildSaleInvoiceHtml(input, 'A4'))
     const a5Fillers = countFillers(buildSaleInvoiceHtml(input, 'A5'))
     // A5 printable height is ~30% smaller; its filler budget must shrink so

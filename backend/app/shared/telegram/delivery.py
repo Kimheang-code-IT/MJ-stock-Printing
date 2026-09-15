@@ -11,18 +11,20 @@ RESET_CODE_TEXT = "Your Stock & POS password reset code is {code}. It expires in
 RESET_LINK_TEXT = "Or reset directly: {link}"
 
 
-def queue_reset_code_delivery(chat_id: str, code: str, *, handoff_token: str | None = None) -> bool:
+def queue_reset_code_delivery(
+    chat_id: str, code: str, *, handoff_token: str | None = None, minutes: int | None = None
+) -> bool:
     """Send a password-reset code from this API process (best effort).
 
     Returns True when a send task was scheduled. Delivery errors must never
     leak to the HTTP caller beyond a logged failure.
     """
-    if not settings.telegram_enabled or not settings.telegram_bot_token:
-        logger.warning("Telegram reset-code delivery skipped: bot token not configured")
+    if not settings.telegram_enabled:
+        logger.warning("Telegram reset-code delivery skipped: Telegram is disabled")
         return False
     text = RESET_CODE_TEXT.format(
         code=code,
-        minutes=settings.telegram_reset_code_expire_minutes,
+        minutes=minutes if minutes and minutes > 0 else settings.telegram_reset_code_expire_minutes,
     )
     if handoff_token and settings.frontend_base_url:
         base = settings.frontend_base_url.rstrip("/")

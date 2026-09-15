@@ -83,32 +83,3 @@ export const LANDING_PAGE_OPTIONS: FieldOption[] = [
   { label: 'Customers', value: '/setup/customers' },
   { label: 'Sales Report', value: '/reports/sales' },
 ]
-
-export const AWS_REGION_OPTIONS: FieldOption[] = [
-  { label: 'Asia Pacific (Singapore) ap-southeast-1', value: 'ap-southeast-1' },
-  { label: 'Asia Pacific (Jakarta) ap-southeast-3', value: 'ap-southeast-3' },
-  { label: 'Asia Pacific (Tokyo) ap-northeast-1', value: 'ap-northeast-1' },
-  { label: 'Asia Pacific (Seoul) ap-northeast-2', value: 'ap-northeast-2' },
-  { label: 'Asia Pacific (Hong Kong) ap-east-1', value: 'ap-east-1' },
-  { label: 'Asia Pacific (Mumbai) ap-south-1', value: 'ap-south-1' },
-  { label: 'US East (N. Virginia) us-east-1', value: 'us-east-1' },
-  { label: 'US West (Oregon) us-west-2', value: 'us-west-2' },
-  { label: 'Europe (Frankfurt) eu-central-1', value: 'eu-central-1' },
-  { label: 'Europe (Ireland) eu-west-1', value: 'eu-west-1' },
-]
-
-export const TELEGRAM_DESTINATION_TYPE_OPTIONS: FieldOption[] = [
-  { label: 'Chat', value: 'chat' },
-  { label: 'Channel', value: 'channel' },
-  { label: 'Group', value: 'group' },
-]
-
-export const SYNC_SCHEDULE_OPTIONS: FieldOption[] = [
-  { label: 'Every hour', value: '0 * * * *' },
-  { label: 'Every 6 hours', value: '0 */6 * * *' },
-  { label: 'Every 12 hours', value: '0 */12 * * *' },
-  { label: 'Daily at midnight', value: '0 0 * * *' },
-  { label: 'Daily at 06:00', value: '0 6 * * *' },
-  { label: 'Weekly (Sunday midnight)', value: '0 0 * * 0' },
-  { label: 'Manual only', value: 'manual' },
-]

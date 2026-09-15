@@ -14,6 +14,10 @@ def setup_logging() -> None:
     )
     logging.getLogger("uvicorn.access").setLevel(level)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    # Never log outbound request URLs at INFO: the Telegram Bot API embeds the
+    # bot token in the URL path, so httpx/httpcore INFO logs would leak it.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 logger = logging.getLogger("stock_pos")

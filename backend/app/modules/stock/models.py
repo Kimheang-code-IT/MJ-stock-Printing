@@ -32,6 +32,7 @@ class Product(Base):
         Index("ix_products_category_id", "category_id"),
         Index("ix_products_brand_id", "brand_id"),
         Index("ix_products_uom_id", "uom_id"),
+        Index("ix_products_supplier_id", "supplier_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -46,6 +47,11 @@ class Product(Base):
     )
     brand_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("brands.id", ondelete="SET NULL"), nullable=True
+    )
+    # Default supplier for fast purchasing: prefills the purchase form's
+    # supplier, still changeable per purchase.
+    supplier_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True
     )
     # UOM is required (spec section 2.1.5); products always reference the live record.
     uom_id: Mapped[uuid.UUID] = mapped_column(
@@ -79,6 +85,7 @@ class Product(Base):
     category_ref = relationship("Category", lazy="selectin")
     brand_ref = relationship("Brand", lazy="selectin")
     uom_ref = relationship("UOM", lazy="selectin")
+    supplier_ref = relationship("Supplier", lazy="selectin")
     balance: Mapped["StockBalance | None"] = relationship(
         back_populates="product_ref", uselist=False, lazy="selectin", cascade="all, delete-orphan"
     )
@@ -403,6 +410,7 @@ class StockMovement(Base):
     __table_args__ = (
         Index("ix_stock_movements_product_id", "product_id"),
         Index("ix_stock_movements_created_at", "created_at"),
+        Index("ix_stock_movements_batch_id", "batch_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
+
 /**
  * Quick customer creation from the POS checkout "Add new customer" button
  * (spec §5.11). Name is required; phone/location optional. The customer is
@@ -54,11 +56,13 @@ async function submit() {
     emit('created', String(record.id))
   }
   catch (error: unknown) {
-    toast.add({
-      title: t('app.pos.customerCreateFailed'),
-      description: error instanceof Error ? error.message : String(error),
-      color: 'error',
-    })
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.pos.customerCreateFailed'),
+        description: apiErrorMessage(error, t('app.pos.customerCreateFailed')),
+        color: 'error',
+      })
+    }
   }
   finally {
     saving.value = false

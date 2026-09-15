@@ -76,38 +76,114 @@ function asCartLine(line: SaleInvoicePrintLine): PosCartLine {
   }
 }
 
-/**
- * Height reserved on page 1 for the fixed blocks (title, meta, summary rows,
- * buyer/seller signature lines) outside the lines grid. Filler rows are sized
- * from what is left so the signatures stay on page 1 — a fixed 70% target
- * used to push the A5 signature block onto page 2 even for short sales.
- * A4 keeps the previous 70%-target behaviour (281 − 84 ≈ 197mm).
- */
-const FIXED_PAGE1_MM: Record<PrintPaperSize, number> = {
-  A4: 84,
-  A5: 76,
+/** Physical-sheet layout decision for an invoice, derived from the paper budget. */
+export type InvoiceLayout = {
+  paperSize: PrintPaperSize
+  /** Actual product rows in the invoice. */
+  productRows: number
+  /** Rows (products + blank grid) that fit on the final page above the footer. */
+  firstPageCapacity: number
+  /** Blank grid-row budget on a one-page invoice (0 for multi-page invoices). */
+  fillerRows: number
+  /** Product-row capacity on pages that do not carry totals/signatures. */
+  continuationPageCapacity: number
+  /** Actual product rows assigned to each physical sheet. */
+  pageRows: number[]
+  /** Blank grid-row budget on each sheet. */
+  pageFillerRows: number[]
+  /** Estimated printed pages (>= 1). */
+  pages: number
+  /** True when product rows overflow past page 1. */
+  multipage: boolean
 }
 
-/** Filler rows trimmed below the budget so short sales stay safely on one page. */
-const FILLER_TRIM: Record<PrintPaperSize, number> = {
-  A4: 3,
-  A5: 5,
-}
-
 /**
- * Empty filler rows so the lines grid fills the page-1 budget left after the
- * fixed blocks (shop-form look) without forcing a short sale — and its
- * signatures — onto page 2 when product rows already cover that space.
+ * Decide the invoice layout for a paper size.
+ *
+ * The final-page budget is the printable height minus the header (title + meta),
+ * the table header and the totals/signatures block, plus a small safety
+ * margin. When the products fit that budget, the leftover space is filled with
+ * blank grid area so the table reaches the footer — but never so much that the
+ * footer is pushed to another sheet. Larger invoices are explicitly divided
+ * into physical sheets; continuation sheets use the space otherwise reserved
+ * for totals and signatures.
  */
-function emptyInvoiceRows(filled: number, paperSize: PrintPaperSize): string {
+export function planInvoiceLayout(
+  productRows: number,
+  paperSize: PrintPaperSize = 'A4',
+): InvoiceLayout {
   const style = PAPER_STYLES[paperSize]
-  const targetMm = style.printableMm - FIXED_PAGE1_MM[paperSize]
-  const headerMm = style.rowMm * 1.6
-  const bodyMm = Math.max(0, targetMm - headerMm)
-  const totalRows = Math.max(filled, Math.floor(bodyMm / style.rowMm))
-  const missing = Math.max(0, totalRows - filled - FILLER_TRIM[paperSize])
-  return Array.from({ length: missing }, () => `
-    <tr class="empty">
+  const rows = Math.max(0, Math.floor(productRows))
+  const reservedMm = style.headerMm + style.tableHeadMm + style.footerMm + style.safetyMm
+  const bodyMm = Math.max(0, style.printableMm - reservedMm)
+  const firstPageCapacity = Math.max(1, Math.floor(bodyMm / style.rowMm))
+  const continuationPageCapacity = Math.max(
+    1,
+    Math.floor(
+      (style.printableMm - style.headerMm - style.tableHeadMm - style.safetyMm)
+      / style.rowMm,
+    ),
+  )
+
+  if (rows <= firstPageCapacity) {
+    return {
+      paperSize,
+      productRows: rows,
+      firstPageCapacity,
+      fillerRows: firstPageCapacity - rows,
+      continuationPageCapacity,
+      pageRows: [rows],
+      pageFillerRows: [firstPageCapacity - rows],
+      pages: 1,
+      multipage: false,
+    }
+  }
+
+  // Every physical sheet repeats the title/meta/table header. Only the final
+  // one reserves space for totals and signatures. Find the smallest sheet
+  // count that can hold every item without truncation (three sheets is a
+  // normal supported outcome, not a hard limit).
+  const pages = 1 + Math.ceil((rows - firstPageCapacity) / continuationPageCapacity)
+  const pageRows: number[] = []
+  let remaining = rows
+  for (let index = 0; index < pages; index += 1) {
+    const remainingPages = pages - index
+    const capacity = index === pages - 1 ? firstPageCapacity : continuationPageCapacity
+    const capacityAfter = remainingPages <= 1
+      ? 0
+      : ((remainingPages - 2) * continuationPageCapacity) + firstPageCapacity
+    const balanced = Math.ceil(remaining / remainingPages)
+    const requiredNow = Math.max(1, remaining - capacityAfter)
+    const take = Math.min(capacity, Math.max(balanced, requiredNow))
+    pageRows.push(take)
+    remaining -= take
+  }
+  const pageFillerRows = pageRows.map((count, index) => {
+    const capacity = index === pages - 1 ? firstPageCapacity : continuationPageCapacity
+    return Math.max(0, capacity - count)
+  })
+  return {
+    paperSize,
+    productRows: rows,
+    firstPageCapacity,
+    fillerRows: 0,
+    continuationPageCapacity,
+    pageRows,
+    pageFillerRows,
+    pages,
+    multipage: true,
+  }
+}
+
+/**
+ * One continuous blank grid row so unused paper keeps the photographed form
+ * appearance without adding many horizontal lines. Its height represents the
+ * unused row budget calculated by `planInvoiceLayout`.
+ */
+function emptyInvoiceRows(fillerRows: number, rowMm: number): string {
+  if (fillerRows <= 0) return ''
+  return `
+    <tr class="empty stretch" data-filler-rows="${fillerRows}" style="height:${fillerRows * rowMm}mm">
       <td class="num">&nbsp;</td>
       <td></td>
       <td></td>
@@ -115,7 +191,7 @@ function emptyInvoiceRows(filled: number, paperSize: PrintPaperSize): string {
       <td></td>
       <td></td>
       <td></td>
-    </tr>`).join('')
+    </tr>`
 }
 
 function summaryRow(label: string, amountHtml: string, strong = false): string {
@@ -129,7 +205,10 @@ function summaryRow(label: string, amountHtml: string, strong = false): string {
 }
 
 /**
- * Build invoice HTML. Product rows + empty fillers (~70% page height).
+ * Build invoice HTML. Product rows are assigned to explicit physical sheets;
+ * every sheet retains the vertical grid and only the last carries totals and
+ * signatures. This prevents a short invoice from creating a blank page 2 and
+ * makes two/three-page invoices deterministic.
  * Totals label aligns with Price+Discount; amount aligns with Amount.
  */
 export function buildSaleInvoiceHtml(
@@ -142,9 +221,10 @@ export function buildSaleInvoiceHtml(
   const money = (value: unknown) => escapeHtml(formatPrintMoney(value, input.currency, displayCurrency, exchangeRate))
   const lines = input.lines.map(asCartLine)
   const total = cartTotal(lines)
-  const rows = lines.map((line, index) => `
+  const layout = planInvoiceLayout(lines.length, paperSize)
+  const lineRows = (pageLines: PosCartLine[], offset: number) => pageLines.map((line, index) => `
     <tr>
-      <td class="num">${index + 1}</td>
+      <td class="num">${offset + index + 1}</td>
       <td class="product">${escapeHtml(line.name)}</td>
       <td class="center">${escapeHtml(line.uom || '—')}</td>
       <td class="num center">${escapeHtml(line.quantity)}</td>
@@ -164,8 +244,41 @@ export function buildSaleInvoiceHtml(
       <col class="col-amount">
     </colgroup>`
 
-  return `
-<article class="doc">
+  let offset = 0
+  const pages = layout.pageRows.map((rowCount, pageIndex) => {
+    const pageLines = lines.slice(offset, offset + rowCount)
+    const pageOffset = offset
+    offset += rowCount
+    const isLast = pageIndex === layout.pages - 1
+    const pageLabel = layout.pages > 1
+      ? `<p class="page-number">Page ${pageIndex + 1} / ${layout.pages}</p>`
+      : ''
+    const footer = !isLast ? '' : `
+  <div class="doc-footer">
+    <div class="totals">
+      <table class="summary">
+        ${colgroup}
+        ${summaryRow('ទឹកប្រាក់សរុប / Total Amount', money(total))}
+        ${summaryRow('ខ្វះមុន', money(input.previousDebtAmount))}
+        ${summaryRow('តម្លៃដឹកជញ្ជូន_____/_____/_____', money(input.deliveryPrice))}
+        ${summaryRow('បានទូទាត់_____/_____/_____', money(input.depositAmount))}
+        ${summaryRow('ខ្វះសរុប', money(input.outstandingAmount), true)}
+      </table>
+    </div>
+    <div class="signs">
+      <div class="sign">
+        <div class="line"></div>
+        <p>អ្នកទិញ / Buyer</p>
+      </div>
+      <div class="sign">
+        <div class="line"></div>
+        <p>អ្នកលក់ / Seller</p>
+      </div>
+    </div>
+  </div>`
+    return `
+<section class="invoice-page${isLast ? ' last' : ''}">
+  ${pageLabel}
   <p class="title">វិក្កយបត្រ / INVOICE</p>
   <div class="meta">
     <div>
@@ -190,33 +303,13 @@ export function buildSaleInvoiceHtml(
         <th class="num">តម្លៃសរុប<span>Amount</span></th>
       </tr>
     </thead>
-    <tbody>${rows}${emptyInvoiceRows(lines.length, paperSize)}</tbody>
+    <tbody>${lineRows(pageLines, pageOffset)}${emptyInvoiceRows(layout.pageFillerRows[pageIndex] || 0, PAPER_STYLES[paperSize].rowMm)}</tbody>
   </table>
-  <!-- Totals + signatures stay together on one page: page 1 for a short sale,
-       the LAST page when the product lines overflow to 2-3 pages. -->
-  <div class="doc-footer">
-    <div class="totals">
-      <table class="summary">
-        ${colgroup}
-        ${summaryRow('ទឹកប្រាក់សរុប / Total Amount', money(total))}
-        ${summaryRow('ខ្វះមុន', money(input.previousDebtAmount))}
-        ${summaryRow('តម្លៃដឹកជញ្ជូន_____/_____/_____', money(input.deliveryPrice))}
-        ${summaryRow('បានទូទាត់_____/_____/_____', money(input.depositAmount))}
-        ${summaryRow('ខ្វះសរុប', money(input.outstandingAmount), true)}
-      </table>
-    </div>
-    <div class="signs">
-      <div class="sign">
-        <div class="line"></div>
-        <p>អ្នកទិញ / Buyer</p>
-      </div>
-      <div class="sign">
-        <div class="line"></div>
-        <p>អ្នកលក់ / Seller</p>
-      </div>
-    </div>
-  </div>
-</article>`
+  ${footer}
+</section>`
+  }).join('')
+
+  return `<article class="doc">${pages}</article>`
 }
 
 /** Print the invoice in the chosen paper size and print currency (POS chooser). */

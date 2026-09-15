@@ -11,10 +11,13 @@ const props = withDefaults(defineProps<{
   /** Return mode: the original price/UOM/discount are preserved (read-only);
    *  only the return quantity is editable. */
   returnMode?: boolean
+  /** Line discounts require `pos.discount`; the backend re-checks on save. */
+  canDiscount?: boolean
 }>(), {
   disabled: false,
   saleCurrency: 'USD',
   returnMode: false,
+  canDiscount: true,
 })
 
 const emit = defineEmits<{
@@ -33,8 +36,6 @@ const currencyOptions = [
   { value: 'USD' as const, symbol: '$', labelKey: 'app.pos.currencyUsd' },
   { value: 'KHR' as const, symbol: '៛', labelKey: 'app.pos.currencyKhr' },
 ]
-
-const symbol = computed(() => props.saleCurrency === 'KHR' ? '៛' : '$')
 
 /** Cart amounts are stored in the sale currency — no conversion here. */
 const money = (value: unknown) => formatMoney(Number(value || 0), props.saleCurrency)
@@ -171,21 +172,16 @@ class="size-5 opacity-40" />
                 :label="t('app.pos.unitPrice')"
                 size="xs"
               >
-                <div class="relative">
-                  <UInputNumber
-                    :model-value="line.unitPrice"
-                    :min="0"
-                    :step="0.01"
-                    :increment="false"
-                    :decrement="false"
-                    size="md"
-                    class="w-full"
-                    :ui="{ base: 'text-base tabular-nums' }"
-                    :disabled="disabled || returnMode"
-                    @update:model-value="onPriceInput(line, $event)"
-                  />
-                  <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted">{{ symbol }}</span>
-                </div>
+                <CommonAppCurrencyInput
+                  :model-value="line.unitPrice"
+                  :currency="saleCurrency"
+                  :min="0"
+                  :step="0.01"
+                  size="md"
+                  class="w-full"
+                  :disabled="disabled || returnMode"
+                  @update:model-value="onPriceInput(line, $event)"
+                />
               </UFormField>
               <UFormField
                 :label="t('app.pos.lineDiscount')"
@@ -202,7 +198,7 @@ class="size-5 opacity-40" />
                     size="md"
                     class="w-full"
                     :ui="{ base: 'text-base tabular-nums' }"
-                    :disabled="disabled || returnMode"
+                    :disabled="disabled || returnMode || !canDiscount"
                     @update:model-value="emit('updateDiscount', line.productId, Number($event ?? 0))"
                   />
                   <span class="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted">%</span>

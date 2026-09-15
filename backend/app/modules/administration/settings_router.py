@@ -40,27 +40,37 @@ async def get_app_config(
     actor: User = Depends(get_current_user),
 ) -> dict:
     groups = await AdministrationService(db).get_settings()
-    return envelope(settings_service.build_app_config(groups, environment=app_settings.environment))
+    return envelope(
+        settings_service.build_app_config(
+            groups,
+            environment=app_settings.environment,
+            environment_token_configured=bool(app_settings.telegram_bot_token),
+        )
+    )
 
 
 @router.patch("/app-config")
 async def update_app_config(
     payload: dict,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     service = AdministrationService(db)
     groups = settings_service.app_config_to_groups(payload)
     if groups:
         await service.update_settings(groups, actor=actor)
     return envelope(
-        settings_service.build_app_config(await service.get_settings(), environment=app_settings.environment)
+        settings_service.build_app_config(
+            await service.get_settings(),
+            environment=app_settings.environment,
+            environment_token_configured=bool(app_settings.telegram_bot_token),
+        )
     )
 
 
 @router.post("/app-config/email/test-connection")
 async def test_email_connection(
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     return envelope({"status": "disabled", "message": "Email delivery is not configured on this server."})
 
@@ -68,7 +78,7 @@ async def test_email_connection(
 @router.post("/app-config/email/send-test")
 async def send_test_email(
     payload: dict | None = None,
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     return envelope({"status": "disabled", "message": "Email delivery is not configured on this server."})
 
@@ -76,7 +86,7 @@ async def send_test_email(
 @router.post("/app-config/telegram/test-connection")
 async def test_telegram_connection(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     from app.shared.telegram.service import send_test_notification
 
@@ -87,7 +97,7 @@ async def test_telegram_connection(
 async def send_test_telegram(
     payload: dict | None = None,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     from app.shared.telegram.client import send_message
     from app.shared.telegram.service import send_test_notification
@@ -122,7 +132,7 @@ async def get_app_info(
 async def update_app_info(
     payload: dict,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     return envelope(await settings_service.update_app_info(AdministrationService(db), payload, actor=actor))
 
@@ -130,7 +140,7 @@ async def update_app_info(
 @router.post("/app-info/reset")
 async def reset_app_info(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     return envelope(await settings_service.reset_app_info(AdministrationService(db), actor=actor))
 
@@ -140,7 +150,7 @@ async def reset_app_info(
 
 @router.post("/reset-data")
 async def reset_all_data(
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     """Destructive reset is intentionally unavailable through the API.
 

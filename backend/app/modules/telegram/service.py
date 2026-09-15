@@ -102,7 +102,13 @@ class ExpiryAlertService:
                 User.telegram_chat_id != "",
             )
         )
-        return [str(chat_id) for chat_id in result.scalars().all()]
+        contacts = [str(chat_id) for chat_id in result.scalars().all()]
+        configured = str(
+            await get_setting_value(self.session, "telegram", "chat_id", "") or ""
+        ).strip()
+        if configured and configured not in contacts:
+            contacts.append(configured)
+        return contacts
 
     async def scan_and_send(
         self,

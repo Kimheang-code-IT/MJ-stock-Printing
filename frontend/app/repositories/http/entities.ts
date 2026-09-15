@@ -25,6 +25,7 @@ import type {
 import { ApiEndpoints, CollectionEndpoints, type ApiCollection } from '~/utils/constants/api-endpoints'
 import { documentSequencePreview } from '~/utils/document-sequences'
 import { flatKeysToPermissionRows, permissionRowsToFlatKeys } from '~/utils/role/permissions'
+import { mediaObjectKey } from '~/utils/security/url'
 
 export function metaOf(response: unknown): ApiMeta | null {
   const meta = (response as ApiResponse<unknown>)?.meta
@@ -121,6 +122,8 @@ function adaptRoleOut(role: Record<string, unknown>): Record<string, unknown> {
     permissions,
     permissionRows: permissionRowsFromFlatKeys(permissions),
     permissionCount: Number(role.permissionCount ?? permissions.length),
+    // Backend serializes `is_system`; the UI reads the camelCase flag.
+    isSystem: Boolean(role.isSystem ?? role.is_system),
     // Roles carry ACTIVE/DISABLED server-side; the list uses Active/Inactive.
     status: String(role.status ?? 'ACTIVE').toUpperCase() === 'DISABLED' ? 'Inactive' : 'Active',
   }
@@ -164,8 +167,10 @@ function adaptProductOut(row: Record<string, unknown>): Record<string, unknown> 
     categoryId: asRecordId(row.categoryId ?? row.category_id) || null,
     brandId: asRecordId(row.brandId ?? row.brand_id) || null,
     uomId: asRecordId(row.uomId ?? row.uom_id) || null,
+    supplierId: asRecordId(row.supplierId ?? row.supplier_id) || null,
     category: row.category ?? row.category_name ?? '',
     brand: row.brand ?? row.brand_name ?? '',
+    supplier: row.supplier ?? row.supplier_name ?? '',
     uom: row.uom ?? row.uom_name ?? '',
     uomSymbol: row.uomSymbol ?? row.uom_symbol ?? '',
     costPrice: row.costPrice ?? row.cost_price,
@@ -231,6 +236,7 @@ function adaptProductIn(input: Record<string, unknown>): Record<string, unknown>
   if (input.categoryId != null) output.category_id = asRecordId(input.categoryId) || null
   if (input.brandId != null) output.brand_id = asRecordId(input.brandId) || null
   if (input.uomId != null) output.uom_id = asRecordId(input.uomId) || null
+  if (input.supplierId != null) output.supplier_id = asRecordId(input.supplierId) || null
   if (input.costPrice != null) output.cost_price = Number(input.costPrice)
   if (input.salePrice != null) output.salePrice = Number(input.salePrice)
   if (input.minimumStock != null) output.minimum_stock = Number(input.minimumStock)
@@ -238,12 +244,18 @@ function adaptProductIn(input: Record<string, unknown>): Record<string, unknown>
   if (input.trackBatch != null) output.track_batch = Boolean(input.trackBatch)
   if (input.fifo != null) output.fifo = Boolean(input.fifo)
   if (input.note != null) output.note = input.note
-  // imageObjectKey is the stored object key; a bare string imageUrl without a
-  // scheme is treated as one too (data:/http: URLs are UI-only previews).
-  const imageKey = text(input.imageObjectKey)
-  const rawImage = text(input.imageUrl)
-  if (imageKey) output.image_object_key = imageKey
-  else if (rawImage && !/^(data:|https?:)/.test(rawImage)) output.image_object_key = rawImage
+  // imageObjectKey is the stored object key; the form's image field (imageUrl)
+  // holds the uploaded key or the resolved media URL. data:/http: URLs are
+  // UI-only previews. Prefer the form field, which reflects the latest upload.
+  const hasImageField = 'imageUrl' in input || 'imageObjectKey' in input
+  const rawImage = text(input.imageUrl ?? input.imageObjectKey)
+  if (rawImage) {
+    output.image_object_key = mediaObjectKey(rawImage)
+  }
+  else if (hasImageField) {
+    // The image field was cleared — clear the stored image.
+    output.image_object_key = null
+  }
   if (input.status != null) {
     const status = text(input.status).toUpperCase()
     output.status = status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE'
@@ -282,11 +294,21 @@ function canonicalExpenseMethod(method: unknown): string {
   return EXPENSE_PAYMENT_METHOD_MAP[String(method ?? '').trim()] || 'OTHER'
 }
 
+/** Backend ACTIVE/INACTIVE → the config-driven forms' Active/Inactive dialect. */
+function statusToUiDialect(value: unknown): unknown {
+  if (value === 'ACTIVE') return 'Active'
+  if (value === 'INACTIVE') return 'Inactive'
+  return value
+}
+
 function adaptEntityOut(collection: ApiCollection, row: Record<string, unknown>): Record<string, unknown> {
   if (collection === 'users') return adaptUserOut(row)
   if (collection === 'roles') return adaptRoleOut(row)
   if (collection === 'auditLogs') return adaptAuditLogOut(row)
   if (collection === 'products') return adaptProductOut(row)
+  if (collection === 'categories' || collection === 'uoms' || collection === 'brands') {
+    return { ...row, status: statusToUiDialect(row.status) }
+  }
   if (collection === 'customers' || collection === 'suppliers') return adaptPartyLocationOut(row)
   if (collection === 'customerDebts') return adaptCustomerDebtOut(row)
   if (collection === 'supplierDebts') return adaptSupplierDebtOut(row)
@@ -483,6 +505,7 @@ function adaptPartyLocationOut(row: Record<string, unknown>): Record<string, unk
     id: asRecordId(row.id),
     location,
     address: location,
+    status: statusToUiDialect(row.status),
   }
 }
 
@@ -541,12 +564,26 @@ function adaptSupplierDebtOut(row: Record<string, unknown>): Record<string, unkn
   }
 }
 
+/**
+ * The config-driven forms use the Active/Inactive status dialect, but the
+ * setup/master-data APIs store canonical uppercase ACTIVE/INACTIVE (users and
+ * roles use ACTIVE/DISABLED). Normalize every write so a selected "Active"
+ * never trips the backend status pattern.
+ */
+function normalizeStatusValue(output: Record<string, unknown>): Record<string, unknown> {
+  const status = typeof output.status === 'string' ? output.status.trim() : ''
+  if (status) output.status = status.toUpperCase()
+  return output
+}
+
 function adaptEntityIn(collection: ApiCollection, input: Record<string, unknown>): Record<string, unknown> {
-  if (collection === 'roles') return adaptRoleIn(input)
-  if (collection === 'users') return adaptUserIn(input)
-  if (collection === 'customers' || collection === 'suppliers') return adaptPartyLocationIn(input)
-  if (collection === 'products') return adaptProductIn(input)
-  return stripUiOnlyFields(input)
+  let output: Record<string, unknown>
+  if (collection === 'roles') output = adaptRoleIn(input)
+  else if (collection === 'users') output = adaptUserIn(input)
+  else if (collection === 'customers' || collection === 'suppliers') output = adaptPartyLocationIn(input)
+  else if (collection === 'products') output = adaptProductIn(input)
+  else output = stripUiOnlyFields(input)
+  return normalizeStatusValue(output)
 }
 
 /** Round a numeric-ish value to 4 dp (report grouping math). */
@@ -556,6 +593,30 @@ function q4(value: unknown): number {
 
 function q2(value: unknown): number {
   return Math.round((Number(value ?? 0) + Number.EPSILON) * 100) / 100
+}
+
+/** Canonical tender method → Sales Report display label. The row keeps the
+ *  canonical `paymentMethod` so the filter still matches; the table renders
+ *  `paymentMethodLabel`. */
+const SALES_PAYMENT_LABELS: Record<string, string> = {
+  CASH: 'Cash',
+  BANK_QR: 'Bank/QR',
+  CUSTOMER_DEBT: 'Credit',
+  UNPAID: 'Unpaid',
+}
+
+function salesPaymentLabel(method: unknown): string {
+  const value = String(method ?? '')
+  return SALES_PAYMENT_LABELS[value] || value
+}
+
+/** Backend payment_status → report status label (Paid/Partial/Unpaid). */
+function salesStatusFromPayment(status: unknown): string | null {
+  const value = String(status ?? '').toUpperCase()
+  if (value === 'PAID') return 'Paid'
+  if (value === 'PARTIAL') return 'Partial'
+  if (value === 'UNPAID') return 'Unpaid'
+  return null
 }
 
 /** One backend sales-report line row → camelCase for grouping. */
@@ -579,8 +640,21 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
     total: q2(row.sales_amount ?? row.salesAmount),
     returnAmount: q2(row.return_amount ?? row.returnAmount),
     debtAmount: q2(row.debt_amount ?? row.debtAmount),
-    paymentMethod: String(row.payment_method ?? ''),
+    paymentMethod: String(row.payment_method ?? row.paymentMethod ?? ''),
     cashier: String(row.cashier_name ?? row.cashier ?? ''),
+    // Saved sale header (repeated per line): authoritative checkout values so
+    // the report never recomputes from current prices.
+    saleSubtotal: q2(row.subtotal ?? row.saleSubtotal),
+    saleDiscount: q2(row.sale_discount ?? row.saleDiscount),
+    deliveryPrice: q2(row.delivery_price ?? row.deliveryPrice),
+    grandTotal: q2(row.grand_total ?? row.grandTotal),
+    paidAmount: q2(row.paid_amount ?? row.paidAmount),
+    paymentStatus: row.payment_status ?? row.paymentStatus ?? null,
+    note: row.note ?? null,
+    dueDate: row.due_date ?? row.dueDate ?? null,
+    // Document currency snapshot (historical sales render in their own currency).
+    currency: String(row.currency ?? 'USD'),
+    exchangeRate: Number(row.exchange_rate ?? row.exchangeRate ?? 1) || 1,
   }
 }
 
@@ -588,6 +662,10 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
  * Group line-level GET /reports/sales rows into document rows matching the
  * UI sale shape (id, saleNo, items[] with returnable quantities) so the
  * Sales Report table AND the customer Return dialog share one contract.
+ *
+ * Rows arrive raw from the report endpoint — adapt exactly once here. The
+ * saved sale header (subtotal/discount/delivery/grand_total/paid/debt) is the
+ * source of truth; line sums are only a fallback for legacy rows.
  */
 function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
   const bySale = new Map<string, Record<string, unknown>>()
@@ -604,18 +682,26 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
         createdAt: line.date,
         customer: line.customer,
         customerId: null,
+        currency: line.currency || 'USD',
+        exchangeRate: Number(line.exchangeRate) || 1,
+        note: line.note ?? null,
+        dueDate: line.dueDate ?? null,
         items: [],
         lineCount: 0,
+        // Saved header values (repeat per line) + line-sum fallbacks.
         subtotal: 0,
+        lineGross: 0,
+        lineDiscount: 0,
         discount: 0,
         deliveryPrice: 0,
         total: 0,
         returnAmount: 0,
         paidAmount: 0,
+        debtAmount: 0,
         remaining: 0,
+        paymentStatus: line.paymentStatus,
         paymentMethod: '',
         cashier: '',
-        status: 'Paid',
       }
       bySale.set(key, doc)
     }
@@ -636,24 +722,52 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
       total: line.total,
     })
     doc.lineCount = items.length
-    doc.subtotal = q2(Number(doc.subtotal) + Number(line.total) + Number(line.discount))
-    doc.discount = q2(Number(doc.discount) + Number(line.discount))
-    doc.total = q2(Number(doc.total) + Number(line.total))
+    doc.lineGross = q2(Number(doc.lineGross) + Number(line.total) + Number(line.discount))
+    doc.lineDiscount = q2(Number(doc.lineDiscount) + Number(line.discount))
     doc.returnAmount = q2(Number(doc.returnAmount) + Number(line.returnAmount))
     // Header fields repeat per line — take the first non-empty value.
-    if (!doc.paymentMethod && line.paymentMethod) doc.paymentMethod = line.paymentMethod
+    if (!doc.paymentMethod && line.paymentMethod) doc.paymentMethod = String(line.paymentMethod)
     if (!doc.cashier && line.cashier) doc.cashier = line.cashier
-    doc.remaining = Math.max(Number(doc.remaining), Number(line.debtAmount))
+    if (!doc.note && line.note) doc.note = line.note
+    if (!doc.dueDate && line.dueDate) doc.dueDate = line.dueDate
+    if (!doc.paymentStatus && line.paymentStatus) doc.paymentStatus = line.paymentStatus
+    // Saved header values are identical on every line — assign directly.
+    doc.subtotal = Number(line.saleSubtotal) || 0
+    doc.discount = Number(line.saleDiscount) || 0
+    doc.deliveryPrice = Number(line.deliveryPrice) || 0
+    doc.total = Number(line.grandTotal) || 0
+    doc.paidAmount = Number(line.paidAmount) || 0
+    doc.debtAmount = Number(line.debtAmount) || 0
+    if (line.currency) doc.currency = line.currency
+    if (line.exchangeRate) doc.exchangeRate = Number(line.exchangeRate)
   }
   const docs = [...bySale.values()] as AppRecord[]
   for (const doc of docs) {
-    const total = Number(doc.total)
-    doc.paidAmount = q2(total - Number(doc.remaining))
+    // Prefer the saved header; fall back to the line sums only when absent.
+    const subtotal = Number(doc.subtotal) || Number(doc.lineGross)
+    const discount = Number(doc.discount) || Number(doc.lineDiscount)
+    const deliveryPrice = Number(doc.deliveryPrice) || 0
+    const grandTotal = Number(doc.total) || q2(subtotal - discount + deliveryPrice)
+    const remaining = Number(doc.debtAmount) || 0
+    doc.subtotal = q2(subtotal)
+    doc.discount = q2(discount)
+    // Money-formatted column aliases (isMoneyKey matches *Amount, not the
+    // bare `discount`/`remaining` keys kept for the detail dialog).
+    doc.discountAmount = q2(discount)
+    doc.deliveryPrice = q2(deliveryPrice)
+    doc.total = q2(grandTotal)
+    doc.remaining = q2(remaining)
+    doc.remainingAmount = q2(remaining)
+    doc.paidAmount = q2(Number(doc.paidAmount) || (grandTotal - remaining))
     const allReturned = (doc.items as Record<string, unknown>[]).length > 0
       && (doc.items as Record<string, unknown>[]).every(line => q4(line.returnableQuantity) <= 0)
-    doc.status = allReturned ? 'Returned' : Number(doc.remaining) > 0
-      ? Number(doc.paidAmount) > 0 ? 'Partial' : 'Unpaid'
-      : 'Paid'
+    const statusFromPayment = salesStatusFromPayment(doc.paymentStatus)
+    doc.status = allReturned
+      ? 'Returned'
+      : (statusFromPayment || (remaining > 0
+        ? (Number(doc.paidAmount) > 0 ? 'Partial' : 'Unpaid')
+        : 'Paid'))
+    doc.paymentMethodLabel = salesPaymentLabel(doc.paymentMethod)
   }
   // Newest sale first (report rows arrive newest-first already; grouping
   // preserves that order per document).
@@ -776,9 +890,13 @@ export function createHttpEntityRepository(): EntityRepository {
       requestKey: `entity-list:${collection}`,
     })
     const items = unwrap<Record<string, unknown>[]>(response)
-    const mapped = (Array.isArray(items) ? items : []).map(row => adaptEntityOut(key, row)) as AppRecord[]
-    if (key === 'sales') return { items: groupSalesReportRows(mapped as Record<string, unknown>[]), meta: metaOf(response) }
-    if (key === 'stockIns') return { items: groupPurchaseReportRows(mapped as Record<string, unknown>[]), meta: metaOf(response) }
+    const raw = (Array.isArray(items) ? items : []) as Record<string, unknown>[]
+    // Report endpoints return line-level rows; the group functions adapt each
+    // row exactly ONCE. Pre-mapping here would re-adapt camelCase keys and
+    // zero out the money/payment/date fields (sales + purchase reports).
+    if (key === 'sales') return { items: groupSalesReportRows(raw), meta: metaOf(response) }
+    if (key === 'stockIns') return { items: groupPurchaseReportRows(raw), meta: metaOf(response) }
+    const mapped = raw.map(row => adaptEntityOut(key, row)) as AppRecord[]
     return { items: mapped, meta: metaOf(response) }
   }
 
@@ -813,7 +931,10 @@ export function createHttpEntityRepository(): EntityRepository {
 
   async function remove(collection: string, id: string): Promise<void> {
     const endpoint = CollectionEndpoints[collection as ApiCollection]
-    await api.delete(`${endpoint}/${id}`)
+    // Delete conflicts (e.g. 409 "record in use") carry a business explanation;
+    // callers show that message themselves instead of the raw "API Error: 409"
+    // toast from useApi.
+    await api.delete(`${endpoint}/${id}`, { suppressErrorToast: true })
   }
 
   async function setStatus(collection: string, id: string, status: string): Promise<AppRecord> {
@@ -832,18 +953,22 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
   /** camelCase checkout input → POST /pos/sales body (spec §7 POS).
    *  Payment labels map to canonical tender methods: Cash→CASH, Card /
    *  Mobile Payment / Bank Transfer→BANK_QR, Credit→CUSTOMER_DEBT. */
+  function saleItemsBody(items: PosCompleteSaleInput['items']): Record<string, unknown>[] {
+    return (items || []).map(item => ({
+      product_id: item.productId,
+      quantity: item.quantity,
+      ...(item.unitPrice != null ? { unit_price: item.unitPrice } : {}),
+      ...(item.discountPercent != null ? { discount_percent: item.discountPercent } : {}),
+      ...(item.uomId ? { uom_id: item.uomId } : {}),
+      ...(item.uomSymbol ? { uom_symbol: item.uomSymbol } : {}),
+      ...(item.factorToBase != null ? { factor_to_base: item.factorToBase } : {}),
+    }))
+  }
+
   function saleBody(input: PosCompleteSaleInput): Record<string, unknown> {
     return {
       customer_id: input.customerId || null,
-      items: (input.items || []).map(item => ({
-        product_id: item.productId,
-        quantity: item.quantity,
-        ...(item.unitPrice != null ? { unit_price: item.unitPrice } : {}),
-        ...(item.discountPercent != null ? { discount_percent: item.discountPercent } : {}),
-        ...(item.uomId ? { uom_id: item.uomId } : {}),
-        ...(item.uomSymbol ? { uom_symbol: item.uomSymbol } : {}),
-        ...(item.factorToBase != null ? { factor_to_base: item.factorToBase } : {}),
-      })),
+      items: saleItemsBody(input.items),
       payment_method: canonicalPaymentMethod(input.paymentMethod),
       amount_received: input.paidAmount,
       discount: input.discount ?? 0,
@@ -866,9 +991,19 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
 
   async function updateSale(input: PosCompleteSaleInput & { saleId: string }): Promise<AppRecord> {
     const { saleId, ...rest } = input
+    // SaleUpdateRequest only accepts the re-applied order fields; customer,
+    // tender and payments stay untouched on edit. Never send keys the schema
+    // silently ignores.
     return unwrap<Record<string, unknown>>(await api.patch<unknown>(
       ApiEndpoints.SALE_DETAIL(saleId),
-      saleBody(rest),
+      {
+        items: saleItemsBody(rest.items),
+        discount: rest.discount ?? 0,
+        delivery_price: rest.deliveryPrice ?? 0,
+        note: rest.note ?? null,
+        currency: rest.currency ?? 'USD',
+        exchange_rate: rest.exchangeRate ?? 1,
+      },
     )) as AppRecord
   }
 
@@ -1098,6 +1233,18 @@ function adaptSaleDetailOut(data: Record<string, unknown>, fallbackSaleId: strin
     customerName: String(data.customer_name ?? data.customer ?? ''),
     currency: String(data.currency ?? 'USD') === 'KHR' ? 'KHR' : 'USD',
     exchangeRate: Number(data.exchange_rate ?? data.exchangeRate ?? 1) || 1,
+    // Saved checkout fields so POS edit never zeroes the original amounts.
+    paymentMethod: String(data.payment_method ?? data.paymentMethod ?? ''),
+    paymentStatus: String(data.payment_status ?? data.paymentStatus ?? ''),
+    subtotal: Number(data.subtotal ?? 0),
+    discount: Number(data.discount_amount ?? data.discount ?? data.discountAmount ?? 0),
+    deliveryPrice: Number(data.delivery_price ?? data.deliveryPrice ?? 0),
+    paidAmount: Number(data.paid_amount ?? data.paidAmount ?? 0),
+    debtAmount: Number(data.debt_amount ?? data.debtAmount ?? 0),
+    note: String(data.note ?? ''),
+    dueDate: data.due_date != null || data.dueDate != null
+      ? String(data.due_date ?? data.dueDate).slice(0, 10)
+      : null,
     items: items.map((item) => {
       const quantity = Number(item.quantity ?? 0)
       const unitPrice = Number(item.unit_price ?? item.unitPrice ?? item.price ?? 0)

@@ -14,6 +14,8 @@ const props = defineProps<{
   customerLocation: string
   /** Delivery price typed for this invoice (document currency). */
   deliveryPrice: number
+  /** Document currency of the invoice (drives the price field symbol). */
+  currency?: 'USD' | 'KHR'
   disabled?: boolean
 }>()
 
@@ -95,15 +97,14 @@ function confirm() {
         :label="t('app.pos.deliveryPrice')"
         size="md"
       >
-        <UInputNumber
+        <CommonAppCurrencyInput
           :model-value="priceInput"
+          :currency="currency"
           :min="0"
           :step="0.01"
-          :increment="false"
-          :decrement="false"
           class="w-full"
           size="lg"
-          :ui="{ base: 'text-base tabular-nums' }"
+          align="right"
           :disabled="disabled"
           @update:model-value="emitPrice($event)"
         />

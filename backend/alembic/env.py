@@ -9,6 +9,24 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.core.config import settings
 from app.core.database import Base
 
+# Import every model module so Base.metadata is fully populated before Alembic
+# compares it against the database. Without these, autogenerate/check compare
+# against an empty schema and can never detect model<->migration drift.
+import app.modules.administration.models  # noqa: F401,E402
+import app.modules.auth.models  # noqa: F401,E402
+import app.modules.brands.models  # noqa: F401,E402
+import app.modules.categories.models  # noqa: F401,E402
+import app.modules.customers.models  # noqa: F401,E402
+import app.modules.delivery.models  # noqa: F401,E402
+import app.modules.pos.models  # noqa: F401,E402
+import app.modules.reports.models  # noqa: F401,E402
+import app.modules.stock.models  # noqa: F401,E402
+import app.modules.suppliers.models  # noqa: F401,E402
+import app.modules.telegram.models  # noqa: F401,E402
+import app.modules.uoms.models  # noqa: F401,E402
+import app.shared.audit.models  # noqa: F401,E402
+import app.shared.documents.models  # noqa: F401,E402
+
 config = context.config
 
 if config.config_file_name is not None:

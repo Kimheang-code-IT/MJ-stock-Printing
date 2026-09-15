@@ -19,6 +19,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+// Marker attached to a thrown fetch error once `useApi` has already surfaced it
+// (generic toast, permission alert, or session-expired alert). Callers check it
+// to avoid showing a second, raw `[METHOD] "url": 409 Conflict` toast.
+const HANDLED_API_ERROR = Symbol.for('stockpos.apiErrorHandled')
+
+export function markApiErrorHandled(error: unknown): void {
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    ;(error as Record<symbol, unknown>)[HANDLED_API_ERROR] = true
+  }
+}
+
+export function isApiErrorHandled(error: unknown): boolean {
+  return Boolean(
+    error
+    && (typeof error === 'object' || typeof error === 'function')
+    && (error as Record<symbol, unknown>)[HANDLED_API_ERROR],
+  )
+}
+
+/**
+ * Human-readable message for any thrown error.
+ *
+ * Prefers the backend `{ detail: { message } }` envelope over ofetch's raw
+ * `[DELETE] "http://...": 409 Conflict` string, and falls back otherwise.
+ */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (isRecord(error)) {
+    const status = (error as { statusCode?: number }).statusCode
+    if ((error as { data?: unknown }).data !== undefined) {
+      const message = normalizeApiError((error as { data?: unknown }).data, status ?? 500).message
+      if (message) return message
+    }
+  }
+  if (error instanceof Error && error.message && !/^\[(GET|POST|PUT|PATCH|DELETE)\]/.test(error.message)) {
+    return error.message
+  }
+  return fallback
+}
+
 export function normalizeApiError(payload: unknown, statusCode = 500): NormalizedApiError {
   const detail = isRecord(payload) ? payload.detail : undefined
 

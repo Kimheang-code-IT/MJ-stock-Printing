@@ -49,6 +49,36 @@ export function safeImageSource(value: unknown): string | null {
   return safeExternalUrl(raw)
 }
 
+/** Download URL for a stored media object key (or an already-resolved URL). */
+export function mediaObjectUrl(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return null
+  if (/^(data:|blob:|https?:)/i.test(raw)) return raw
+  const marker = '/api/v1/images/'
+  const index = raw.indexOf(marker)
+  if (index >= 0) return raw.slice(index)
+  return `${marker}${raw.split('/').map(segment => encodeURIComponent(segment)).join('/')}`
+}
+
+/** Object key behind a form image value (upload key, media URL, or data URL). */
+export function mediaObjectKey(value: unknown): string | null {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return null
+  if (/^(data:|blob:|https?:)/i.test(raw)) return null
+  const marker = '/api/v1/images/'
+  const index = raw.indexOf(marker)
+  if (index >= 0) {
+    const encoded = raw.slice(index + marker.length)
+    try {
+      return decodeURIComponent(encoded)
+    }
+    catch {
+      return encoded
+    }
+  }
+  return raw
+}
+
 /** Resolve uploads against the API origin without ever forwarding auth cross-origin. */
 export function sameOriginApiUrl(path: string, apiBase: string): string | null {
   try {

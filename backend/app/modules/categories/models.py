@@ -12,7 +12,9 @@ from app.core.database import Base
 
 class Category(Base):
     __tablename__ = "categories"
-    __table_args__ = (UniqueConstraint("code", name="uq_categories_code"),)
+    # Unnamed so PostgreSQL uses its implicit constraint name (the migration
+    # creates it unnamed too); keeps model <-> migration drift-free.
+    __table_args__ = (UniqueConstraint("code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     code: Mapped[str] = mapped_column(String(50), nullable=False)

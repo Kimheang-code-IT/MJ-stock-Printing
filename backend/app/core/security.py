@@ -40,10 +40,14 @@ def create_access_token(user_id: int, extra_claims: dict[str, Any] | None = None
 
 
 def create_refresh_token(
-    user_id: int | str, family_id: str | None = None, extra_claims: dict[str, Any] | None = None
+    user_id: int | str,
+    family_id: str | None = None,
+    extra_claims: dict[str, Any] | None = None,
+    expire_days: int | None = None,
 ) -> tuple[str, datetime, str, str]:
     now = utcnow()
-    expires = now + timedelta(days=settings.refresh_token_expire_days)
+    days = expire_days if expire_days and expire_days > 0 else settings.refresh_token_expire_days
+    expires = now + timedelta(days=days)
     jti = uuid.uuid4().hex
     family = family_id or uuid.uuid4().hex
     payload = {

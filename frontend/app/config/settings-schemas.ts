@@ -3,8 +3,6 @@ import {
   CURRENCY_OPTIONS,
   DATE_FORMAT_OPTIONS,
   LANDING_PAGE_OPTIONS,
-  FIRST_DAY_OF_WEEK_OPTIONS,
-  LOCALE_OPTIONS,
   NUMBER_FORMAT_OPTIONS,
   PAGE_SIZE_OPTIONS,
   TIME_FORMAT_OPTIONS,
@@ -113,18 +111,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             options: TIME_FORMAT_OPTIONS,
           },
           {
-            key: 'localization.firstDayOfWeek',
-            labelKey: 'core.settings.firstDayOfWeek',
-            type: 'select',
-            options: FIRST_DAY_OF_WEEK_OPTIONS,
-          },
-          {
-            key: 'localization.locale',
-            labelKey: 'core.settings.locale',
-            type: 'select',
-            options: LOCALE_OPTIONS,
-          },
-          {
             key: 'localization.numberFormat',
             labelKey: 'core.settings.numberFormat',
             type: 'select',
@@ -167,7 +153,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
           { key: 'email.fromName', labelKey: 'core.settings.fromName', type: 'text' },
           { key: 'email.fromEmail', labelKey: 'core.settings.fromEmail', type: 'text' },
           { key: 'email.replyToEmail', labelKey: 'core.settings.replyTo', type: 'text' },
-          { key: '__emailConnection', labelKey: 'core.connection.title', type: 'connection-status', colSpan: 2 },
         ],
       },
     ],
@@ -202,10 +187,8 @@ export const appConfigTabs: DocumentTabSchema[] = [
         titleKey: 'core.settings.tabs.telegram',
         fields: [
           { key: 'telegram.enabled', labelKey: 'core.settings.enableTelegram', type: 'boolean' },
-          // Env-only secret: masked status display, never an editable input.
-          { key: 'telegram.botToken', labelKey: 'core.settings.botToken', type: 'text', readOnly: true, helpKey: 'core.fieldHelp.botTokenEnv' },
+          { key: 'telegram.botToken', labelKey: 'core.settings.botToken', type: 'secret', helpKey: 'core.fieldHelp.botToken' },
           { key: 'telegram.chatId', labelKey: 'core.settings.chatId', type: 'text' },
-          { key: '__telegramConnection', labelKey: 'core.connection.title', type: 'connection-status', colSpan: 2 },
           { key: 'telegram.messageLanguage', labelKey: 'core.settings.messageLanguage', type: 'select', options: [{ label: 'English', value: 'en' }, { label: 'ខ្មែរ', value: 'km' }] },
         ],
       },
@@ -262,9 +245,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
         id: 'security',
         titleKey: 'core.settings.tabs.security',
         fields: [
-          { key: 'security.maxLoginAttempts', labelKey: 'core.settings.maxLoginAttempts', type: 'number' },
           { key: 'security.accountLockMinutes', labelKey: 'core.settings.accountLockMinutes', type: 'number' },
-          { key: 'security.passwordExpiryDays', labelKey: 'core.settings.passwordExpiryDays', type: 'number' },
           { key: 'security.auditRetentionDays', labelKey: 'core.settings.auditRetentionDays', type: 'number' },
           { key: 'security.requirePasswordChange', labelKey: 'core.settings.requirePasswordChange', type: 'boolean' },
           {
@@ -275,12 +256,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
           },
           { key: 'security.passwordResetCodeExpiryMinutes', labelKey: 'core.settings.passwordResetCodeExpiryMinutes', type: 'number' },
           { key: 'security.jwtRefreshTokenDays', labelKey: 'core.settings.jwtRefreshTokenDays', type: 'number' },
-          {
-            key: 'security.allowedUploadExtensions',
-            labelKey: 'core.config.allowedExtensions',
-            type: 'csv-list',
-            colSpan: 2,
-          },
         ],
       },
     ],
@@ -316,13 +291,11 @@ const SETTINGS_FIELD_HELP: Record<string, string> = {
   'localization.timezone': 'core.fieldHelp.timezone',
   'localization.dateFormat': 'core.fieldHelp.dateFormat',
   'localization.timeFormat': 'core.fieldHelp.timeFormat',
-  'localization.firstDayOfWeek': 'core.fieldHelp.firstDayOfWeek',
-  'localization.locale': 'core.fieldHelp.locale',
   'localization.numberFormat': 'core.fieldHelp.numberFormat',
   'email.enabled': 'core.fieldHelp.enableEmail',
   'email.replyToEmail': 'core.fieldHelp.replyTo',
   'telegram.enabled': 'core.fieldHelp.enableTelegram',
-  'telegram.botToken': 'core.fieldHelp.botTokenEnv',
+  'telegram.botToken': 'core.fieldHelp.botToken',
   'telegram.passwordResetEnabled': 'core.fieldHelp.passwordResetEnabled',
   'telegram.paymentInvoiceNotifyEnabled': 'core.fieldHelp.paymentInvoiceNotify',
   'telegram.stockInquiryEnabled': 'core.fieldHelp.stockInquiry',
@@ -347,4 +320,3 @@ export const systemSettingsTabs: DocumentTabSchema[] = appConfigTabs
 
 /** Storage is local disk on the API. No S3 / MinIO / Google Drive settings. */
 export const storageSettingsTabs: DocumentTabSchema[] = []
-

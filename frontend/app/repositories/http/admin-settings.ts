@@ -6,8 +6,9 @@ import type { AppConfig } from '~/types/stock-pos/settings'
  * (`{ values: { <group>: { <key>: value } } }`).
  *
  * Only keys that exist in the backend `SETTING_GROUPS` catalog are mapped;
- * unknown keys would be rejected by the API. The Telegram bot token is
- * env-only (`TELEGRAM_BOT_TOKEN`) and is never sent or stored from the UI.
+ * unknown keys would be rejected by the API. Secret placeholders returned by
+ * the API are never written back; only a newly entered token (or an explicit
+ * empty value used to clear it) is sent.
  */
 
 export type AdminSettingsGroups = Record<string, Record<string, unknown>>
@@ -27,6 +28,10 @@ export function toAdminSettingsValues(input: Partial<AppConfig>): AdminSettingsG
   const telegramInput = input.telegram
   if (telegramInput) {
     if (telegramInput.enabled !== undefined) telegram.enabled = telegramInput.enabled
+    if (telegramInput.botToken !== undefined && telegramInput.botToken !== '********') {
+      telegram.bot_token = String(telegramInput.botToken).trim()
+    }
+    if (telegramInput.chatId !== undefined) telegram.chat_id = String(telegramInput.chatId).trim()
     if (telegramInput.passwordResetEnabled !== undefined) telegram.enable_password_reset = telegramInput.passwordResetEnabled
     if (telegramInput.paymentInvoiceNotifyEnabled !== undefined) telegram.payment_invoice_notify_enabled = telegramInput.paymentInvoiceNotifyEnabled
     if (telegramInput.stockInquiryEnabled !== undefined) telegram.stock_inquiry_enabled = telegramInput.stockInquiryEnabled
@@ -75,6 +80,8 @@ export function applyAdminSettingsGroups(config: AppConfig, groups: AdminSetting
 
   const telegram = groups.telegram
   if (telegram) {
+    if (telegram.bot_token !== undefined) next.telegram.botToken = String(telegram.bot_token)
+    if (telegram.chat_id !== undefined) next.telegram.chatId = String(telegram.chat_id)
     if (telegram.enable_password_reset !== undefined) next.telegram.passwordResetEnabled = asBoolean(telegram.enable_password_reset, next.telegram.passwordResetEnabled)
     if (telegram.payment_invoice_notify_enabled !== undefined) next.telegram.paymentInvoiceNotifyEnabled = asBoolean(telegram.payment_invoice_notify_enabled, next.telegram.paymentInvoiceNotifyEnabled)
     if (telegram.stock_inquiry_enabled !== undefined) next.telegram.stockInquiryEnabled = asBoolean(telegram.stock_inquiry_enabled, next.telegram.stockInquiryEnabled)

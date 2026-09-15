@@ -308,3 +308,101 @@ async def test_batch_scope_is_independent(client):
     assert len(active) == 2
     assert {row["batch_no"] for row in active} == {"LOT-1", None}
     assert any(row["version"] == 1 and row["is_active"] for row in prices)
+
+
+@pytest.mark.asyncio
+async def test_batch_scoped_price_does_not_override_general_selling_price(client):
+    """A batch-scoped version keeps products.selling_price on the general
+    version (the batch price is applied per sold lot at POS, not mirrored)."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await _make_product(client, headers, tag)  # selling_price 10.00
+
+    batch_version = await client.post(
+        "/api/v1/products/sale-prices",
+        json={"productId": product["id"], "salePrice": "20.00", "batchNo": "LOT-X"},
+        headers=headers,
+    )
+    assert batch_version.status_code == 201, batch_version.text
+
+    detail = await client.get(f"/api/v1/products/{product['id']}", headers=headers)
+    assert Decimal(detail.json()["data"]["selling_price"]) == Decimal("10.00")
+
+
+@pytest.mark.asyncio
+async def test_pos_charges_batch_specific_price_for_batch_tracked_lot(client):
+    """F5: POS price priority is batch-specific -> general -> fallback. The cart
+    sends the general price; checkout charges the sold (FEFO) lot's version,
+    while a manual price override is honored."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"BF-{tag}", "name": f"BF Cat {tag}"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={
+                "sku": f"BF-{tag}",
+                "name": f"Batch Price Widget {tag}",
+                "category_id": category["id"],
+                "uom_id": str(DEFAULT_UOM_ID),
+                "selling_price": "10.00",
+                "track_batch": True,
+                "expiry_tracking": True,
+            },
+            headers=headers,
+        )
+    ).json()["data"]
+
+    stock_in = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "100.00",
+            "items": [
+                {
+                    "product_id": product["id"],
+                    "quantity": "10",
+                    "unit_cost": "5.00",
+                    "batch_no": "LOT-F5",
+                    "expiry_date": "2030-01-01",
+                }
+            ],
+        },
+        headers=headers,
+    )
+    assert stock_in.status_code == 201, stock_in.text
+
+    batch_version = await client.post(
+        "/api/v1/products/sale-prices",
+        json={"productId": product["id"], "salePrice": "20.00", "batchNo": "LOT-F5"},
+        headers=headers,
+    )
+    assert batch_version.status_code == 201, batch_version.text
+
+    # The general `selling_price` is not overwritten by the batch version.
+    detail = (await client.get(f"/api/v1/products/{product['id']}", headers=headers)).json()["data"]
+    assert Decimal(detail["selling_price"]) == Decimal("10.00")
+
+    async def sell(items: list[dict]) -> dict:
+        response = await client.post(
+            "/api/v1/pos/sales",
+            json={"payment_method": "CASH", "amount_received": "1000.00", "items": items},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["data"]
+
+    # Cart sent the general price → the batch price is charged.
+    sale = await sell([{"product_id": product["id"], "quantity": "1", "unit_price": "10.00"}])
+    assert Decimal(sale["items"][0]["unit_price"]) == Decimal("20.00")
+
+    # No client price → batch-first resolution.
+    sale2 = await sell([{"product_id": product["id"], "quantity": "1"}])
+    assert Decimal(sale2["items"][0]["unit_price"]) == Decimal("20.00")
+
+    # Manual override → honored.
+    sale3 = await sell([{"product_id": product["id"], "quantity": "1", "unit_price": "15.00"}])
+    assert Decimal(sale3["items"][0]["unit_price"]) == Decimal("15.00")

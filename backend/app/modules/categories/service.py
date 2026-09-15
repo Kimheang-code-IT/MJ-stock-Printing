@@ -39,10 +39,12 @@ class CategoryService:
 
     async def update(self, category_id: uuid.UUID, payload) -> Category:
         category = await self.get(category_id)
-        if payload.code is not None and payload.code.strip() != category.code:
-            if await self.repo.get_by_code(payload.code.strip()):
-                raise ConflictError("A category with this code already exists")
-            category.code = payload.code.strip()
+        if payload.code is not None:
+            code = payload.code.strip()
+            if code and code != category.code:
+                if await self.repo.get_by_code(code):
+                    raise ConflictError("A category with this code already exists")
+                category.code = code
         if payload.name is not None:
             category.name = payload.name.strip()
         if payload.description is not None:

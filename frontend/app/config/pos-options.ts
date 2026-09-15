@@ -17,3 +17,11 @@ export const STOCK_OPERATION_META: Record<StockOperationType, { label: string, i
   damage: { label: 'Damage', icon: 'i-lucide-package-x', color: 'warning' },
   expiry: { label: 'Expiry', icon: 'i-lucide-calendar-x', color: 'error' },
 }
+
+/** Backend permission required by each product row stock action. */
+export const STOCK_OPERATION_PERMISSIONS: Record<StockOperationType, string> = {
+  stock_in: 'stock.in',
+  adjustment: 'stock.adjust',
+  damage: 'stock.damage',
+  expiry: 'stock.expire',
+}

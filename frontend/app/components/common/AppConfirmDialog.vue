@@ -73,7 +73,7 @@ function onConfirm() {
     icon="i-lucide-message-circle-question"
     size="sm"
     :width="width"
-    :dismissible="false"
+    :dismissible="!loading"
     :loading="loading"
     :ui="props.ui"
   >

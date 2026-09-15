@@ -1,4 +1,4 @@
-from uuid import UUID
+﻿from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,7 +37,7 @@ def _user_out(user: User) -> AdminUserOut:
 async def list_users(
     params: ListParams = Depends(list_params),
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("user.manage")),
+    actor: User = Depends(require_permission("user.view")),
 ) -> dict:
     service = AdministrationService(db)
     users, total = await service.list_users(q=params.q, status=params.status, page=params.page, limit=params.limit)
@@ -48,7 +48,7 @@ async def list_users(
 async def create_user(
     payload: UserCreate,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("user.manage")),
+    actor: User = Depends(require_permission("user.create")),
 ) -> dict:
     service = AdministrationService(db)
     user = await service.create_user(payload, actor=actor)
@@ -60,7 +60,7 @@ async def update_user(
     user_id: UUID,
     payload: UserUpdate,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("user.manage")),
+    actor: User = Depends(require_permission("user.update")),
 ) -> dict:
     service = AdministrationService(db)
     user = await service.update_user(user_id, payload, actor=actor)
@@ -72,7 +72,7 @@ async def reset_user_password(
     user_id: UUID,
     payload: UserPasswordReset,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("user.manage")),
+    actor: User = Depends(require_permission("user.update")),
 ) -> dict:
     service = AdministrationService(db)
     await service.reset_user_password(user_id, payload.new_password, actor=actor)
@@ -85,7 +85,7 @@ async def reset_user_password(
 @router.get("/roles")
 async def list_roles(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("role.manage")),
+    actor: User = Depends(require_permission("role.view")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope([RoleOut.model_validate(r) for r in await service.list_roles()])
@@ -94,7 +94,7 @@ async def list_roles(
 @router.get("/roles/options")
 async def role_options(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("role.manage")),
+    actor: User = Depends(require_permission("user.view")),
 ) -> dict:
     """Active-role options for user form selectors."""
     service = AdministrationService(db)
@@ -110,7 +110,7 @@ async def role_options(
 async def create_role(
     payload: RoleCreate,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("role.manage")),
+    actor: User = Depends(require_permission("role.create")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope(RoleOut.model_validate(await service.create_role(payload, actor=actor)))
@@ -121,7 +121,7 @@ async def update_role(
     role_id: UUID,
     payload: RoleUpdate,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("role.manage")),
+    actor: User = Depends(require_permission("role.update")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope(RoleOut.model_validate(await service.update_role(role_id, payload, actor=actor)))
@@ -131,7 +131,7 @@ async def update_role(
 async def delete_role(
     role_id: UUID,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("role.manage")),
+    actor: User = Depends(require_permission("role.delete")),
 ) -> dict:
     service = AdministrationService(db)
     await service.delete_role(role_id, actor=actor)
@@ -141,7 +141,7 @@ async def delete_role(
 @router.get("/permissions")
 async def get_permissions(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("role.manage")),
+    actor: User = Depends(require_permission("role.view")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope(await service.permission_catalog())
@@ -150,7 +150,7 @@ async def get_permissions(
 @router.get("/document-sequences")
 async def list_sequences(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("sequence.manage")),
+    actor: User = Depends(require_permission("sequence.view")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope([SequenceOut.model_validate(s) for s in await service.list_sequences()])
@@ -160,7 +160,7 @@ async def list_sequences(
 async def create_sequence(
     payload: SequenceCreate,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("sequence.manage")),
+    actor: User = Depends(require_permission("sequence.create")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope(
@@ -173,7 +173,7 @@ async def update_sequence(
     sequence_id: UUID,
     payload: SequenceUpdate,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("sequence.manage")),
+    actor: User = Depends(require_permission("sequence.update")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope(SequenceOut.model_validate(await service.update_sequence(sequence_id, payload)))
@@ -183,7 +183,7 @@ async def update_sequence(
 async def delete_sequence(
     sequence_id: UUID,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("sequence.manage")),
+    actor: User = Depends(require_permission("sequence.delete")),
 ) -> dict:
     service = AdministrationService(db)
     await service.delete_sequence(sequence_id, actor=actor)
@@ -250,7 +250,7 @@ async def list_audit_logs(
 @router.get("/settings")
 async def get_settings(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.view")),
 ) -> dict:
     service = AdministrationService(db)
     return envelope(SettingsOut(groups=await service.get_settings()))
@@ -260,7 +260,7 @@ async def get_settings(
 async def update_settings(
     payload: SettingsPatch,
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     service = AdministrationService(db)
     groups = await service.update_settings(payload.values, actor=actor)
@@ -270,7 +270,7 @@ async def update_settings(
 @router.post("/settings/telegram-test")
 async def send_telegram_test(
     db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("settings.manage")),
+    actor: User = Depends(require_permission("settings.update")),
 ) -> dict:
     """Send a test Telegram notification to every verified recipient.
 

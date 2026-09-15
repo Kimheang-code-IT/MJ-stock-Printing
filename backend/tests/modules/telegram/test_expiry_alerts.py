@@ -2,7 +2,7 @@
 
 Covers: dedupe per lot/level, independent alert windows, disabled toggle,
 only qty>0 expiry-tracked lots, recipients, message content, and the
-Settings GET/PATCH surface (bot token stays env-only).
+Settings GET/PATCH surface (bot token is writable but always masked on read).
 """
 
 import uuid
@@ -16,7 +16,7 @@ from app.modules.auth.models import Role, User
 from app.modules.administration.repository import SettingsRepository
 from app.modules.telegram.models import TelegramExpiryAlertState
 from app.modules.telegram.service import ExpiryAlertService
-from tests.utils import DEFAULT_UOM_ID, admin_headers, login
+from tests.utils import DEFAULT_UOM_ID, admin_headers
 
 
 class FakeSender:
@@ -275,7 +275,7 @@ async def test_failed_delivery_records_nothing_and_retries(client, db_session, a
 
 
 @pytest.mark.asyncio
-async def test_settings_surface_and_env_only_bot_token(client):
+async def test_settings_surface_accepts_and_masks_bot_token(client):
     headers = await admin_headers(client)
     current = await client.get("/api/v1/admin/settings", headers=headers)
     assert current.status_code == 200
@@ -300,14 +300,32 @@ async def test_settings_surface_and_env_only_bot_token(client):
     assert values["stock"]["expiry_alert_2_days"] == 10
     assert values["telegram"]["expiry_alerts_enabled"] is False
 
-    # The bot token never persists to the DB: writes are rejected.
+    # Settings managers may replace the token, but reads never expose it.
     token_write = await client.patch(
         "/api/v1/admin/settings",
-        json={"values": {"telegram": {"bot_token": "123456:ABC-DEF"}}},
+        json={
+            "values": {
+                "telegram": {
+                    "bot_token": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+                    "chat_id": "-1001234567890",
+                }
+            }
+        },
         headers=headers,
     )
-    assert token_write.status_code == 422
-    assert "environment" in token_write.json()["detail"]["message"].lower()
+    assert token_write.status_code == 200, token_write.text
+    telegram = token_write.json()["data"]["groups"]["telegram"]
+    assert telegram["bot_token"] == "********"
+    assert telegram["chat_id"] == "-1001234567890"
+
+    # Sending the mask back preserves the existing secret.
+    mask_write = await client.patch(
+        "/api/v1/admin/settings",
+        json={"values": {"telegram": {"bot_token": "********"}}},
+        headers=headers,
+    )
+    assert mask_write.status_code == 200, mask_write.text
+    assert mask_write.json()["data"]["groups"]["telegram"]["bot_token"] == "********"
 
     # Restore defaults for later suites.
     restored = await client.patch(
@@ -315,12 +333,72 @@ async def test_settings_surface_and_env_only_bot_token(client):
         json={
             "values": {
                 "stock": {"expiry_alert_1_days": 90, "expiry_alert_2_days": 7},
-                "telegram": {"expiry_alerts_enabled": True},
+                "telegram": {
+                    "expiry_alerts_enabled": True,
+                    "bot_token": "",
+                    "chat_id": "",
+                },
             }
         },
         headers=headers,
     )
     assert restored.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_telegram_client_uses_saved_bot_token(db_session, monkeypatch):
+    from app.core.config import settings as app_settings
+    from app.shared.telegram.client import send_message
+
+    token = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_saved"
+    await SettingsRepository(db_session).upsert(
+        "telegram",
+        "telegram.bot_token",
+        token,
+        is_secret=True,
+        updated_by=None,
+    )
+    await db_session.commit()
+    monkeypatch.setattr(app_settings, "telegram_enabled", True)
+    monkeypatch.setattr(app_settings, "telegram_bot_token", "")
+
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+
+    class FakeHttpClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, *, json):
+            calls.append((url, json))
+            return FakeResponse()
+
+    monkeypatch.setattr("app.shared.telegram.client.httpx.AsyncClient", FakeHttpClient)
+
+    assert await send_message("-100123", "hello", session=db_session) is True
+    assert calls == [
+        (
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            {"chat_id": "-100123", "text": "hello"},
+        )
+    ]
+
+    await SettingsRepository(db_session).upsert(
+        "telegram",
+        "telegram.bot_token",
+        "",
+        is_secret=True,
+        updated_by=None,
+    )
+    await db_session.commit()
 
 
 @pytest.mark.asyncio

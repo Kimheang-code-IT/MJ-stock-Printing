@@ -6,6 +6,7 @@ import { h } from 'vue'
 import type { AppRecord } from '~/config/admin-seed'
 import type { ProductHistoryRow } from '~/repositories/contracts/entities'
 import { useStockQueries } from '~/repositories/index'
+import { apiErrorMessage } from '~/utils/api/errors'
 
 /**
  * Read-only batch-traceable stock movements of one product (product detail
@@ -40,7 +41,7 @@ async function load() {
     rows.value = result.items
   }
   catch (error: unknown) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    loadError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
     rows.value = []
   }
   finally {
