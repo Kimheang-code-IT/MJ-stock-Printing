@@ -1,4 +1,4 @@
-import type { AppConfigRepository, AppInfoRepository, ResetAllDataResult } from '~/repositories/contracts/settings'
+import type { AppConfigRepository, AppInfoRepository, ClearTransactionsResult, ResetAllDataResult } from '~/repositories/contracts/settings'
 import type { ApiResponse } from '~/types/stock-pos/common'
 import type { AppConfig, AppInfo, ConnectionStatus } from '~/types/stock-pos/settings'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
@@ -57,6 +57,9 @@ export function createHttpAppConfigRepository(): AppConfigRepository {
     },
     resetAllData: async () => unwrapApiData(
       await api.post<ResetAllDataResult | ApiResponse<ResetAllDataResult>>(ApiEndpoints.RESET_ALL_DATA, {}),
+    ),
+    clearTransactions: async () => unwrapApiData(
+      await api.post<ClearTransactionsResult | ApiResponse<ClearTransactionsResult>>(ApiEndpoints.CLEAR_TRANSACTIONS, {}),
     ),
     testEmailConnection: () => postResult(ApiEndpoints.APP_CONFIG_TEST_EMAIL),
     sendTestEmail: to => postResult(ApiEndpoints.APP_CONFIG_SEND_TEST_EMAIL, { to }),

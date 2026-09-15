@@ -1,5 +1,5 @@
 import { formatMoney, formatNumber, formatDate, formatDateTime } from '~/utils/format/format-service'
-import { cartTotal, lineNet, type PosCartLine } from '~/utils/pos/cart'
+import { cartTotal, lineGross, lineNet, type PosCartLine } from '~/utils/pos/cart'
 import { escapeHtml, PAPER_STYLES, printHtmlDocument, type PrintPaperSize } from '~/utils/print/html'
 import type { SaleReceipt } from '~/repositories/contracts/entities'
 
@@ -229,7 +229,7 @@ export function buildSaleInvoiceHtml(
       <td class="center">${escapeHtml(line.uom || '—')}</td>
       <td class="num center">${escapeHtml(line.quantity)}</td>
       <td class="num center">${money(line.unitPrice)}</td>
-      <td class="num center">${escapeHtml(line.discountPercent || 0)}%</td>
+      <td class="num center">${money(lineGross(line) * (Number(line.discountPercent || 0) / 100))}</td>
       <td class="num">${money(lineNet(line))}</td>
     </tr>`).join('')
 

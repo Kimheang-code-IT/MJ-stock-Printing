@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { debtCurrency, selectedDebtsShareScope, selectedDebtsTotal } from '../app/utils/reports/debts'
+import { debtCurrency, isOpenDebt, openDebts, selectedDebtsShareScope, selectedDebtsTotal } from '../app/utils/reports/debts'
 import type { AppRecord } from '../app/config/admin-seed'
 
 function row(partial: Partial<AppRecord>): AppRecord {
@@ -43,5 +43,28 @@ describe('debt currency + multi-pay scope', () => {
       row({ remainingAmount: 0.5 }),
     ])).toBe(12.5)
     expect(selectedDebtsTotal([])).toBe(0)
+  })
+})
+
+describe('open debt filtering', () => {
+  it('keeps unpaid and partially paid debts', () => {
+    expect(isOpenDebt(row({ remainingAmount: 10, status: 'UNPAID' }))).toBe(true)
+    expect(isOpenDebt(row({ remainingAmount: 3.5, status: 'PARTIAL' }))).toBe(true)
+  })
+
+  it('drops fully settled debts', () => {
+    expect(isOpenDebt(row({ remainingAmount: 0, status: 'PAID' }))).toBe(false)
+    expect(isOpenDebt(row({ remainingAmount: 0, status: 'UNPAID' }))).toBe(false)
+    expect(isOpenDebt(row({ status: 'PAID' }))).toBe(false)
+    expect(isOpenDebt(null)).toBe(false)
+  })
+
+  it('filters a debt list down to open rows', () => {
+    const rows = [
+      row({ remainingAmount: 0, status: 'PAID' }),
+      row({ remainingAmount: 12, status: 'PARTIAL' }),
+      row({ remainingAmount: 5, status: 'UNPAID' }),
+    ]
+    expect(openDebts(rows).map(item => item.remainingAmount)).toEqual([12, 5])
   })
 })

@@ -33,7 +33,7 @@ async def _seed(client, headers):
     """Supplier stock in 10@2 (paid 5, debt 15); cash sale 3@10 with a partial
     return of 1; debt sale 2@10 (deposit 5, debt 15); damage 1@2.
     Finance deltas: sales +40, purchase +20, customer debt +15, supplier debt
-    +15, COGS +8, damage +2, gross +32, net +30."""
+    +15, COGS +8, damage +2, gross +32, supplier payment +5, net +25."""
     import uuid as _uuid
 
     tag = _uuid.uuid4().hex[:6]
@@ -808,9 +808,11 @@ async def test_finance_report_reconciles_with_transactions(client, finance_basel
     assert _delta(finance_baseline, data, "cost_of_goods_sold") == Decimal("8.00")
     assert _delta(finance_baseline, data, "stock_damage_loss") == Decimal("2.00")
     assert _delta(finance_baseline, data, "stock_expire_loss") == Decimal("0.00")
-    # Gross profit = 40 - 8 = 32; Net = 32 - 2 damage - 0 expiry = 30.
+    # Gross profit = 40 - 8 = 32; Net = 32 - 2 damage - 0 expiry - 5 supplier
+    # payment = 25 (the purchase paid 5 at receipt, leaving a 15 debt).
     assert _delta(finance_baseline, data, "gross_profit") == Decimal("32.00")
-    assert _delta(finance_baseline, data, "net_result") == Decimal("30.00")
+    assert _delta(finance_baseline, data, "supplier_payments") == Decimal("5.00")
+    assert _delta(finance_baseline, data, "net_result") == Decimal("25.00")
 
 
 @pytest.mark.asyncio

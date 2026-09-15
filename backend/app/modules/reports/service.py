@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy import DateTime, String, case, cast, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.core.exceptions import ValidationError
 from app.modules.auth.models import User
@@ -270,6 +271,18 @@ class ReportsService:
     # ------------------------------------------------------- purchase report
 
     def _purchase_query(self) -> select:
+        # Tender recorded for the stock-in (the earliest payment on the
+        # purchase document) — shown as the Purchase Report Payment Method.
+        payment_method = (
+            select(Payment.payment_method)
+            .where(Payment.reference_no == StockTransaction.document_no)
+            .where(Payment.payment_type.in_(("STOCK_IN_PAYMENT", "SUPPLIER_DEBT_PAYMENT")))
+            .order_by(Payment.created_at)
+            .limit(1)
+            .correlate(StockTransaction)
+            .scalar_subquery()
+            .label("payment_method")
+        )
         return (
             select(
                 StockTransaction.id,
@@ -290,6 +303,7 @@ class ReportsService:
                 StockTransaction.note,
                 StockTransaction.discount_amount,
                 StockTransaction.tax_amount,
+                payment_method,
             )
             .select_from(StockTransactionItem)
             .join(StockTransaction, StockTransaction.id == StockTransactionItem.stock_transaction_id)
@@ -383,6 +397,7 @@ class ReportsService:
                     "note": row.note,
                     "discount_amount": Decimal(row.discount_amount or 0),
                     "tax_amount": Decimal(row.tax_amount or 0),
+                    "payment_method": row.payment_method,
                 }
             )
         return data, int(total)
@@ -590,6 +605,28 @@ class ReportsService:
                 Expense.expense_date < end_at.date(),
             )
         )
+        # Cash actually paid to suppliers in the period: the payment made when a
+        # purchase is received (full or partial) plus every later debt
+        # repayment. Each payment row is a single cash-out, so a purchase and
+        # its repayments are never counted twice.
+        supplier_payment_rows = self._finance_supplier_payment_stmt().subquery()
+        supplier_payment = await self.session.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        _usd(
+                            supplier_payment_rows.c.amount,
+                            supplier_payment_rows.c.currency,
+                            supplier_payment_rows.c.exchange_rate,
+                        )
+                    ),
+                    0,
+                )
+            ).where(
+                supplier_payment_rows.c.entry_date >= start_at,
+                supplier_payment_rows.c.entry_date < end_at,
+            )
+        )
 
         # Damage/expiry losses come from the movement cost ledger, which is
         # recorded per movement (base-unit cost at mutation time) and has no
@@ -633,14 +670,17 @@ class ReportsService:
         cogs = Decimal(sold.scalar_one()) - Decimal(restocked.scalar_one())
         gross_profit = total_sales - cogs
         operating_expenses = Decimal(operating_expense.scalar_one())
-        # Net Result includes operating expenses (spec 2.1.10 formulas).
-        net_result = gross_profit - damage_loss - expiry_loss - operating_expenses
+        supplier_payments = Decimal(supplier_payment.scalar_one())
+        # Total Expense = operating expenses + cash paid to suppliers; Net
+        # Result includes operating expenses and supplier payments (spec 2.1.10).
+        total_expense = operating_expenses + supplier_payments
+        net_result = gross_profit - damage_loss - expiry_loss - total_expense
 
         return {
             "period_start": period_start,
             "period_end": period_end,
             "total_sales": total_sales,
-            "total_expense": operating_expenses,
+            "total_expense": total_expense,
             "total_purchase_cost": Decimal(purchase_total.scalar_one()),
             "total_customer_debt": Decimal(customer_debt.scalar_one()),
             "total_supplier_debt": Decimal(supplier_debt.scalar_one()),
@@ -649,6 +689,7 @@ class ReportsService:
             "stock_expire_loss": expiry_loss,
             "gross_profit": gross_profit,
             "operating_expenses": operating_expenses,
+            "supplier_payments": supplier_payments,
             "net_result": net_result,
         }
 
@@ -705,6 +746,42 @@ class ReportsService:
             .join(User, User.id == Expense.created_by)
         )
 
+    def _finance_supplier_payment_stmt(self) -> select:
+        """Expense rows for cash paid to suppliers.
+
+        Every purchase creates one immutable `Payment` for the amount paid at
+        receipt (`STOCK_IN_PAYMENT` when settled in full, `SUPPLIER_DEBT_PAYMENT`
+        when part is left on credit) and each later repayment adds another
+        `SUPPLIER_DEBT_PAYMENT`. Summing these rows gives the true supplier
+        cash-out without counting a purchase and its repayment twice.
+        """
+        purchase = aliased(StockTransaction)
+        return (
+            select(
+                Payment.id.label("id"),
+                Payment.created_at.label("entry_date"),
+                literal("expense", type_=String).label("entry_type"),
+                func.coalesce(Payment.reference_no, Payment.payment_no).label("reference"),
+                case(
+                    (Payment.payment_type == "STOCK_IN_PAYMENT", literal("Purchase")),
+                    else_=literal("Supplier Payment"),
+                ).label("category"),
+                func.coalesce(Supplier.name, literal("")).label("description"),
+                Payment.amount.label("amount"),
+                func.coalesce(SupplierDebt.currency, purchase.currency, literal("USD")).label("currency"),
+                func.coalesce(SupplierDebt.exchange_rate, purchase.exchange_rate, literal(1)).label("exchange_rate"),
+                Payment.payment_method.label("payment_method"),
+                func.coalesce(User.full_name, literal("")).label("created_by_name"),
+                Payment.created_at.label("created_at"),
+            )
+            .select_from(Payment)
+            .outerjoin(SupplierDebt, SupplierDebt.id == Payment.supplier_debt_id)
+            .outerjoin(purchase, purchase.document_no == Payment.reference_no)
+            .outerjoin(Supplier, Supplier.id == Payment.supplier_id)
+            .outerjoin(User, User.id == Payment.created_by)
+            .where(Payment.payment_type.in_(("STOCK_IN_PAYMENT", "SUPPLIER_DEBT_PAYMENT")))
+        )
+
     async def finance_entries(
         self,
         *,
@@ -717,7 +794,14 @@ class ReportsService:
     ) -> tuple[list[dict], int]:
         """Combined income + expense ledger table with date/type/search filters."""
         start_at, end_at = _range(start, end)
-        union = self._finance_income_stmt().union_all(self._finance_expense_stmt()).subquery()
+        union = (
+            self._finance_income_stmt()
+            .union_all(
+                self._finance_expense_stmt(),
+                self._finance_supplier_payment_stmt(),
+            )
+            .subquery()
+        )
 
         # Accept INCOME|EXPENSE and lowercase variants.
         normalized_type = entry_type.strip().lower() if entry_type else None

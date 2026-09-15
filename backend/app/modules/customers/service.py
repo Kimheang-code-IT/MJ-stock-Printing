@@ -13,6 +13,7 @@ from app.modules.customers.repository import CustomerRepository
 from app.modules.pos.models import Payment
 from app.shared.audit.service import record_audit
 from app.shared.documents import allocate_document_number
+from app.shared.lifecycle import assert_inactive_for_delete
 
 logger = logging.getLogger("stock_pos.customers")
 
@@ -69,6 +70,7 @@ class CustomerService:
         customer = await self.get(customer_id)
         if customer.is_walk_in:
             raise ConflictError("The walk-in customer cannot be deleted")
+        assert_inactive_for_delete(customer.status, label="customer")
         referenced = (
             await self.repo.count_sales(customer.id)
             + await self.repo.count_debts(customer.id)

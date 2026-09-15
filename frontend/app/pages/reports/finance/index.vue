@@ -366,6 +366,7 @@ async function submitExpense() {
         />
         <CommonAppMoneyField
           v-model="expenseForm.amount"
+          currency-toggle
           :currency="expenseForm.currency"
           :label="t('app.fields.amount')"
           :required="true"

@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from app.modules.auth.models import User
 from tests.modules.pos.helpers import make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import DEFAULT_UOM_ID, admin_headers, deactivate_then_delete
 
 
 async def test_product_crud_sku_conflict_and_price_audit(client, db_session):
@@ -90,8 +90,8 @@ async def test_product_crud_sku_conflict_and_price_audit(client, db_session):
     assert anon.status_code == 401
 
     # Cleanup
-    await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{product['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")
 
 async def test_barcode_is_operational_identifier(client):
     """Barcode-first: sku optional, barcode unique+required, fast lookup."""
@@ -114,7 +114,8 @@ async def test_barcode_is_operational_identifier(client):
     assert no_ids.status_code == 201, no_ids.text
     auto = no_ids.json()["data"]
     assert auto["barcode"]
-    assert auto["barcode"].startswith("BAR-")
+    assert auto["barcode"].isdigit()
+    assert len(auto["barcode"]) == 13
     assert auto["sku"] is None
 
     # 2. Barcode lookup returns the product (POS operational path).
@@ -160,8 +161,8 @@ async def test_barcode_is_operational_identifier(client):
     assert listing.status_code == 200
     assert any(row["id"] == auto["id"] for row in listing.json()["data"])
 
-    await client.delete(f"/api/v1/products/{auto['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{auto['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")
 
 
 async def test_product_delete_blocked_by_sale_history_then_deactivate(client):
@@ -253,5 +254,5 @@ async def test_product_default_supplier_stored_shown_and_cleared(client):
     )
     assert unknown.status_code == 404
 
-    await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{product['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")

@@ -5,12 +5,12 @@ Covers the finance summary cards, the combined income/expense entries table
 Decimal money). There is deliberately no frontend Expense page — API only.
 """
 
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
-
 from app.modules.reports.models import Expense
 from app.shared.audit.models import AuditLog
 from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
@@ -128,13 +128,14 @@ async def test_finance_summary_includes_operating_expenses_in_net_result(client,
     data = (await client.get("/api/v1/reports/finance", headers=headers)).json()["data"]
     delta_expense = Decimal(data["total_expense"]) - Decimal(finance_baseline["total_expense"])
     assert delta_expense == Decimal("100.00")
-    assert Decimal(data["operating_expenses"]) == Decimal(data["total_expense"])
-    # Net Result = Gross Profit - Damage Loss - Expire Loss - Operating Expenses.
+    # Total Expense = operating expenses + cash paid to suppliers.
+    assert Decimal(data["operating_expenses"]) + Decimal(data["supplier_payments"]) == Decimal(data["total_expense"])
+    # Net Result = Gross Profit - Damage Loss - Expire Loss - Total Expense.
     expected = (
         Decimal(data["gross_profit"])
         - Decimal(data["stock_damage_loss"])
         - Decimal(data["stock_expire_loss"])
-        - Decimal(data["operating_expenses"])
+        - Decimal(data["total_expense"])
     )
     assert Decimal(data["net_result"]) == expected
     # The expense reduced net result by exactly its amount.
@@ -283,6 +284,87 @@ async def test_finance_entries_income_derived_from_sales_and_filters(client):
     assert paged.status_code == 200
     assert paged.json()["meta"]["limit"] == 1
     assert len(paged.json()["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_finance_records_supplier_payments_as_expense(client, finance_baseline):
+    """Cash paid to suppliers is Finance expense (income/expense logic):
+    the payment made at purchase and every debt repayment reduce Net Result.
+    Each payment is a single expense row, so a purchase and its repayment are
+    never counted twice."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    category = (
+        await client.post(
+            "/api/v1/categories", json={"code": f"FPAY-{tag}", "name": "Fin Pay Cat"}, headers=headers
+        )
+    ).json()["data"]
+    product = (
+        await client.post(
+            "/api/v1/products",
+            json={
+                "sku": f"FPAY-{tag}",
+                "name": f"Fin Pay {tag}",
+                "category_id": category["id"],
+                "uom_id": str(DEFAULT_UOM_ID),
+                "selling_price": "3.00",
+            },
+            headers=headers,
+        )
+    ).json()["data"]
+    supplier = (
+        await client.post(
+            "/api/v1/suppliers", json={"code": f"FPAY-S-{tag}", "name": f"Fin Pay Supplier {tag}"}, headers=headers
+        )
+    ).json()["data"]
+
+    # Purchase 1: 10 @ 2.00 = 20.00, fully paid at receipt (STOCK_IN_PAYMENT).
+    full = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "supplier_id": supplier["id"],
+            "paid_amount": "20.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert full.status_code == 201, full.text
+
+    # Purchase 2: 5 @ 2.00 = 10.00, paying 2.00 now (8.00 on credit), then repaid.
+    partial = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "supplier_id": supplier["id"],
+            "paid_amount": "2.00",
+            "items": [{"product_id": product["id"], "quantity": "5", "unit_cost": "2.00"}],
+        },
+        headers=headers,
+    )
+    assert partial.status_code == 201, partial.text
+    repay = await client.post(
+        f"/api/v1/suppliers/{supplier['id']}/payments",
+        json={"amount": "8.00", "payment_method": "CASH"},
+        headers=headers,
+    )
+    assert repay.status_code == 201, repay.text
+
+    data = (await client.get("/api/v1/reports/finance", headers=headers)).json()["data"]
+    # 20 (full purchase) + 2 (partial at receipt) + 8 (repayment) = 30.
+    assert Decimal(data["supplier_payments"]) - Decimal(finance_baseline["supplier_payments"]) == Decimal("30.00")
+    assert Decimal(data["total_expense"]) - Decimal(finance_baseline["total_expense"]) == Decimal("30.00")
+    # No sales in this test, so the whole supplier cash-out reduces Net Result.
+    assert Decimal(data["net_result"]) - Decimal(finance_baseline["net_result"]) == Decimal("-30.00")
+
+    # The combined ledger exposes each cash-out as an expense row.
+    entries = (
+        await client.get(
+            f"/api/v1/reports/finance/entries?type=EXPENSE&q={supplier['name']}", headers=headers
+        )
+    ).json()["data"]
+    assert entries, "supplier payments must appear in the finance ledger"
+    assert all(row["type"] == "expense" for row in entries)
+    assert all(row["currency"] == "USD" for row in entries)
+    assert {row["category"] for row in entries} == {"Purchase", "Supplier Payment"}
 
 
 @pytest.mark.asyncio

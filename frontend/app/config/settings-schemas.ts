@@ -204,15 +204,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
           { key: 'telegram.notificationLanguage', labelKey: 'core.settings.notificationLanguage', type: 'select', options: [{ label: 'English', value: 'en' }, { label: 'ខ្មែរ', value: 'km' }] },
         ],
       },
-      {
-        id: 'telegram-features',
-        titleKey: 'core.settings.telegramFeaturesTitle',
-        fields: [
-          { key: 'telegram.passwordResetEnabled', labelKey: 'core.settings.passwordResetEnabled', type: 'boolean', helpKey: 'core.fieldHelp.passwordResetEnabled' },
-          { key: 'telegram.paymentInvoiceNotifyEnabled', labelKey: 'core.settings.paymentInvoiceNotify', type: 'boolean', helpKey: 'core.fieldHelp.paymentInvoiceNotify' },
-          { key: 'telegram.stockInquiryEnabled', labelKey: 'core.settings.stockInquiry', type: 'boolean', helpKey: 'core.fieldHelp.stockInquiry' },
-        ],
-      },
     ],
   },
   {

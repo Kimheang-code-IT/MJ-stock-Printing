@@ -48,7 +48,6 @@ describe('stock table (spec §2.1.5 — no SKU / product code columns)', () => {
       'quantity',
       'costPrice',
       'salePrice',
-      'expiryDate',
       'status',
     ])
   })
@@ -62,10 +61,10 @@ describe('stock table (spec §2.1.5 — no SKU / product code columns)', () => {
     expect(fields).not.toContain('sku')
   })
 
-  it('keeps Barcode and the nearest-expiry column before Status', () => {
+  it('keeps Barcode before Status and drops the nearest-expiry column', () => {
     const keys = products.columns.map(column => column.key)
     expect(keys.indexOf('barcode')).toBe(1)
-    expect(keys.indexOf('expiryDate')).toBe(keys.length - 2)
+    expect(keys).not.toContain('expiryDate')
     expect(keys[keys.length - 1]).toBe('status')
   })
 

@@ -277,7 +277,7 @@ table.summary tr.strong td.num { font-weight: 700; }
 export function printHtmlDocument(
   html: string,
   title = 'Print',
-  options?: { paperSize?: PrintPaperSize },
+  options?: { paperSize?: PrintPaperSize, css?: string },
 ): Promise<void> {
   return new Promise((resolve) => {
     if (typeof document === 'undefined') {
@@ -325,7 +325,7 @@ export function printHtmlDocument(
   <meta charset="utf-8">
   <title>${escapeHtml(title)}</title>
   ${PRINT_FONT_LINKS}
-  <style>${printPageCss(paperSize)}</style>
+  <style>${options?.css ?? printPageCss(paperSize)}</style>
 </head>
 <body>${html}</body>
 </html>`)
@@ -334,12 +334,16 @@ export function printHtmlDocument(
     const trigger = () => {
       try {
         frameWindow.focus()
+        // Most browsers block until the OS print dialog closes; iframe
+        // `afterprint` is unreliable, so resolve as soon as print() returns.
         frameWindow.print()
       }
       catch {
-        finish()
+        // ignore — still finish below
       }
-      window.setTimeout(finish, 120000)
+      finish()
+      // Non-blocking print() engines: short fallback if neither return nor afterprint ran.
+      window.setTimeout(finish, 2000)
     }
 
     const startPrint = () => {

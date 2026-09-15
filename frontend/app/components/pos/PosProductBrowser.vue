@@ -21,7 +21,7 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-[7] flex-col gap-2">
+  <section class="flex min-h-0 min-w-0 w-full flex-1 flex-col gap-2 lg:w-[45%] lg:flex-none">
     <div class="flex flex-col gap-2 sm:flex-row">
       <UInput
         :model-value="search"
@@ -49,7 +49,7 @@ const { t } = useI18n()
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto rounded-sm bg-muted/40 p-2">
-      <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 2xl:grid-cols-7">
+      <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
         <PosProductCard
           v-for="row in products"
           :key="String(row.id)"

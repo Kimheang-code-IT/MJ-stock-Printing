@@ -12,7 +12,30 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import delete, update
+
 from app.modules.administration.service import SETTING_GROUPS, AdministrationService
+from app.modules.customers.models import CustomerDebt
+from app.modules.delivery.models import DeliveryNote, DeliveryNoteItem, DeliveryNoteSale
+from app.modules.pos.models import (
+    Payment,
+    Sale,
+    SaleItem,
+    SaleItemBatch,
+    SaleReturn,
+    SaleReturnItem,
+)
+from app.modules.stock.models import (
+    BatchStockBalance,
+    PurchaseReturn,
+    PurchaseReturnItem,
+    StockBalance,
+    StockMovement,
+    StockTransaction,
+    StockTransactionItem,
+)
+from app.modules.suppliers.models import SupplierDebt
+from app.shared.audit.service import record_audit
 
 _MASK = "********"
 _DEFAULT_SHOP_NAME = "Yoeun Sokhon Pharmacy"
@@ -94,6 +117,50 @@ async def reset_app_info(service: AdministrationService, *, actor: Any) -> dict:
     defaults = {key: value for key, value in SETTING_GROUPS["shop"].items()}
     await service.update_settings({"shop": defaults}, actor=actor)
     return build_app_info(await service.get_settings())
+
+
+async def clear_transactions(service: AdministrationService, *, actor: Any) -> dict:
+    """Delete all sale + purchase history and zero every product's stock.
+
+    Removes sales, sale returns, purchases, purchase returns, stock movements,
+    payments, customer/supplier debts and delivery notes; master data (products,
+    customers, suppliers, categories, settings) and document sequences are kept.
+    """
+    session = service.session
+    # Children before parents so foreign keys never block the delete.
+    for model in (
+        SaleItemBatch,
+        SaleReturnItem,
+        SaleReturn,
+        SaleItem,
+        Sale,
+        DeliveryNoteItem,
+        DeliveryNoteSale,
+        DeliveryNote,
+        Payment,
+        CustomerDebt,
+        SupplierDebt,
+        PurchaseReturnItem,
+        PurchaseReturn,
+        StockMovement,
+        StockTransactionItem,
+        StockTransaction,
+        BatchStockBalance,
+    ):
+        await session.execute(delete(model))
+    # Every movement is gone — reset the materialized balances to zero.
+    await session.execute(update(StockBalance).values(quantity=0, average_cost=0))
+    await record_audit(
+        session,
+        action="transactions_cleared",
+        module="administration",
+        user_id=actor.id,
+        entity_type="system",
+        entity_id=actor.id,
+        new_values={"scope": "sales_purchases"},
+    )
+    await session.commit()
+    return {"cleared": True, "message": "Sales and purchase transactions cleared"}
 
 
 # ------------------------------------------------------------- App Config

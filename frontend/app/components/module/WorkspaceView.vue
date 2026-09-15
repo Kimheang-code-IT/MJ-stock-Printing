@@ -17,19 +17,19 @@ import type { AppRecord } from '~/config/admin-seed'
 import { appModules, type ModuleSelectOption } from '~/config/modules'
 import { isMoneyKey, isNumericKey } from '~/utils/module/field-keys'
 import { limitFilterSelects, parseFilterQuery } from '~/utils/filter/values'
-import { documentDetailKindFor, documentLinkTargetFor } from '~/utils/module/document-links'
+import { documentDetailHrefFor, documentLinkTargetFor } from '~/utils/module/document-links'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/module/audit-logs'
 import {
+  canHardDeleteRecord,
   isRecordInactive,
   statusValueFor,
-  supportsHardDelete,
   supportsStatusToggle,
 } from '~/utils/module/row-actions'
-import { selectedDebtsShareScope } from '~/utils/reports/debts'
+import { openDebts, selectedDebtsShareScope } from '~/utils/reports/debts'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
@@ -66,9 +66,6 @@ const stockOperationNote = ref('')
 const stockOperationBusy = ref(false)
 const dateFrom = ref('')
 const dateTo = ref('')
-const documentDetailOpen = ref(false)
-const documentDetailKind = ref<'sale' | 'purchase'>('sale')
-const documentDetailRecord = ref<AppRecord | null>(null)
 const debtPayOpen = ref(false)
 const debtPayKind = ref<DebtPaymentKind>('customer')
 const debtPayRow = ref<AppRecord | null>(null)
@@ -121,14 +118,13 @@ const canDelete = computed(() => Boolean(
   && !current.value.readOnly
   && auth.canAccessPage(actionPermission('delete')),
 ))
-// Product row stock actions (Purchase Stock / Damage / Expiry) are each gated
-// by their own backend permission (`stock.*`), not by `product.update`.
+// Product row stock actions (Purchase Stock / Damage) are each gated by their
+// own backend permission (`stock.*`), not by `product.update`.
 const canOperate = computed(() => Boolean(
   current.value
   && !current.value.readOnly
   && (auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.stock_in)
-    || auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.damage)
-    || auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.expiry)),
+    || auth.canAccessPage(STOCK_OPERATION_PERMISSIONS.damage)),
 ))
 // Editing a sale reuses the POS screen (PATCH /pos/sales/{id}); editing a
 // purchase reuses the purchase entry screen (PATCH /stock/in/{id}).
@@ -193,6 +189,12 @@ const result = computed(() => {
       productCount: uomProductCounts.value.get(String(row.id)) ?? 0,
     }))
     return { rows: all, total: queried.total, all }
+  }
+  // Debt reports list outstanding balances only: once a debt is paid in full
+  // it leaves the table instead of lingering as a settled row.
+  if (current.value.collection === 'customerDebts' || current.value.collection === 'supplierDebts') {
+    const all = openDebts(queried.all)
+    return { rows: all, total: all.length, all }
   }
   return queried
 })
@@ -407,6 +409,15 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       onSelect: () => {
         void navigateTo(`/pos?editSaleId=${encodeURIComponent(String(row.id || ''))}`)
       },
+    }, {
+      // Customer cancels the invoice: load it into the POS return flow with
+      // every line and restock enabled, so all items go back to stock.
+      label: t('app.reports.returnAll'),
+      icon: 'i-lucide-undo-2',
+      color: 'warning',
+      onSelect: () => {
+        void navigateTo(`/pos?returnSaleId=${encodeURIComponent(String(row.id || ''))}`)
+      },
     }]]
   }
   if (collection === 'stockIns') {
@@ -419,6 +430,14 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       // Edit reuses the Purchase screen with the document loaded (PATCH on save).
       onSelect: () => {
         void navigateTo(`/reports/purchases/new?editPurchaseId=${encodeURIComponent(String(row.id || ''))}&purchaseNo=${encodeURIComponent(purchaseNo)}`)
+      },
+    }, {
+      // Return goods to the supplier: reverses the stock-in (stock decreases).
+      label: t('app.reports.returnAll'),
+      icon: 'i-lucide-undo-2',
+      color: 'warning',
+      onSelect: () => {
+        void navigateTo(`/reports/purchases/new?returnPurchaseId=${encodeURIComponent(String(row.id || ''))}&purchaseNo=${encodeURIComponent(purchaseNo)}`)
       },
     }]]
   }
@@ -448,8 +467,9 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   }
   if (collection === 'products' && canOperate.value) {
     for (const type of STOCK_OPERATION_TYPES) {
-      // Stock Adjustment is not offered as a row action on the Stock table.
-      if (type === 'adjustment') continue
+      // Adjustment is not offered as a row action on the Stock table; Expiry
+      // now runs per-lot from the product Batches tab.
+      if (type === 'adjustment' || type === 'expiry') continue
       if (!auth.canAccessPage(STOCK_OPERATION_PERMISSIONS[type])) continue
       const meta = STOCK_OPERATION_META[type]
       items.push({
@@ -476,9 +496,9 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
           onSelect: () => { void setRowStatus(row, false) },
         })
   }
-  // Hard delete is offered only where the backend supports it; the backend
-  // rejects records that are still referenced with a 409 conflict.
-  if (canDelete.value && supportsHardDelete(collection)) {
+  // Hard delete only for inactive/disabled rows; active records must be
+  // deactivated first (backend enforces the same rule).
+  if (canDelete.value && canHardDeleteRecord(collection, row.status)) {
     items.push({
       label: t('app.ui.delete'),
       icon: 'i-lucide-trash-2',
@@ -518,15 +538,13 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           class: 'font-medium text-highlighted hover:text-primary hover:underline',
         }, () => text)
       }
-      // Document numbers owned by this page (Sales/Purchase Report) open the
-      // document detail dialog.
-      const detailKind = documentDetailKindFor(current.value!.collection, column.key)
-      if (detailKind) {
-        return h('button', {
-          type: 'button',
+      // Sale No → POS checkout (view); Purchase No → purchase detail (view).
+      const detailHref = documentDetailHrefFor(current.value!.collection, column.key, row.original)
+      if (detailHref) {
+        return h(ULink, {
+          to: detailHref,
           class: 'font-medium text-highlighted hover:text-primary hover:underline',
-          onClick: () => openDocumentDetail(row.original as AppRecord, detailKind),
-        }, text)
+        }, () => text)
       }
       // Related document numbers (debt invoice, return sale/purchase, delivery
       // invoice, movement reference) jump to the owning report page with the
@@ -587,12 +605,6 @@ function openDebtPayment(kind: DebtPaymentKind, row: AppRecord) {
   debtPayKind.value = kind
   debtPayRow.value = row
   debtPayOpen.value = true
-}
-
-function openDocumentDetail(row: AppRecord, kind: 'sale' | 'purchase') {
-  documentDetailKind.value = kind
-  documentDetailRecord.value = row
-  documentDetailOpen.value = true
 }
 
 async function submitDebtPayment(payload: {
@@ -729,8 +741,17 @@ function onRowSelect(event: Event, row: TableRow<Record<string, unknown>>) {
 
 async function deleteIds(ids: string[]) {
   if (!current.value || !canDelete.value || !ids.length || busyId.value) return
-  const found = result.value.all.find(row => String(row.id) === ids[0])
-  const name = ids.length === 1 && found
+  const collection = current.value.collection
+  const deletable = ids.filter((id) => {
+    const row = result.value.all.find(item => String(item.id) === id)
+    return row ? canHardDeleteRecord(collection, row.status) : false
+  })
+  if (!deletable.length) {
+    toast.add({ title: t('core.rowActions.deactivateBeforeDelete'), color: 'warning' })
+    return
+  }
+  const found = result.value.all.find(row => String(row.id) === deletable[0])
+  const name = deletable.length === 1 && found
     ? String((found as unknown as Record<string, unknown>)[current.value.titleField] ?? '')
     : ''
   const ok = await confirm(name
@@ -741,13 +762,13 @@ async function deleteIds(ids: string[]) {
         confirmLabelKey: 'core.rowActions.delete',
         confirmColor: 'error',
       }
-    : { kind: 'delete', count: ids.length })
+    : { kind: 'delete', count: deletable.length })
   if (!ok) return
-  busyId.value = ids[0] || ''
+  busyId.value = deletable[0] || ''
   try {
-    await store.deleteRemote(current.value.collection, ids)
+    await store.deleteRemote(collection, deletable)
     rowSelection.value = {}
-    toast.add({ title: t('core.actions.deletedItems', { n: ids.length }), color: 'success' })
+    toast.add({ title: t('core.actions.deletedItems', { n: deletable.length }), color: 'success' })
   }
   catch (error: unknown) {
     if (!isApiErrorHandled(error)) {
@@ -1019,7 +1040,7 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
           :rows="2"
           class="w-full"
         />
-        <p v-if="stockOperationType === 'damage' || stockOperationType === 'expiry'" class="text-xs text-muted">
+        <p v-if="stockOperationType === 'damage'" class="text-xs text-muted">
           {{ t('app.stock.negativeHint') }}
         </p>
       </div>
@@ -1067,14 +1088,6 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
       :debts="debtSelectedRows"
       :currency="String(debtSelectedRows[0]?.currency || preferences.currency)"
       @submit="submitSelectedDebtPayment"
-    />
-
-    <!-- Read-only document detail: opened by clicking a Sale/Purchase No. -->
-    <ReportsDocumentDetailDialog
-      v-model:open="documentDetailOpen"
-      :kind="documentDetailKind"
-      :document="documentDetailRecord"
-      :currency="String(documentDetailRecord?.currency || preferences.currency)"
     />
 
   </div>

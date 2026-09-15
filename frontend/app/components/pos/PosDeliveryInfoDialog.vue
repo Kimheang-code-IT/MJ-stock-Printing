@@ -97,7 +97,8 @@ function confirm() {
         :label="t('app.pos.deliveryPrice')"
         size="md"
       >
-        <CommonAppCurrencyInput
+        <CommonAppMoneyField
+          inline
           :model-value="priceInput"
           :currency="currency"
           :min="0"

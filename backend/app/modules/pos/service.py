@@ -464,10 +464,11 @@ class POSService:
         sale.discount_amount = _q2(discount_total)
         sale.grand_total = _q2(grand_total)
 
-        # ---- settle included open customer debts from the paid amount ----
-        settled_total = Decimal("0.00")
-        settled_debts: list[tuple[CustomerDebt, Decimal]] = []
-        remaining_paid = _q2(payload.amount_received)
+        # ---- settle included open debts from `deposit` (separate from sale) ----
+        # amount_received / paidAmount applies only to THIS sale's grand_total.
+        # deposit is the budget for selected prior-debt payments and never
+        # inflates the current sale total or default Paid now.
+        remaining_deposit = _q2(payload.deposit)
         for debt_id in payload.included_debt_ids:
             debt_result = await self.session.execute(
                 select(CustomerDebt).where(CustomerDebt.id == debt_id).with_for_update()
@@ -482,7 +483,7 @@ class POSService:
                 )
             if debt.remaining_amount <= 0 or debt.status == "PAID":
                 continue
-            applied = min(debt.remaining_amount, remaining_paid)
+            applied = min(debt.remaining_amount, remaining_deposit)
             if applied > 0:
                 debt.paid_amount = debt.paid_amount + applied
                 debt.remaining_amount = debt.remaining_amount - applied
@@ -512,11 +513,9 @@ class POSService:
                         "via_sale": sale.invoice_no,
                     },
                 )
-                settled_total += applied
-                settled_debts.append((debt, applied))
-                remaining_paid -= applied
+                remaining_deposit -= applied
 
-        paid_for_sale = max(Decimal("0.00"), min(remaining_paid, sale.grand_total))
+        paid_for_sale = max(Decimal("0.00"), min(_q2(payload.amount_received), sale.grand_total))
         debt_amount = sale.grand_total - paid_for_sale
 
         debt: CustomerDebt | None = None
@@ -561,7 +560,7 @@ class POSService:
                 customer_debt_id=debt.id if debt else None,
             )
         if payload.payment_method in ("CASH", "BANK_QR"):
-            change_amount = _q2(payload.amount_received - settled_total - sale.grand_total)
+            change_amount = _q2(max(Decimal("0.00"), payload.amount_received - sale.grand_total))
 
         await record_audit(
             self.session,

@@ -148,20 +148,32 @@ async def product_batches(
 ) -> tuple[list[dict], int]:
     """Read-only batch lots for one product (product detail Batches tab).
 
-    Rows mirror ``batch_stock_balances`` (authoritative per-batch state,
-    written only by the canonical stock-mutation service): batch no, expiry,
-    received quantity (base UOM), remaining quantity, cost per base unit,
-    supplier and the opening purchase document. Lifecycle status is derived
-    against the configured business date; no write path exists here.
+    Rows mirror ``batch_stock_balances`` plus purchase metadata from the
+    opening Stock In document and the active batch-scoped sale price (so the
+    Batch tab can show purchase date / UOM / currency / sale price and toggle
+    Pricing active without leaving the product document).
     """
 
     from app.modules.stock.batch_service import business_today
-    from app.modules.stock.models import BatchStockBalance
+    from app.modules.stock.models import (
+        BatchStockBalance,
+        ProductSalePrice,
+        StockTransaction,
+        StockTransactionItem,
+    )
     from app.modules.stock.repository import ProductRepository
     from app.modules.suppliers.models import Supplier
+    from app.modules.uoms.models import UOM
 
-    if await ProductRepository(session).get(product_id) is None:
+    product = await ProductRepository(session).get(product_id)
+    if product is None:
         raise NotFoundError("Product not found")
+
+    base_uom_symbol = None
+    if product.uom_id is not None:
+        uom = await session.get(UOM, product.uom_id)
+        if uom is not None:
+            base_uom_symbol = uom.symbol or uom.name
 
     conditions = [BatchStockBalance.product_id == product_id]
     normalized = (status or "").strip().upper()
@@ -203,8 +215,80 @@ async def product_batches(
         .limit(limit)
     )
     today = await business_today(session)
+    batch_rows = list(rows.all())
+
+    # Opening purchase metadata keyed by document_no (transaction date + currency).
+    document_nos = {
+        str(batch.document_no).strip()
+        for batch, _ in batch_rows
+        if batch.document_no
+    }
+    purchase_by_doc: dict[str, tuple[object, str]] = {}
+    if document_nos:
+        tx_rows = await session.execute(
+            select(StockTransaction).where(StockTransaction.document_no.in_(document_nos))
+        )
+        for tx in tx_rows.scalars().all():
+            purchase_by_doc[str(tx.document_no)] = (tx.transaction_date, str(tx.currency or "USD"))
+
+    # Purchase-line UOM for each (product, batch_no) from STOCK_IN lines.
+    batch_nos = [str(batch.batch_no) for batch, _ in batch_rows]
+    purchase_uom_by_batch: dict[str, str] = {}
+    if batch_nos:
+        item_rows = await session.execute(
+            select(
+                StockTransactionItem.batch_no,
+                StockTransactionItem.uom_symbol,
+                StockTransactionItem.entered_uom_symbol,
+                StockTransaction.transaction_date,
+            )
+            .join(StockTransaction, StockTransaction.id == StockTransactionItem.stock_transaction_id)
+            .where(
+                StockTransactionItem.product_id == product_id,
+                StockTransactionItem.batch_no.in_(batch_nos),
+                StockTransaction.transaction_type == "STOCK_IN",
+            )
+            .order_by(StockTransaction.transaction_date.asc())
+        )
+        for batch_no, uom_symbol, entered_uom, _tx_date in item_rows.all():
+            key = str(batch_no or "").strip()
+            if not key or key in purchase_uom_by_batch:
+                continue
+            purchase_uom_by_batch[key] = str(entered_uom or uom_symbol or base_uom_symbol or "")
+
+    # Active sale-price versions scoped to these batches (+ general fallback).
+    price_rows = await session.execute(
+        select(ProductSalePrice).where(
+            ProductSalePrice.product_id == product_id,
+            ProductSalePrice.is_active.is_(True),
+        )
+    )
+    active_by_batch: dict[str, ProductSalePrice] = {}
+    general_price: ProductSalePrice | None = None
+    for price in price_rows.scalars().all():
+        scope = str(price.batch_no or "").strip()
+        if not scope:
+            general_price = price
+        else:
+            active_by_batch[scope] = price
+
+    # Latest (any) version per batch for deactivate / reactivate when inactive.
+    latest_rows = await session.execute(
+        select(ProductSalePrice)
+        .where(
+            ProductSalePrice.product_id == product_id,
+            ProductSalePrice.batch_no.is_not(None),
+        )
+        .order_by(ProductSalePrice.version.desc())
+    )
+    latest_by_batch: dict[str, ProductSalePrice] = {}
+    for price in latest_rows.scalars().all():
+        scope = str(price.batch_no or "").strip()
+        if scope and scope not in latest_by_batch:
+            latest_by_batch[scope] = price
+
     batches: list[dict] = []
-    for batch, supplier_name in rows.all():
+    for batch, supplier_name in batch_rows:
         remaining = batch.remaining_quantity
         expiry = batch.expiry_date
         if remaining <= 0:
@@ -213,14 +297,43 @@ async def product_batches(
             computed_status = "EXPIRED"
         else:
             computed_status = "ACTIVE"
+
+        doc_no = str(batch.document_no or "").strip()
+        purchase_meta = purchase_by_doc.get(doc_no)
+        purchase_date = None
+        currency = "USD"
+        if purchase_meta is not None:
+            tx_date, currency = purchase_meta
+            if hasattr(tx_date, "date"):
+                purchase_date = tx_date.date()
+            else:
+                purchase_date = tx_date
+        elif batch.created_at is not None:
+            purchase_date = batch.created_at.date() if hasattr(batch.created_at, "date") else batch.created_at
+
+        batch_key = str(batch.batch_no)
+        active_price = active_by_batch.get(batch_key)
+        latest_price = active_price or latest_by_batch.get(batch_key)
+        pricing_active = active_price is not None
+        if active_price is not None:
+            sale_price = active_price.sale_price
+            sale_price_id = active_price.id
+        elif latest_price is not None:
+            sale_price = latest_price.sale_price
+            sale_price_id = latest_price.id
+        elif general_price is not None:
+            sale_price = general_price.sale_price
+            sale_price_id = None
+        else:
+            sale_price = product.selling_price
+            sale_price_id = None
+
         batches.append(
             {
                 "id": batch.id,
                 "product_id": batch.product_id,
                 "batch_no": batch.batch_no,
                 "expiry_date": expiry,
-                # Received ledger quantity (maintained by the canonical
-                # mutation service); remaining = received − outflows + returns.
                 "received_quantity": batch.received_quantity,
                 "remaining_quantity": remaining,
                 "unit_cost": batch.unit_cost,
@@ -229,6 +342,12 @@ async def product_batches(
                 "document_no": batch.document_no,
                 "created_at": batch.created_at,
                 "status": computed_status,
+                "purchase_date": purchase_date,
+                "purchase_uom": purchase_uom_by_batch.get(batch_key) or base_uom_symbol,
+                "currency": currency,
+                "sale_price": sale_price,
+                "sale_price_id": sale_price_id,
+                "pricing_active": pricing_active,
             }
         )
     return batches, int(total)

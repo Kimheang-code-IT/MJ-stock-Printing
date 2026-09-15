@@ -285,6 +285,8 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         }
         if (date && date > lot.createdDate) lot.createdDate = date
       }
+      const product = mockRecords('products').find(row => String(row.id) === String(productId))
+      const prices = productSalePriceRows(productId)
       const rows: ProductBatchRow[] = []
       for (const [key, lot] of lots) {
         const remaining = roundQty(lot.remaining)
@@ -293,6 +295,10 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         const sourcePurchase = lot.purchaseNo
           ? mockRecords('stockIns').find(row => String(row.purchaseNo ?? '') === lot.purchaseNo)
           : undefined
+        const activePrice = prices.find(row => row.isActive && String(row.batchNo ?? '') === lot.batchNo)
+        const latestPrice = activePrice
+          || prices.find(row => String(row.batchNo ?? '') === lot.batchNo)
+        const generalPrice = prices.find(row => row.isActive && !row.batchNo)
         rows.push({
           id: key,
           productId: String(productId),
@@ -309,6 +315,14 @@ export function createMockStockQueryRepository(): StockQueryRepository {
             : (lot.expiryDates.length && (lot.expiryDates.sort()[0] ?? '') < today)
               ? 'Expired'
               : 'Active',
+          purchaseDate: String(sourcePurchase?.date ?? lot.createdDate ?? '').slice(0, 10) || null,
+          purchaseUom: String(product?.uomSymbol || product?.uom || 'pcs'),
+          currency: String(sourcePurchase?.currency ?? 'USD'),
+          salePrice: latestPrice != null
+            ? Number(latestPrice.salePrice)
+            : Number(generalPrice?.salePrice ?? product?.salePrice ?? 0),
+          salePriceId: latestPrice?.id ? String(latestPrice.id) : null,
+          pricingActive: activePrice != null,
         })
       }
       const filtered = rows
@@ -416,7 +430,10 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         expiryDate: input.expiryDate ? String(input.expiryDate).slice(0, 10) : null,
         uomPrices,
       })
-      copyActivePriceOntoProduct(productId, defaultPrice)
+      // General scope mirrors onto products.salePrice; batch-scoped prices do not.
+      if (!batchNo) {
+        copyActivePriceOntoProduct(productId, defaultPrice)
+      }
       return mockLatency(productSalePriceRows(productId).find(row => String(row.id) === String(created.id))!)
     },
 
@@ -428,12 +445,25 @@ export function createMockStockQueryRepository(): StockQueryRepository {
       for (const row of rows) {
         if (String(row.productId ?? '') !== String(productId)) continue
         // Only the same batch scope switches (batch-first resolution rule).
-        row.isActive = String(row.batchNo ?? '') === String(target.batchNo ?? '')
-          && String(row.id) === String(priceId)
+        if (String(row.batchNo ?? '') !== String(target.batchNo ?? '')) continue
+        row.isActive = String(row.id) === String(priceId)
       }
       target.isActive = true
-      copyActivePriceOntoProduct(productId, Number(target.salePrice ?? 0))
+      if (!String(target.batchNo ?? '').trim()) {
+        copyActivePriceOntoProduct(productId, Number(target.salePrice ?? 0))
+      }
       return mockLatency(productSalePriceRows(productId).find(row => String(row.id) === String(priceId))!)
+    },
+
+    async setSalePriceActive(priceId, isActive): Promise<ProductSalePriceRow> {
+      const rows = mockRecords('productSalePrices')
+      const target = rows.find(row => String(row.id) === String(priceId))
+      if (!target) throw new Error(`Sale price ${priceId} not found`)
+      if (isActive) {
+        return this.activateSalePrice(String(target.productId), priceId)
+      }
+      target.isActive = false
+      return mockLatency(productSalePriceRows(String(target.productId)).find(row => String(row.id) === String(priceId))!)
     },
   }
 }
@@ -874,15 +904,35 @@ export function createMockPosRepository(): PosCommandRepository {
         .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
       const selectedDeposit = round2(includedDebts.reduce((sum, row) => sum + Number(row.remainingAmount || 0), 0))
       const depositTotal = round2(Math.max(0, input.deposit == null ? selectedDeposit : Number(input.deposit)))
-      const combinedDue = round2(total + depositTotal)
       const credit = input.paymentMethod === 'Credit'
-      if ((credit || combinedDue > paidNow || depositTotal > 0) && !customer) {
+      // Walk-in cannot underpay the sale; prior-debt payment also needs a customer.
+      if ((credit || total > paidNow || depositTotal > 0) && !customer) {
         throw new Error('Credit sales require a customer')
       }
-      if (paidNow > combinedDue) throw new Error('Paid amount exceeds the amount due')
-      let left = paidNow
-      const salePaid = round2(Math.min(left, total))
-      left = round2(left - salePaid)
+      // Settle prior debts from deposit only (separate from sale payment).
+      let debtBudget = depositTotal
+      if (customer && debtBudget > 0 && includedDebts.length) {
+        for (const debt of includedDebts) {
+          if (debtBudget <= 0) break
+          const open = round2(Number(debt.remainingAmount || 0))
+          if (open <= 0) continue
+          const applied = round2(Math.min(open, debtBudget))
+          const paid = round2(Number(debt.paidAmount || 0) + applied)
+          const stillOpen = round2(open - applied)
+          debt.paidAmount = paid
+          debt.remainingAmount = stillOpen
+          debt.status = stillOpen <= 0 ? 'PAID' : 'PARTIAL'
+          debtBudget = round2(debtBudget - applied)
+          customer.debtBalance = round2(Number(customer.debtBalance || 0) - applied)
+          const priorSale = db.collections.sales.find(row => String(row.id) === String(debt.saleId))
+          if (priorSale) {
+            priorSale.paidAmount = round2(Number(priorSale.paidAmount || 0) + applied)
+            priorSale.remaining = stillOpen
+            priorSale.status = stillOpen <= 0 ? 'Paid' : Number(priorSale.paidAmount) > 0 ? 'Partial' : 'Unpaid'
+          }
+        }
+      }
+      const salePaid = round2(Math.min(Math.max(0, paidNow), total))
       const remaining = round2(total - salePaid)
 
       const sale = mockInsert('sales', {
@@ -932,27 +982,6 @@ export function createMockPosRepository(): PosCommandRepository {
           currency: input.currency ?? 'USD',
           exchangeRate: input.exchangeRate ?? 1,
         })
-      }
-      if (customer && left > 0 && includedDebts.length) {
-        for (const debt of includedDebts) {
-          if (left <= 0) break
-          const open = round2(Number(debt.remainingAmount || 0))
-          if (open <= 0) continue
-          const applied = round2(Math.min(open, left))
-          const paid = round2(Number(debt.paidAmount || 0) + applied)
-          const stillOpen = round2(open - applied)
-          debt.paidAmount = paid
-          debt.remainingAmount = stillOpen
-          debt.status = stillOpen <= 0 ? 'PAID' : 'PARTIAL'
-          left = round2(left - applied)
-          customer.debtBalance = round2(Number(customer.debtBalance || 0) - applied)
-          const priorSale = db.collections.sales.find(row => String(row.id) === String(debt.saleId))
-          if (priorSale) {
-            priorSale.paidAmount = round2(Number(priorSale.paidAmount || 0) + applied)
-            priorSale.remaining = stillOpen
-            priorSale.status = stillOpen <= 0 ? 'Paid' : Number(priorSale.paidAmount) > 0 ? 'Partial' : 'Unpaid'
-          }
-        }
       }
       addAudit('SALE', 'create', 'Sale', String(sale.saleNo), String(sale.saleNo))
       return mockLatency(sale)

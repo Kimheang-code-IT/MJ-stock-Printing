@@ -5,12 +5,11 @@ import { h } from 'vue'
 import { formatMoney } from '~/composables/module/useModule'
 import { PAYMENT_METHODS } from '~/config/pos-options'
 import type { PosCartLine } from '~/utils/pos/cart'
-import { cartDiscountTotal, cartSubtotal, lineDiscountAmount, lineNet } from '~/utils/pos/cart'
+import type { PrintPaperSize } from '~/utils/print/html'
+import { cartDiscountTotal, cartSubtotal, lineDiscountAmount, lineNet, roundMoney } from '~/utils/pos/cart'
 import {
   checkoutDeliveryFee,
   checkoutDue,
-  checkoutOutstanding,
-  checkoutPaidNow,
   checkoutSaleNet,
   type CheckoutDebtRow,
 } from '~/utils/pos/checkout'
@@ -46,10 +45,14 @@ const props = defineProps<{
   canOperate: boolean
   completing?: boolean
   disabled?: boolean
+  /** View-only: sale detail from Sales Report — no edits, Close instead of Submit. */
+  viewMode?: boolean
   /** Return mode: the cart holds original-invoice lines to return. */
   returnMode?: boolean
   returnReason?: string
   returnRestock?: boolean
+  /** Invoice paper size (A4 / A5) chosen on the keypad. */
+  paperSize?: PrintPaperSize
 }>()
 
 const emit = defineEmits<{
@@ -67,8 +70,10 @@ const emit = defineEmits<{
   'update:includedDebtIds': [value: string[]]
   'update:returnReason': [value: string]
   'update:returnRestock': [value: boolean]
+  'update:paperSize': [value: PrintPaperSize]
   back: []
   complete: []
+  pay: [amount: number]
 }>()
 
 const { t } = useI18n()
@@ -82,6 +87,8 @@ const noEmptyDescription = ' '
 const debtOpen = ref(false)
 const deliveryInfoOpen = ref(false)
 const customerCreateOpen = ref(false)
+/** When true the right block is replaced by the amount-paid keypad. */
+const paying = ref(false)
 
 type CheckoutLineRow = Record<string, unknown> & {
   id: string
@@ -139,19 +146,14 @@ const columns = computed<TableColumn<CheckoutLineRow>[]>(() => [
     cell: ({ row }) => money(row.original.unitPrice),
   },
   {
-    accessorKey: 'discountPercent',
+    accessorKey: 'discountAmount',
     header: t('app.pos.discount'),
     enableSorting: false,
     meta: { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } },
     cell: ({ row }) => {
-      const percent = row.original.discountPercent || 0
-      const amount = row.original.discountAmount
-      return h('div', [
-        h('span', `${percent}%`),
-        amount
-          ? h('span', { class: 'block text-xs text-muted' }, `−${money(amount)}`)
-          : null,
-      ])
+      const amount = row.original.discountAmount || 0
+      return h('span', { class: amount ? 'text-end tabular-nums' : 'text-end tabular-nums text-muted' },
+        amount ? `−${money(amount)}` : '—')
     },
   },
   {
@@ -177,38 +179,20 @@ const selectedCustomerName = computed(() =>
   || props.customerName
   || '')
 
-/** Outstanding Debt field only shows when the selected customer has open
- *  debts (spec §5.11) — walk-in / debt-free customers see nothing here. */
-const hasCustomerDebts = computed(() => customerDebtBalance.value > 0)
-
 const subtotal = computed(() => cartSubtotal(props.cart))
 const discountTotal = computed(() => cartDiscountTotal(props.cart))
-const selectedDebts = computed(() =>
-  props.debts.filter(row => props.includedDebtIds.includes(String(row.id))))
 const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(props.needsDelivery, props.deliveryPrice))
-// All checkout amounts are in the sale currency; delivery fee and deposit
-// are typed in that same currency.
-const saleNet = computed(() =>
-  checkoutSaleNet(subtotal.value, discountTotal.value, 0) + appliedDeliveryPrice.value)
-const due = computed(() => checkoutDue(saleNet.value, Number(props.depositInput || 0)))
-const paidNow = computed(() => checkoutPaidNow(props.paidInput, due.value, props.paymentMethod === 'Credit'))
-const outstandingAmount = computed(() => checkoutOutstanding(due.value, paidNow.value))
-const outstandingDisplay = computed(() =>
-  selectedDebts.value.length
-    ? selectedDebts.value.reduce((sum, row) => sum + Number(row.remainingAmount || 0), 0)
-    : customerDebtBalance.value)
-/** Walk-in customers cannot leave an outstanding balance (spec §5.11),
- *  so the Credit tender is disabled until a registered customer is picked. */
-const walkInCreditDisabled = computed(() => !props.customerId)
-const returnTotal = computed(() => saleNet.value)
+// Sale amounts only — deposit / prior-debt payment is settled separately.
+const grandTotal = computed(() =>
+  checkoutSaleNet(subtotal.value, discountTotal.value, appliedDeliveryPrice.value))
+const due = computed(() => checkoutDue(grandTotal.value))
+const returnTotal = computed(() => grandTotal.value)
 const canComplete = computed(() =>
   Boolean(props.cart.length)
   && props.canOperate
   && !props.disabled
-  && (props.returnMode
-    ? Boolean(String(props.returnReason || '').trim())
-    : (outstandingAmount.value <= 0 || Boolean(props.customerId))))
+  && (!props.returnMode || Boolean(String(props.returnReason || '').trim())))
 
 const returnReasonProxy = computed({
   get: () => String(props.returnReason || ''),
@@ -224,8 +208,44 @@ const includedDebtIdsProxy = computed({
   set: (value: string[]) => emit('update:includedDebtIds', value),
 })
 
+/** Paper size for the post-sale invoice print (A4 / A5) chosen on the keypad. */
+const paperSizeModel = computed<PrintPaperSize>({
+  get: () => props.paperSize ?? 'A4',
+  set: value => emit('update:paperSize', value),
+})
+
 const customerDebtBalance = computed(() =>
   props.debts.reduce((sum, row) => sum + Number(row.remainingAmount || 0), 0))
+/** Customer has open invoices — shows the Debt button + prior-debt amount input. */
+const hasCustomerDebts = computed(() => customerDebtBalance.value > 0)
+/** Debt button is a toggle: on when the customer's invoices are included. */
+const debtActive = computed(() => props.includedDebtIds.length > 0)
+
+/** Prior-debt amount auto-fills from the selected invoices (still editable). */
+const selectedDebtTotal = computed(() => roundMoney(
+  props.debts
+    .filter(row => props.includedDebtIds.includes(String(row.id)))
+    .reduce((sum, row) => sum + Number(row.remainingAmount || 0), 0),
+))
+
+watch(selectedDebtTotal, (total) => {
+  emit('update:depositInput', total)
+})
+
+function emitDeposit(value: unknown) {
+  const amount = value == null || value === '' ? 0 : Number(value)
+  emit('update:depositInput', Number.isFinite(amount) ? Math.max(0, amount) : 0)
+}
+
+/** Debt toggle: activate selects invoices (dialog), deactivate clears them. */
+function toggleDebt() {
+  if (props.disabled) return
+  if (debtActive.value) {
+    emit('update:includedDebtIds', [])
+    return
+  }
+  openDebts()
+}
 
 function onCustomerPick(value: unknown) {
   const selected = String(value ?? '')
@@ -266,49 +286,37 @@ function emitDeliveryPrice(value: unknown) {
   emit('update:deliveryPrice', Number.isFinite(amount) ? Math.max(0, amount) : 0)
 }
 
-function emitDeposit(value: unknown) {
-  const amount = value == null || value === '' ? 0 : Number(value)
-  emit('update:depositInput', Number.isFinite(amount) ? Math.max(0, amount) : 0)
-}
-
-function emitPaid(value: unknown) {
-  const amount = value == null || value === '' ? 0 : Number(value)
-  emit('update:paidInput', Number.isFinite(amount) ? amount : undefined)
-}
-
 function onNeedsDelivery(value: unknown) {
   emit('update:needsDelivery', value === true)
   // Checking Delivery opens the delivery-info dialog (phone / location /
   // price for this invoice); unchecking keeps the entered values.
   if (value === true) deliveryInfoOpen.value = true
 }
+
+/** Next: swap the right block for the inline amount-paid keypad. */
+function startPayment() {
+  if (!canComplete.value) return
+  paying.value = true
+}
+
+function onKeypadConfirm(amount: number) {
+  emit('pay', amount)
+}
+
+// Leave the keypad once the sale/cart is cleared (successful submit).
+watch(() => props.cart.length, (length) => {
+  if (!length) paying.value = false
+})
 </script>
 
 <template>
   <section class="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row">
     <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <div class="flex shrink-0 items-center justify-between gap-3 px-1 pb-2">
-        <UButton
-          size="lg"
-          color="neutral"
-          variant="soft"
-          icon="i-lucide-arrow-left"
-          class="rounded-sm"
-          :label="t('app.pos.backToCart')"
-          @click="emit('back')"
-        />
-        <UCheckbox
-          v-if="!returnMode"
-          :model-value="needsDelivery"
-          :label="t('app.pos.needsDelivery')"
-          size="lg"
-          :disabled="disabled"
-          @update:model-value="onNeedsDelivery($event)"
-        />
-        <div
-          v-else
-          class="inline-flex items-center gap-2 rounded-sm bg-warning/10 px-3 py-1 text-sm font-medium text-warning"
-        >
+      <div
+        v-if="returnMode"
+        class="flex shrink-0 items-center justify-end gap-3 px-1 pb-2"
+      >
+        <div class="inline-flex items-center gap-2 rounded-sm bg-warning/10 px-3 py-1 text-sm font-medium text-warning">
           <UIcon name="i-lucide-undo-2" class="size-4" />
           {{ t('app.pos.returnMode') }}
         </div>
@@ -325,8 +333,19 @@ function onNeedsDelivery(value: unknown) {
     </div>
 
     <aside class="flex w-full shrink-0 flex-col overflow-y-auto lg:w-md xl:w-xl">
-      <div class="rounded-sm border border-default bg-default p-4">
-        <div v-if="returnMode" class="grid gap-3">
+      <div class="flex min-h-full flex-col gap-3 rounded-sm border border-default bg-default p-4">
+        <PosPaymentKeypad
+          v-if="!returnMode && paying"
+          v-model:paper-size="paperSizeModel"
+          :total="due"
+          :currency="saleCurrency"
+          :payment-method="paymentMethod"
+          :busy="completing"
+          :disabled="disabled"
+          @confirm="onKeypadConfirm"
+          @cancel="paying = false"
+        />
+        <div v-else-if="returnMode" class="grid gap-3">
           <UFormField
             :label="t('app.pos.customerName')"
             size="md"
@@ -365,125 +384,82 @@ function onNeedsDelivery(value: unknown) {
             </p>
           </div>
 
-          <UButton
-            block
-            color="warning"
-            size="xl"
-            :disabled="!canComplete"
-            :loading="completing"
-            :label="t('app.reports.confirmReturn')"
-            @click="emit('complete')"
-          />
+          <div class="flex gap-2">
+            <UButton
+              class="flex-1"
+              color="neutral"
+              variant="soft"
+              size="xl"
+              icon="i-lucide-arrow-left"
+              :label="t('app.pos.backToCart')"
+              @click="emit('back')"
+            />
+            <UButton
+              class="flex-1"
+              color="warning"
+              size="xl"
+              :disabled="!canComplete"
+              :loading="completing"
+              :label="t('app.reports.confirmReturn')"
+              @click="emit('complete')"
+            />
+          </div>
         </div>
-        <div v-else class="grid gap-3">
+        <div v-else class="flex flex-1 flex-col gap-6">
+          <!-- Top: Delivery / Debt / Add customer on one line. -->
+          <div class="grid grid-cols-3 gap-2">
+            <UButton
+              block
+              size="lg"
+              :color="needsDelivery ? 'error' : 'neutral'"
+              variant="solid"
+              icon="i-lucide-truck"
+              :label="t('app.pos.needsDelivery')"
+              :disabled="disabled"
+              @click="onNeedsDelivery(!needsDelivery)"
+            />
+            <UButton
+              block
+              size="lg"
+              :color="debtActive ? 'error' : 'neutral'"
+              variant="solid"
+              icon="i-lucide-wallet"
+              :label="`${t('app.pos.debt')} · ${formatMoney(customerDebtBalance, currency)}`"
+              :disabled="disabled || !customerId || saleCurrency === 'KHR' || !hasCustomerDebts"
+              @click="toggleDebt"
+            />
+            <UButton
+              block
+              size="lg"
+              color="primary"
+              variant="solid"
+              icon="i-lucide-user-plus"
+              :label="t('app.pos.addCustomer')"
+              :disabled="disabled"
+              @click="openCustomerCreate"
+            />
+          </div>
+
           <UFormField
             :label="t('app.pos.customerName')"
             size="md"
           >
-            <div class="flex gap-2">
-              <UInputMenu
-                :model-value="nameMenuValue"
-                :items="nameItems"
-                value-key="value"
-                label-key="label"
-                description-key="description"
-                :filter-fields="customerFilterFields"
-                :display-value="() => selectedCustomerName"
-                open-on-click
-                class="min-w-0 flex-1"
-                size="lg"
-                :ui="fieldUi"
-                :placeholder="t('app.pos.customerSearchPlaceholder')"
-                :search-input="true"
-                :disabled="disabled"
-                @update:model-value="onCustomerPick"
-              />
-              <UButton
-                icon="i-lucide-user-plus"
-                color="primary"
-                variant="soft"
-                size="lg"
-                class="shrink-0"
-                :title="t('app.pos.addNewCustomer')"
-                :aria-label="t('app.pos.addNewCustomer')"
-                :disabled="disabled"
-                @click="openCustomerCreate"
-              />
-            </div>
-            <p class="mt-1 text-xs text-muted">
-              {{ t('app.pos.walkInDefaultHint') }}
-            </p>
-          </UFormField>
-          <UFormField
-            v-if="hasCustomerDebts"
-            :label="t('app.debt.outstanding')"
-            size="md"
-          >
-            <button
-              type="button"
-              class="flex min-h-10 w-full items-center justify-between rounded-sm bg-elevated/70 px-3 text-base"
-              :disabled="disabled || !customerId || saleCurrency === 'KHR'"
-              :title="saleCurrency === 'KHR' ? t('app.pos.debtUsdOnly') : undefined"
-              @click="openDebts"
-            >
-              <span class="tabular-nums">{{ formatMoney(outstandingDisplay, currency) }}</span>
-              <UIcon
-                name="i-lucide-chevron-right"
-                class="size-5 text-muted"
-              />
-            </button>
-          </UFormField>
-
-          <div class="space-y-1.5 border-t border-default pt-3 text-base">
-            <div class="flex justify-between">
-              <span class="text-muted">{{ t('app.pos.subtotal') }}</span>
-              <span class="tabular-nums">{{ money(subtotal) }}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-muted">{{ t('app.pos.discount') }}</span>
-              <span class="tabular-nums">−{{ money(discountTotal) }}</span>
-            </div>
-          </div>
-
-          <UFormField
-            v-if="needsDelivery"
-            :label="t('app.pos.deliveryInfoTitle')"
-            size="md"
-          >
-            <button
-              type="button"
-              class="flex min-h-10 w-full items-center justify-between gap-2 rounded-sm bg-elevated/70 px-3 text-base"
-              :disabled="disabled"
-              @click="deliveryInfoOpen = true"
-            >
-              <span class="flex min-w-0 flex-col items-start leading-tight">
-                <span class="truncate text-sm">{{ deliveryPhone || t('app.pos.deliveryPhone') }}</span>
-                <span class="truncate text-xs text-muted">{{ deliveryLocation || t('app.pos.deliveryLocation') }}</span>
-              </span>
-              <span class="flex shrink-0 items-center gap-2">
-                <span class="tabular-nums">{{ money(deliveryPrice) }}</span>
-                <UIcon
-                  name="i-lucide-pencil"
-                  class="size-4 text-muted"
-                />
-              </span>
-            </button>
-          </UFormField>
-
-          <UFormField
-            :label="t('app.pos.depositTotal')"
-            size="md"
-          >
-            <CommonAppCurrencyInput
-              :model-value="depositInput"
-              :currency="saleCurrency"
-              :min="0"
-              :step="0.01"
+            <UInputMenu
+              :model-value="nameMenuValue"
+              :items="nameItems"
+              value-key="value"
+              label-key="label"
+              description-key="description"
+              :filter-fields="customerFilterFields"
+              :display-value="() => selectedCustomerName"
+              open-on-click
               class="w-full"
               size="lg"
-              align="right"
-              :disabled="disabled || saleCurrency === 'KHR'"
-              @update:model-value="emitDeposit($event)"
+              :ui="fieldUi"
+              :placeholder="t('app.pos.customerSearchPlaceholder')"
+              :search-input="true"
+              :disabled="disabled"
+              @update:model-value="onCustomerPick"
             />
           </UFormField>
 
@@ -499,60 +475,67 @@ function onNeedsDelivery(value: unknown) {
               :disabled="disabled"
               @update:model-value="emit('update:paymentMethod', String($event))"
             />
-            <p
-              v-if="walkInCreditDisabled"
-              class="mt-1 text-xs text-warning"
-            >
-              {{ t('app.pos.walkInCreditDisabled') }}
-            </p>
           </UFormField>
 
           <UFormField
-            :label="t('app.pos.paidNow')"
+            v-if="hasCustomerDebts"
+            :label="t('app.pos.depositTotal')"
             size="md"
           >
-            <CommonAppCurrencyInput
-              :model-value="paidInput"
+            <CommonAppMoneyField
+              inline
+              :model-value="depositInput"
               :currency="saleCurrency"
               :min="0"
-              :max="due"
               :step="0.01"
               class="w-full"
               size="lg"
               align="right"
-              :placeholder="String(due.toFixed(2))"
-              :disabled="disabled || paymentMethod === 'Credit'"
-              @update:model-value="emitPaid($event)"
+              :disabled="disabled || saleCurrency === 'KHR'"
+              @update:model-value="emitDeposit($event)"
             />
-            <p
-              v-if="paidInput == null"
-              class="mt-1 text-xs text-muted"
-            >
-              {{ t('app.pos.paidNowDefaultHint') }}
-            </p>
           </UFormField>
 
-          <div class="flex justify-between border-t border-default pt-2 text-lg font-semibold">
-            <span>{{ t('app.pos.outstandingAmount') }}</span>
-            <span class="tabular-nums">{{ money(outstandingAmount) }}</span>
+          <!-- Bottom: Total, then Back / Next. -->
+          <div class="mt-auto grid gap-3">
+            <div class="flex justify-between border-t border-default pt-3 text-lg font-semibold">
+              <span>{{ t('app.pos.total') }}</span>
+              <span class="tabular-nums">{{ money(due) }}</span>
+            </div>
+
+            <!-- Back + Next on one line, full width of the right block. -->
+            <div class="flex gap-2">
+              <UButton
+                class="h-14 flex-1 justify-center"
+                color="neutral"
+                variant="soft"
+                size="xl"
+                icon="i-lucide-arrow-left"
+                :label="t('app.pos.backToCart')"
+                @click="emit('back')"
+              />
+              <UButton
+                v-if="viewMode"
+                class="h-14 flex-1 justify-center"
+                color="neutral"
+                variant="soft"
+                size="xl"
+                :label="t('common.close')"
+                @click="emit('back')"
+              />
+              <UButton
+                v-else
+                class="h-14 flex-1 justify-center"
+                color="primary"
+                size="xl"
+                icon="i-lucide-arrow-right"
+                trailing
+                :disabled="!canComplete"
+                :label="t('app.pos.next')"
+                @click="startPayment"
+              />
+            </div>
           </div>
-
-          <p
-            v-if="outstandingAmount > 0"
-            class="text-sm text-warning"
-          >
-            {{ t('app.pos.creditHint') }}
-          </p>
-
-          <UButton
-            block
-            color="primary"
-            size="xl"
-            :disabled="!canComplete"
-            :loading="completing"
-            :label="t('app.pos.submit')"
-            @click="emit('complete')"
-          />
         </div>
       </div>
     </aside>

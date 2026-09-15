@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError, NotFoundError
 from app.modules.uoms.models import DEFAULT_UOMS, UOM
 from app.modules.uoms.repository import UOMRepository
+from app.shared.lifecycle import assert_inactive_for_delete
 
 
 async def ensure_default_uoms(session: AsyncSession) -> None:
@@ -77,6 +78,7 @@ class UOMService:
 
     async def delete(self, uom_id: uuid.UUID) -> None:
         uom = await self.get(uom_id)
+        assert_inactive_for_delete(uom.status, label="unit of measure")
         if await self.repo.count_products(uom_id) > 0 or await self.repo.count_sale_price_uoms(uom_id) > 0:
             raise ConflictError(
                 "Cannot delete this unit of measure because products or pricing history "

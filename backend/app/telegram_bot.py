@@ -225,12 +225,45 @@ async def on_callback(update, context) -> None:
         await query.message.reply_text(text, reply_markup=_result_keyboard(action, total_pages))
 
 
+def _import_all_models() -> None:
+    """Import every model module before the first query.
+
+    SQLAlchemy configures all mappers in the registry at once when the first
+    query runs. The bot only queries a few tables, but ``Product`` references
+    ``Category``/``Brand``/``Supplier`` by name, so a partial import set makes
+    that first query raise ``InvalidRequestError``. Mirrors tests/conftest.py.
+    """
+    import app.modules.administration.models  # noqa: F401
+    import app.modules.auth.models  # noqa: F401
+    import app.modules.brands.models  # noqa: F401
+    import app.modules.categories.models  # noqa: F401
+    import app.modules.customers.models  # noqa: F401
+    import app.modules.delivery.models  # noqa: F401
+    import app.modules.pos.models  # noqa: F401
+    import app.modules.reports.models  # noqa: F401
+    import app.modules.stock.models  # noqa: F401
+    import app.modules.suppliers.models  # noqa: F401
+    import app.modules.telegram.models  # noqa: F401
+    import app.modules.uoms.models  # noqa: F401
+    import app.shared.audit.models  # noqa: F401
+    import app.shared.documents.models  # noqa: F401
+
+
 def run() -> None:
+    _import_all_models()
+
     from app.shared.telegram.client import resolve_bot_token
 
-    token = asyncio.run(resolve_bot_token())
+    # Resolve the token and run polling on the *same* event loop. asyncio.run()
+    # would create and close its own loop, leaving pooled asyncpg connections
+    # bound to a dead loop; run_polling() (which calls asyncio.get_event_loop())
+    # would then reuse them and fail with "attached to a different loop".
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    token = loop.run_until_complete(resolve_bot_token())
     if not token:
-        token = asyncio.run(_wait_for_bot_token())
+        token = loop.run_until_complete(_wait_for_bot_token())
 
     from telegram.ext import (
         Application,

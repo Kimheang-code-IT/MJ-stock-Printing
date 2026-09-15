@@ -28,3 +28,19 @@ export function selectedDebtsShareScope(rows: readonly AppRecord[], kind: DebtKi
 export function selectedDebtsTotal(rows: readonly AppRecord[]): number {
   return Math.round(rows.reduce((sum, row) => sum + Number(row.remainingAmount || 0), 0) * 100) / 100
 }
+
+/**
+ * A debt still has an outstanding balance. Fully settled debts (status
+ * `PAID` or `remainingAmount <= 0`) are dropped from the customer/supplier
+ * debt report tables.
+ */
+export function isOpenDebt(row: AppRecord | null | undefined): boolean {
+  if (!row) return false
+  if (String(row.status || '').toUpperCase() === 'PAID') return false
+  return Number(row.remainingAmount || 0) > 0
+}
+
+/** Open (unpaid / partially paid) debt rows only. */
+export function openDebts(rows: readonly AppRecord[]): AppRecord[] {
+  return rows.filter(isOpenDebt)
+}

@@ -31,7 +31,9 @@ const wideForm = computed(() =>
         || field.type === 'uom-conversions'
         || field.type === 'related-records'
         || field.type === 'batches'
+        || field.type === 'product-batches'
         || field.type === 'product-movements'
+        || field.type === 'product-barcode'
         || field.type === 'party-sales-history'
         || field.type === 'party-purchase-history',
       ),

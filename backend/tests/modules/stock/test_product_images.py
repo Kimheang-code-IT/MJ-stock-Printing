@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import DEFAULT_UOM_ID, admin_headers, deactivate_then_delete
 
 
 @pytest.mark.asyncio
@@ -55,5 +55,5 @@ async def test_product_stores_object_key_and_resolves_image_url(client, db_sessi
     assert patched.status_code == 200, patched.text
     assert patched.json()["data"]["image_url"] is None
 
-    await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{product['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")

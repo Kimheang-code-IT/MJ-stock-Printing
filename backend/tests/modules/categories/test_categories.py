@@ -1,6 +1,6 @@
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, deactivate_then_delete, login
 
 VIEWER_EMAIL = "viewer@example.com"
 VIEWER_PASSWORD = "viewerpass1"
@@ -40,7 +40,11 @@ async def test_category_crud_flow(client):
     assert listing.status_code == 200
     assert listing.json()["meta"]["total"] >= 1
 
-    deleted = await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    active_blocked = await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    assert active_blocked.status_code == 409
+    assert "deactivate" in active_blocked.json()["detail"]["message"].lower()
+
+    deleted = await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")
     assert deleted.status_code == 200
 
     missing = await client.get(f"/api/v1/categories/{category['id']}", headers=headers)
@@ -88,6 +92,7 @@ async def test_category_delete_blocked_when_products_exist(client):
     blocked = await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
     assert blocked.status_code == 409
 
-    await client.delete(f"/api/v1/products/{product.json()['data']['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{product.json()['data']['id']}")
+    await client.patch(f"/api/v1/categories/{category['id']}", json={"status": "INACTIVE"}, headers=headers)
     unblocked = await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
     assert unblocked.status_code == 200

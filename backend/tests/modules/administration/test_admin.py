@@ -1,6 +1,6 @@
 import pytest
 
-from tests.utils import admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, deactivate_then_delete, login
 
 STAFF_EMAIL = "staff@example.com"
 STAFF_PASSWORD = "staffpass1"
@@ -245,7 +245,7 @@ async def test_role_delete_guarded_by_system_flag_and_users(client):
     protected = await client.delete(f"/api/v1/admin/roles/{administrator['id']}", headers=headers)
     assert protected.status_code == 409
 
-    # A role with no users is deletable.
+    # A deactivated role with no users is deletable.
     unused = (
         await client.post(
             "/api/v1/admin/roles",
@@ -253,7 +253,9 @@ async def test_role_delete_guarded_by_system_flag_and_users(client):
             headers=headers,
         )
     ).json()["data"]
-    removed = await client.delete(f"/api/v1/admin/roles/{unused['id']}", headers=headers)
+    removed = await deactivate_then_delete(
+        client, headers, f"/api/v1/admin/roles/{unused['id']}", status="DISABLED"
+    )
     assert removed.status_code == 200
 
     # A role still referenced by a user is blocked.
@@ -290,7 +292,9 @@ async def test_document_sequence_delete_only_when_never_issued(client):
             headers=headers,
         )
     ).json()["data"]
-    removed = await client.delete(f"/api/v1/admin/document-sequences/{fresh['id']}", headers=headers)
+    removed = await deactivate_then_delete(
+        client, headers, f"/api/v1/admin/document-sequences/{fresh['id']}"
+    )
     assert removed.status_code == 200
 
     issued = (

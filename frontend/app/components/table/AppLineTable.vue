@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import { h, type Component } from 'vue'
-import { CommonAppCurrencyInput, CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputMenu, UInputNumber, USelect } from '#components'
+import { CommonAppInputDate, CommonAppMoneyField, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputMenu, UInputNumber, USelect } from '#components'
 import type { ModuleLineColumn, ModuleTable } from '~/config/modules'
 import { useModuleLabel } from '~/composables/module/useModule'
 import type { DatePickerGranularity } from '~/utils/date-picker'
@@ -57,7 +57,7 @@ const TableIcon = UIcon as Component
 const TableInput = UInput as Component
 const TableInputMenu = UInputMenu as Component
 const TableInputNumber = UInputNumber as Component
-const TableInputCurrency = CommonAppCurrencyInput as Component
+const TableInputCurrency = CommonAppMoneyField as Component
 const TableMenu = UDropdownMenu as Component
 const TableSelect = USelect as Component
 
@@ -75,7 +75,7 @@ const tableClass = computed(() => [
   props.table.fitWidth ? 'w-full' : 'min-w-max',
 ])
 
-const moneyKeys = new Set(['unitPrice', 'discountPercent', 'taxPercent', 'discountAmount', 'discount', 'taxAmount', 'lineTotal', 'total', 'amount'])
+const moneyKeys = new Set(['unitPrice', 'unitAmount', 'discountPercent', 'taxPercent', 'discountAmount', 'discount', 'taxAmount', 'lineTotal', 'total', 'amount'])
 const numericKeys = new Set(['quantity', 'actualQuantity', 'remaining', 'netWeightKg', 'grossWeightKg', 'weightKg', 'taxRate', ...moneyKeys])
 
 function columnCellClass(column: ModuleLineColumn) {
@@ -200,6 +200,7 @@ function inlineMoneyCell(column: ModuleLineColumn, row: Record<string, unknown>,
         h(TableInputCurrency, {
           'modelValue': Number(row[field.key] || 0),
           'currency': String(row.currency || props.currency || ''),
+          'inline': true,
           'size': cellSize.value,
           'class': 'w-20',
           'align': 'right',
@@ -402,6 +403,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           if (moneyKeys.has(column.key)) {
             inputProps.currency = String(row.original.currency || props.currency || '')
             inputProps.align = 'right'
+            inputProps.inline = true
           }
           else {
             inputProps.increment = false

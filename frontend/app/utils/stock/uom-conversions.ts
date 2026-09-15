@@ -226,21 +226,28 @@ export function salePriceForUom(product: Record<string, unknown> | null | undefi
 }
 
 /**
- * One sale-price version selected in the Pricing tab's Sale Price History,
- * loaded into the editable Pricing table for review. Only the POS-active
- * version is editable; older versions load read-only (history). This is UI
- * state only — it never mutates the product's saved `uomConversions`.
+ * One sale-price version / batch scope selected in the Pricing tab and loaded
+ * into the Pricing table. UI state only — never POSTed with the product.
+ *
+ * - `scope: 'general'` (or null selection) → live product `uomConversions`
+ * - `scope: 'batch'` → batch-scoped draft; Save creates a new sale-price version
  */
 export interface SalePriceVersionSelection {
   id: string
   version: number
   /** Batch/lot scope; null = general pricing (all lots). */
   batchNo: string | null
+  /** General product price vs a stock-lot batch scope. */
+  scope: 'general' | 'batch'
   /** Exactly one POS-active version per product + batch scope. */
   isActive: boolean
   /** Version-level (default-sale) price mirror. */
   salePrice: number
-  /** UOM price rows inside the version. */
+  /** Lot expiry when the selection is batch-scoped. */
+  expiryDate?: string | null
+  /** When true, Pricing-table edits update this draft (batch scope). */
+  editable?: boolean
+  /** UOM price rows inside the version / draft. */
   uomPrices: Array<{
     uomId: string
     uomSymbol?: string | null
@@ -257,14 +264,111 @@ export function salePriceVersionSelection(row: {
   batchNo?: string | null
   isActive?: boolean
   salePrice?: number
+  expiryDate?: string | null
   uomPrices?: SalePriceVersionSelection['uomPrices']
+  scope?: 'general' | 'batch'
+  editable?: boolean
 }): SalePriceVersionSelection {
+  const batchNo = row.batchNo ?? null
+  const scope = row.scope ?? (batchNo ? 'batch' : 'general')
   return {
     id: String(row.id ?? ''),
     version: Number(row.version ?? 0),
-    batchNo: row.batchNo ?? null,
+    batchNo,
+    scope,
     isActive: row.isActive === true,
     salePrice: Number(row.salePrice ?? 0),
+    expiryDate: row.expiryDate ?? null,
+    editable: row.editable ?? scope === 'batch',
     uomPrices: Array.isArray(row.uomPrices) ? row.uomPrices.map(uom => ({ ...uom })) : [],
   }
+}
+
+/** One Pricing-tab batch rail card (General or a stock lot). */
+export type BatchPricingCard = {
+  key: string
+  scope: 'general' | 'batch'
+  batchNo: string | null
+  label: string
+  expiryDate: string | null
+  remainingQty: number | null
+  unitCost: number | null
+  lotStatus: string | null
+  /** POS-active sale-price version for this scope (if any). */
+  priceId: string | null
+  priceVersion: number | null
+  isPriceActive: boolean
+  salePrice: number | null
+  uomPrices: SalePriceVersionSelection['uomPrices']
+}
+
+/**
+ * Build rail cards: always General first, then stock lots joined to the
+ * newest/active sale-price version for that `batchNo`.
+ */
+export function buildBatchPricingCards(input: {
+  lots: Array<{
+    batchNo: string
+    expiryDate?: string | null
+    remainingQty?: number
+    unitCost?: number
+    status?: string
+  }>
+  salePrices: Array<{
+    id: string
+    version: number
+    batchNo?: string | null
+    isActive?: boolean
+    salePrice?: number
+    expiryDate?: string | null
+    uomPrices?: SalePriceVersionSelection['uomPrices']
+  }>
+  generalSalePrice?: number | null
+  generalUomPrices?: SalePriceVersionSelection['uomPrices']
+}): BatchPricingCard[] {
+  const generalPrices = input.salePrices.filter(row => !String(row.batchNo ?? '').trim())
+  const generalActive = generalPrices.find(row => row.isActive) ?? generalPrices[0] ?? null
+  const cards: BatchPricingCard[] = [{
+    key: 'general',
+    scope: 'general',
+    batchNo: null,
+    label: 'General',
+    expiryDate: null,
+    remainingQty: null,
+    unitCost: null,
+    lotStatus: null,
+    priceId: generalActive ? String(generalActive.id) : null,
+    priceVersion: generalActive ? Number(generalActive.version) : null,
+    isPriceActive: true,
+    salePrice: generalActive != null
+      ? Number(generalActive.salePrice ?? 0)
+      : (input.generalSalePrice != null ? Number(input.generalSalePrice) : null),
+    uomPrices: generalActive?.uomPrices?.length
+      ? generalActive.uomPrices.map(uom => ({ ...uom }))
+      : (input.generalUomPrices || []).map(uom => ({ ...uom })),
+  }]
+
+  for (const lot of input.lots) {
+    const batchNo = String(lot.batchNo || '').trim()
+    if (!batchNo) continue
+    const scoped = input.salePrices.filter(row => String(row.batchNo ?? '').trim() === batchNo)
+    const active = scoped.find(row => row.isActive) ?? null
+    const latest = active ?? scoped[0] ?? null
+    cards.push({
+      key: `batch:${batchNo}`,
+      scope: 'batch',
+      batchNo,
+      label: batchNo,
+      expiryDate: lot.expiryDate ?? latest?.expiryDate ?? null,
+      remainingQty: lot.remainingQty != null ? Number(lot.remainingQty) : null,
+      unitCost: lot.unitCost != null ? Number(lot.unitCost) : null,
+      lotStatus: lot.status ?? null,
+      priceId: latest ? String(latest.id) : null,
+      priceVersion: latest ? Number(latest.version) : null,
+      isPriceActive: active != null,
+      salePrice: latest != null ? Number(latest.salePrice ?? 0) : null,
+      uomPrices: latest?.uomPrices?.length ? latest.uomPrices.map(uom => ({ ...uom })) : [],
+    })
+  }
+  return cards
 }

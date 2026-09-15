@@ -35,6 +35,8 @@ const props = withDefaults(defineProps<{
   showSave?: boolean
   saveLabel?: string
   saving?: boolean
+  /** When true, the save button stays visible but non-interactive. */
+  saveDisabled?: boolean
   showCancel?: boolean
   cancelTo?: string
   showMetaRailToggle?: boolean
@@ -63,6 +65,7 @@ const props = withDefaults(defineProps<{
   showSave: false,
   saveLabel: '',
   saving: false,
+  saveDisabled: false,
   showCancel: false,
   cancelTo: '',
   showMetaRailToggle: false,
@@ -185,6 +188,7 @@ function syncActions() {
       ? {
           label: resolvedSaveLabel.value,
           loading: Boolean(props.saving),
+          disabled: Boolean(props.saveDisabled) || Boolean(props.saving),
           onClick: () => emit('save'),
         }
       : undefined,
@@ -227,6 +231,7 @@ watch(
     props.showSave,
     resolvedSaveLabel.value,
     props.saving,
+    props.saveDisabled,
     props.showCancel,
     props.cancelTo,
     props.showMetaRailToggle,

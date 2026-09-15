@@ -5,7 +5,6 @@ import PosProductBrowser from '~/components/pos/PosProductBrowser.vue'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { usePosChrome } from '~/composables/layout/usePosChrome'
-import { usePosPrintSizeDialog } from '~/composables/pos/usePosPrintSizeDialog'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { usePosCommands, useSettingsRepositories } from '~/repositories/index'
 import type { PosCartLine } from '~/utils/pos/cart'
@@ -47,7 +46,7 @@ const preferences = usePreferencesStore()
 const auth = useAuthStore()
 const { t, locale } = useI18n()
 const { clear } = useAppHeader()
-const { hidePosAppHeader } = usePosChrome()
+const { hidePosAppHeader, leavePos } = usePosChrome()
 const posCommands = usePosCommands()
 const { appInfo } = useSettingsRepositories()
 const toast = useToast()
@@ -74,6 +73,8 @@ const deliveryLocation = ref('')
 const needsDelivery = ref(false)
 const depositInput = ref(0)
 const completing = ref(false)
+/** Invoice paper size chosen on the payment keypad (A4 / A5). */
+const printPaperSize = ref<PrintPaperSize>('A4')
 // ONE document currency for the whole sale (cart → checkout → invoice):
 // cart line unitPrice is stored in the sale currency; switching the global
 // cart currency converts the stored prices exactly once at the entered rate.
@@ -154,6 +155,11 @@ const editLoading = ref(false)
 const editHeaderDiscount = ref(0)
 const editNote = ref('')
 
+/** View-only: Sales Report Sale No → checkout panel, no edits / no submit. */
+const viewMode = ref(false)
+const viewSaleId = ref('')
+const viewInvoiceNo = ref('')
+
 /** Canonical backend tender method → the POS checkout label. */
 const SALE_METHOD_TO_UI: Record<string, string> = {
   CASH: 'Cash',
@@ -167,9 +173,9 @@ onBeforeUnmount(() => {
 })
 usePageSeo({ title: () => t('app.pages.pos') })
 
-watch(step, (value) => {
-  hidePosAppHeader.value = value === 'checkout'
-}, { immediate: true })
+// POS is a focused workspace: hide the app header on every step (the cart and
+// checkout panels own their own Back / Next buttons).
+hidePosAppHeader.value = true
 
 onMounted(async () => {
   void store.fetchList('products')
@@ -186,6 +192,11 @@ onMounted(async () => {
   const returnId = String(route.query.returnSaleId || '')
   if (returnId) {
     await loadReturnSale(returnId)
+    return
+  }
+  const viewId = String(route.query.viewSaleId || '')
+  if (viewId) {
+    await loadViewSale(viewId)
     return
   }
   const editId = String(route.query.editSaleId || '')
@@ -272,13 +283,13 @@ const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(needsDelivery.value, deliveryPrice.value))
 /** Header discount preserved from the edited invoice (never in a new sale). */
 const headerDiscount = computed(() => (editMode.value ? editHeaderDiscount.value : 0))
-// Cart prices, delivery fee and deposit are all in the sale currency.
+// Cart prices and delivery fee are in the sale currency. Deposit / prior-debt
+// payment is settled separately and must not inflate this sale's due amount.
 const due = computed(() => checkoutDue(
-  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value + headerDiscount.value, 0) + appliedDeliveryPrice.value,
-  Number(depositInput.value || 0),
+  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value + headerDiscount.value, appliedDeliveryPrice.value),
 ))
 const isCredit = computed(() => paymentMethod.value === 'Credit')
-/** Untouched Paid now pays the amount due in full — a walk-in cash sale
+/** Untouched Paid now pays the grand total in full — a walk-in cash sale
  *  submits without typing the tender (spec §5.11 walk-in rule). */
 const paidAmount = computed(() =>
   checkoutPaidNow(paidInput.value, due.value, isCredit.value))
@@ -434,6 +445,10 @@ function goNext() {
 }
 
 function goBack() {
+  if (viewMode.value) {
+    void exitViewMode()
+    return
+  }
   step.value = 'cart'
 }
 
@@ -639,6 +654,64 @@ function exitEditMode() {
   step.value = 'cart'
 }
 
+/** Load an invoice into checkout for view-only detail (Sales Report Sale No). */
+async function loadViewSale(saleId: string) {
+  editLoading.value = true
+  try {
+    await store.fetchList('products')
+    const sale = await posCommands.getSale(saleId)
+    const productById = new Map(store.list('products').map(row => [String(row.id), row]))
+    saleCurrency.value = sale.currency
+    exchangeRateInput.value = sale.currency === 'KHR' ? sale.exchangeRate : undefined
+    customerId.value = sale.customerId ? String(sale.customerId) : undefined
+    customerName.value = sale.customerName
+    viewInvoiceNo.value = sale.invoiceNo
+    cart.value = saleEditCartLines(sale, productById)
+    const lineDiscounts = roundMoney(sale.items.reduce(
+      (sum, item) => sum + Number(item.discountAmount || 0),
+      0,
+    ))
+    editHeaderDiscount.value = roundMoney(Math.max(0, Number(sale.discount || 0) - lineDiscounts))
+    editNote.value = sale.note || ''
+    paymentMethod.value = SALE_METHOD_TO_UI[sale.paymentMethod] || 'Cash'
+    deliveryPrice.value = Number(sale.deliveryPrice || 0)
+    needsDelivery.value = Number(sale.deliveryPrice || 0) > 0
+    await nextTick()
+    paidInput.value = Number(sale.paidAmount || 0) > 0 ? Number(sale.paidAmount) : undefined
+    viewMode.value = true
+    viewSaleId.value = saleId
+    void store.fetchList('customers')
+    void store.fetchList('customerDebts')
+    step.value = 'checkout'
+  }
+  catch (error: unknown) {
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.pos.viewLoadFailed'),
+        description: apiErrorMessage(error, t('app.pos.viewLoadFailed')),
+        color: 'error',
+      })
+    }
+    await navigateTo('/reports/sales')
+  }
+  finally {
+    editLoading.value = false
+  }
+}
+
+async function exitViewMode() {
+  viewMode.value = false
+  viewSaleId.value = ''
+  viewInvoiceNo.value = ''
+  editHeaderDiscount.value = 0
+  editNote.value = ''
+  cart.value = []
+  customerId.value = undefined
+  customerName.value = ''
+  step.value = 'cart'
+  await navigateTo('/reports/sales')
+}
+
 /** Save the edited invoice (reverse + reapply on the backend). */
 async function saveEditSale() {
   if (!editSaleId.value || !cart.value.length || !canOperate.value || completing.value) return
@@ -704,22 +777,13 @@ async function saveEditSale() {
  *  parent owns the open state: choosing A4/A5 prints then closes, while
  *  X/Cancel only closes — the sale is already saved and is never re-submitted.
  *  `pendingDelivery` is snapshotted before the checkout reset so the post-sale
- *  Create Delivery Note target survives until the chooser closes. */
+ *  Create Delivery Note target survives until the print finishes. */
 const pendingDelivery = ref<{ saleId: string, phone: string, location: string } | null>(null)
-const { open: printSizeOpen, printing: printingInvoice, requestPrint: requestInvoicePrint, confirm: confirmInvoicePrint, cancel: cancelInvoicePrint } = usePosPrintSizeDialog<SaleInvoicePrintInput, PrintPaperSize>({
-  print: printSaleInvoice,
-  onClose: () => {
-    // Completed-sale state is only needed until the chooser closes; delivery
-    // info is snapshotted before the checkout reset so it survives.
-    lastSaleNo.value = ''
-    lastSaleId.value = ''
-    const delivery = pendingDelivery.value
-    pendingDelivery.value = null
-    if (delivery) {
-      void navigateTo(`/delivery-notes/new?saleId=${delivery.saleId}&phone=${encodeURIComponent(delivery.phone)}&location=${encodeURIComponent(delivery.location)}`)
-    }
-  },
-})
+/** Checkout keypad confirmed: capture the amount paid, then submit the sale. */
+function onPaymentConfirm(amount: number) {
+  paidInput.value = Number.isFinite(amount) ? amount : undefined
+  void completeSale()
+}
 
 async function completeSale() {
   if (returnMode.value) {
@@ -833,10 +897,23 @@ async function completeSale() {
     void store.fetchList('customers')
     void store.fetchList('customerDebts')
     void store.fetchList('stockMovements')
-    // Ask which paper size to use (invoice prints in the sale's own currency);
-    // X/Cancel skips print. The chooser is parent-owned and always returns to
-    // the normal POS screen, so a new sale can start immediately.
-    requestInvoicePrint(printInput)
+    // Print in the paper size chosen on the payment keypad (A4 / A5), in the
+    // sale's own currency — no print dialog. Printing must never fail the sale.
+    const delivery = pendingDelivery.value
+    pendingDelivery.value = null
+    try {
+      await printSaleInvoice(printInput, printPaperSize.value)
+    }
+    catch {
+      // ignore — the sale is already saved
+    }
+    finally {
+      lastSaleNo.value = ''
+      lastSaleId.value = ''
+      if (delivery) {
+        void navigateTo(`/delivery-notes/new?saleId=${delivery.saleId}&phone=${encodeURIComponent(delivery.phone)}&location=${encodeURIComponent(delivery.location)}`)
+      }
+    }
   }
   catch (error: unknown) {
     if (!isApiErrorHandled(error)) {
@@ -875,6 +952,24 @@ async function completeSale() {
     </div>
 
     <div
+      v-if="viewMode"
+      class="flex flex-wrap items-center gap-2 border-b border-info/40 bg-info/10 px-3 py-1.5 text-sm font-medium text-info"
+    >
+      <UIcon name="i-lucide-eye" class="size-4" />
+      <span>{{ t('app.pos.viewMode') }}</span>
+      <span v-if="viewInvoiceNo" class="text-muted">· {{ viewInvoiceNo }}</span>
+      <UButton
+        class="ms-auto"
+        color="neutral"
+        variant="ghost"
+        size="xs"
+        icon="i-lucide-x"
+        :label="t('common.close')"
+        @click="exitViewMode"
+      />
+    </div>
+
+    <div
       v-if="editMode"
       class="flex flex-wrap items-center gap-2 border-b border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary"
     >
@@ -891,24 +986,6 @@ async function completeSale() {
         @click="exitEditMode"
       />
     </div>
-
-    <LayoutAppHeaderPageActions
-      v-if="step === 'cart'"
-      :can-create="false"
-      :can-export="false"
-      :show-more-actions="false"
-      @refresh="() => { void store.fetchList('products') }"
-    >
-      <UButton
-        color="primary"
-        icon="i-lucide-arrow-right"
-        trailing
-        class="rounded-sm"
-        :disabled="!canOperate || !cart.length"
-        :label="t('app.pos.next')"
-        @click="goNext"
-      />
-    </LayoutAppHeaderPageActions>
 
     <div
       v-if="step === 'cart'"
@@ -937,6 +1014,8 @@ async function completeSale() {
         @update-sale-currency="onSaleCurrencyRequested"
         @remove="removeLine"
         @clear="clearCart"
+        @back="leavePos"
+        @next="goNext"
       />
     </div>
 
@@ -952,6 +1031,7 @@ async function completeSale() {
       v-model:needs-delivery="needsDelivery"
       v-model:deposit-input="depositInput"
       v-model:included-debt-ids="includedDebtIds"
+      v-model:paper-size="printPaperSize"
       :customer-phone="customerPhone"
       :customer-location="customerLocation"
       :sale-currency="saleCurrency"
@@ -959,8 +1039,10 @@ async function completeSale() {
       :currency="currency"
       :debts="openDebts"
       :customer-options="customerOptions"
-      :can-operate="canOperate"
+      :can-operate="canOperate && !viewMode"
       :completing="completing"
+      :disabled="viewMode || !canOperate"
+      :view-mode="viewMode"
       :return-mode="returnMode"
       :return-reason="returnReason"
       :return-restock="returnRestock"
@@ -968,13 +1050,7 @@ async function completeSale() {
       @update:return-restock="returnRestock = $event"
       @back="goBack"
       @complete="completeSale"
-    />
-
-    <PosPrintSizeDialog
-      v-model:open="printSizeOpen"
-      :busy="printingInvoice"
-      @confirm="confirmInvoicePrint"
-      @cancel="cancelInvoicePrint"
+      @pay="onPaymentConfirm"
     />
 
     <!-- Shared KHR exchange-rate dialog: opened when the cart currency

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { AppConfig } from '~/types/stock-pos/settings'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
@@ -21,6 +22,7 @@ const saving = ref(false)
 const testingEmail = ref(false)
 const testingTelegram = ref(false)
 const resettingData = ref(false)
+const clearingTransactions = ref(false)
 const activeTab = ref('localization')
 const model = ref<AppConfig | null>(null)
 
@@ -165,6 +167,51 @@ async function resetAllData() {
   }
 }
 
+/** Delete every sales + purchase transaction and zero stock (master data kept). */
+async function clearTransactions() {
+  const ok = await confirm({
+    kind: 'generic',
+    titleKey: 'core.settings.clearTransactionsConfirmTitle',
+    descriptionKey: 'core.settings.clearTransactionsConfirmHelp',
+    confirmLabelKey: 'core.settings.clearTransactionsAction',
+    confirmColor: 'error',
+  })
+  if (!ok) return
+
+  clearingTransactions.value = true
+  try {
+    await appConfig.clearTransactions()
+    toast.add({ title: t('core.settings.clearTransactionsSuccess'), color: 'success' })
+  }
+  catch (error: unknown) {
+    toast.add({ title: errorMessage(error, t('core.settings.clearTransactionsFailed')), color: 'error' })
+  }
+  finally {
+    clearingTransactions.value = false
+  }
+}
+
+/** Destructive maintenance actions live behind the header ⋯ menu. */
+const dangerItems = computed<DropdownMenuItem[][]>(() => {
+  if (!canConfigure.value) return []
+  return [[
+    {
+      label: t('core.settings.resetDataAction'),
+      icon: 'i-lucide-database-zap',
+      color: 'error',
+      disabled: resettingData.value,
+      onSelect: () => { void resetAllData() },
+    },
+    {
+      label: t('core.settings.clearTransactionsAction'),
+      icon: 'i-lucide-trash-2',
+      color: 'error',
+      disabled: clearingTransactions.value,
+      onSelect: () => { void clearTransactions() },
+    },
+  ]]
+})
+
 onMounted(() => void load())
 useAppPageTitle(() => t('app.pages.settings'))
 </script>
@@ -180,6 +227,7 @@ useAppPageTitle(() => t('app.pages.settings'))
     :read-only="!canEdit"
     :can-save="canEdit"
     :show-list-nav="false"
+    :more-items="dangerItems"
     content-wide
     @save="save"
     @refresh="load"
@@ -195,27 +243,6 @@ useAppPageTitle(() => t('app.pages.settings'))
         :loading="testingTelegram"
         @click="testTelegram"
       />
-    </template>
-
-    <template v-if="activeTab === 'security' && canConfigure" #after-form>
-      <DocumentAppDocumentContentShell wide class="space-y-4 pb-6">
-        <UAlert
-          color="error"
-          variant="subtle"
-          :title="t('core.settings.resetDataTitle')"
-          :description="t('core.settings.resetDataHelp')"
-        />
-        <UButton
-          color="error"
-          variant="soft"
-          icon="i-lucide-database-zap"
-          :loading="resettingData"
-          :disabled="resettingData"
-          @click="resetAllData"
-        >
-          {{ t('core.settings.resetDataAction') }}
-        </UButton>
-      </DocumentAppDocumentContentShell>
     </template>
   </DocumentAppDocumentPage>
 </template>

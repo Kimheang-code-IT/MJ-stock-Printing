@@ -4,6 +4,9 @@
  * Keeps the action menus in `WorkspaceView` and `DocumentView` consistent:
  * which collections can be hard-deleted, which carry an ACTIVE/INACTIVE-style
  * status toggle, and how to read/write that status across UI dialects.
+ *
+ * Hard delete is only offered for inactive/disabled records on status-bearing
+ * tables — active rows must be deactivated first.
  */
 
 /** Collections whose backend exposes a dependency-checked DELETE endpoint. */
@@ -44,6 +47,19 @@ export function supportsStatusToggle(collection?: string | null): boolean {
 /** True only when the record is explicitly inactive/disabled/deactivated. */
 export function isRecordInactive(status: unknown): boolean {
   return INACTIVE_VALUES.has(String(status ?? '').trim().toLowerCase())
+}
+
+/**
+ * Hard delete is allowed only when the collection supports DELETE and — for
+ * status-bearing tables — the row is already inactive/disabled.
+ */
+export function canHardDeleteRecord(
+  collection: string | null | undefined,
+  status: unknown,
+): boolean {
+  if (!supportsHardDelete(collection)) return false
+  if (!supportsStatusToggle(collection)) return true
+  return isRecordInactive(status)
 }
 
 /**

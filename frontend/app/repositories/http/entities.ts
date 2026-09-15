@@ -801,6 +801,8 @@ function adaptPurchaseReportLine(row: Record<string, unknown>): Record<string, u
     note: row.note ?? null,
     discount: q2(row.discount_amount ?? row.discountAmount),
     tax: q2(row.tax_amount ?? row.taxAmount),
+    // Tender recorded for the stock-in (Purchase Report Payment Method).
+    paymentMethod: String(row.payment_method ?? row.paymentMethod ?? ''),
   }
 }
 
@@ -835,6 +837,7 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
         note: line.note,
         discount: line.discount,
         tax: line.tax,
+        paymentMethod: line.paymentMethod,
       }
       byTx.set(key, doc)
     }
@@ -857,10 +860,12 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
     doc.total = q2(Number(doc.total) + Number(line.total))
     doc.remaining = Math.max(Number(doc.remaining), Number(line.remaining))
     if (!doc.supplier && line.supplier) doc.supplier = line.supplier
+    if (!doc.paymentMethod && line.paymentMethod) doc.paymentMethod = line.paymentMethod
   }
   return [...byTx.values()].map((doc) => {
     doc.paidAmount = q2(Number(doc.total) - Number(doc.remaining))
     doc.status = Number(doc.remaining) > 0 ? 'Partial' : 'Completed'
+    doc.paymentMethodLabel = salesPaymentLabel(doc.paymentMethod)
     return doc as AppRecord
   })
 }
@@ -1408,6 +1413,7 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
      */
     async listProductBatches(productId, query = {}): Promise<EntityListResult<ProductBatchRow>> {
       // Authoritative per-batch mirror (GET /stock/products/{id}/batches).
+      const scope = String(query.requestScope || 'default')
       const response = await api.get<unknown>(ApiEndpoints.PRODUCT_BATCHES(productId), {
         query: {
           q: query.q,
@@ -1415,7 +1421,7 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
           page: query.page,
           limit: query.limit,
         },
-        requestKey: `product-batches:${productId}`,
+        requestKey: `product-batches:${productId}:${scope}`,
         cancelPrevious: true,
       })
       const rows = unwrap<Record<string, unknown>[]>(response)
@@ -1436,6 +1442,20 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
             purchaseNo: String(row.document_no ?? row.documentNo ?? row.purchaseNo ?? ''),
             createdDate: String(row.created_at ?? row.createdDate ?? '').slice(0, 10),
             status: (rawStatus === 'EXPIRED' ? 'Expired' : rawStatus === 'DEPLETED' ? 'Depleted' : 'Active') as ProductBatchRow['status'],
+            purchaseDate: row.purchase_date != null || row.purchaseDate != null
+              ? String(row.purchase_date ?? row.purchaseDate).slice(0, 10)
+              : null,
+            purchaseUom: row.purchase_uom != null || row.purchaseUom != null
+              ? String(row.purchase_uom ?? row.purchaseUom)
+              : null,
+            currency: String(row.currency ?? 'USD'),
+            salePrice: row.sale_price != null || row.salePrice != null
+              ? Number(row.sale_price ?? row.salePrice)
+              : null,
+            salePriceId: row.sale_price_id != null || row.salePriceId != null
+              ? String(row.sale_price_id ?? row.salePriceId)
+              : null,
+            pricingActive: row.pricing_active === true || row.pricingActive === true,
           }
         }),
         meta: metaOf(response),
@@ -1443,6 +1463,7 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
     },
 
     async listSalePrices(productId, query = {}): Promise<EntityListResult<ProductSalePriceRow>> {
+      const scope = String(query.requestScope || 'default')
       const response = await api.get<unknown>(ApiEndpoints.PRODUCT_SALE_PRICES(productId), {
         query: {
           q: query.q,
@@ -1451,7 +1472,7 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
           page: query.page,
           limit: query.limit,
         },
-        requestKey: `product-sale-prices:${productId}`,
+        requestKey: `product-sale-prices:${productId}:${scope}`,
         cancelPrevious: true,
       })
       const rows = unwrap<Record<string, unknown>[]>(response)
@@ -1483,6 +1504,11 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
 
     async activateSalePrice(productId, priceId): Promise<ProductSalePriceRow> {
       const response = await api.post<unknown>(ApiEndpoints.PRODUCT_SALE_PRICE_ACTIVATE(productId, priceId), {})
+      return adaptSalePriceOut(unwrap<Record<string, unknown>>(response))
+    },
+
+    async setSalePriceActive(priceId, isActive): Promise<ProductSalePriceRow> {
+      const response = await api.patch<unknown>(ApiEndpoints.SALE_PRICE(priceId), { is_active: isActive })
       return adaptSalePriceOut(unwrap<Record<string, unknown>>(response))
     },
 
@@ -1584,7 +1610,10 @@ export function createHttpFinanceRepository(): FinanceRepository {
     },
     async entries(startDate?: string, endDate?: string): Promise<FinanceEntry[]> {
       const data = unwrap<unknown[]>(await api.get<unknown>(ApiEndpoints.FINANCE_ENTRIES, {
-        query: { startDate, endDate },
+        // The Finance page derives its Income/Expense/Net cards from these
+        // rows, so load the whole period (backend caps at max_page_size=500)
+        // instead of the default first page of 20.
+        query: { startDate, endDate, limit: 500 },
         requestKey: 'finance-entries',
         cancelPrevious: true,
       }))

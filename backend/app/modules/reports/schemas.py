@@ -132,6 +132,8 @@ class FinanceReportOut(BaseModel):
     stock_expire_loss: Decimal
     gross_profit: Decimal
     operating_expenses: Decimal
+    # Cash paid to suppliers in the period (purchase payments + debt repayments).
+    supplier_payments: Decimal = Decimal("0")
     net_result: Decimal
 
     @computed_field
@@ -142,7 +144,7 @@ class FinanceReportOut(BaseModel):
     @computed_field
     @property
     def expense(self) -> Decimal:
-        return self.operating_expenses
+        return self.total_expense
 
     @computed_field
     @property

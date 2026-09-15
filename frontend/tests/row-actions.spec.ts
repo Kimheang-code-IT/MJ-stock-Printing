@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HARD_DELETE_COLLECTIONS,
   STATUS_TOGGLE_COLLECTIONS,
+  canHardDeleteRecord,
   isRecordInactive,
   statusValueFor,
   supportsHardDelete,
@@ -36,6 +37,15 @@ describe('row action collection rules', () => {
     for (const status of ['Active', 'ACTIVE', 'Low Stock', '', null, undefined]) {
       expect(isRecordInactive(status), String(status)).toBe(false)
     }
+  })
+
+  it('allows hard delete only for inactive rows on status-bearing tables', () => {
+    expect(canHardDeleteRecord('categories', 'ACTIVE')).toBe(false)
+    expect(canHardDeleteRecord('categories', 'INACTIVE')).toBe(true)
+    expect(canHardDeleteRecord('roles', 'ACTIVE')).toBe(false)
+    expect(canHardDeleteRecord('roles', 'DISABLED')).toBe(true)
+    expect(canHardDeleteRecord('users', 'Inactive')).toBe(false)
+    expect(canHardDeleteRecord('sales', 'ACTIVE')).toBe(false)
   })
 
   it('maps the active toggle to the backend status dialect per collection', () => {

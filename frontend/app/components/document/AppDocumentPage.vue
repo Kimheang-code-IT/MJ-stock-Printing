@@ -90,7 +90,9 @@ const exportFields = computed(() => {
               && field.type !== 'related-records'
               && field.type !== 'permission-matrix'
               && field.type !== 'batches'
+              && field.type !== 'product-batches'
               && field.type !== 'product-movements'
+              && field.type !== 'product-barcode'
               && field.type !== 'party-sales-history'
               && field.type !== 'party-purchase-history',
             )
@@ -136,6 +138,7 @@ function selectTab(value: string) {
 }
 
 async function onSaveClick() {
+  if (!props.canSave) return
   if (!props.confirmSave) {
     emit('save')
     return
@@ -162,9 +165,10 @@ async function onSaveClick() {
       :loading-list-navigation="loadingListNavigation"
       :list-navigation-direction="listNavigationDirection"
       :is-create="isCreate"
-      :show-save="showSave && canSave && !readOnly"
+      :show-save="showSave && !readOnly"
       :save-label="resolvedSaveLabel"
       :saving="saving"
+      :save-disabled="!canSave"
       :show-cancel="showCancel && Boolean(listTo)"
       :cancel-to="listTo"
       :show-meta-rail-toggle="showMetaRail && !notFound && !error && showForm"

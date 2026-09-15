@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from tests.utils import admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, deactivate_then_delete, login
 
 NO_PERM_EMAIL = "uom-denied@example.com"
 NO_PERM_PASSWORD = "uomdenied1"
@@ -68,7 +68,7 @@ async def test_uom_crud_and_unique_code(client):
     assert detail.status_code == 200
     assert detail.json()["data"]["name"] == "Carton"
 
-    deleted = await client.delete(f"/api/v1/uoms/{uom['id']}", headers=headers)
+    deleted = await deactivate_then_delete(client, headers, f"/api/v1/uoms/{uom['id']}")
     assert deleted.status_code == 200
     missing = await client.get(f"/api/v1/uoms/{uom['id']}", headers=headers)
     assert missing.status_code == 404
@@ -122,8 +122,8 @@ async def test_uom_safe_delete_prefer_disable_when_linked(client):
     assert disabled.status_code == 200
     assert disabled.json()["data"]["status"] == "INACTIVE"
 
-    # Cleanup: product first, then the UOM is deletable.
-    await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
+    # Cleanup: product first, then the (already inactive) UOM is deletable.
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{product['id']}")
     deleted = await client.delete(f"/api/v1/uoms/{uom['id']}", headers=headers)
     assert deleted.status_code == 200
 

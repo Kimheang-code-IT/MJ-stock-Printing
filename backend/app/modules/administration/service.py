@@ -18,6 +18,7 @@ from app.modules.auth.models import User
 from app.shared.audit.models import AuditLog
 from app.shared.audit.service import record_audit
 from app.shared.documents.models import DocumentSequence
+from app.shared.lifecycle import assert_inactive_for_delete
 
 logger = logging.getLogger("stock_pos.administration")
 
@@ -339,11 +340,13 @@ class AdministrationService:
             raise NotFoundError("Role not found")
         if role.is_system:
             raise ConflictError("System roles cannot be deleted")
+        # Users must be reassigned before a role can be deactivated or deleted.
         if await self.roles.count_users_with_role(role.id) > 0:
             raise ConflictError(
                 "Cannot delete this role because users still reference it. "
                 "Reassign them first."
             )
+        assert_inactive_for_delete(role.status, label="role")
         await self.session.delete(role)
         await record_audit(
             self.session,
@@ -423,6 +426,7 @@ class AdministrationService:
         sequence = await self.session.get(DocumentSequence, sequence_id)
         if sequence is None:
             raise NotFoundError("Document sequence not found")
+        assert_inactive_for_delete(sequence.status, label="document sequence")
         if sequence.next_number > 1:
             raise ConflictError(
                 "Cannot delete this document sequence because numbers have already "

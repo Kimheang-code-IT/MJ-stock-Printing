@@ -166,7 +166,6 @@ export const stockModules: ModuleConfig[] = [
       col('quantity', 'Current Stock'),
       col('costPrice', 'Cost Price', { labelKey: 'app.stock.costPrice' }),
       col('salePrice', 'Sale Price', { labelKey: 'app.modules.products.fields.salePrice' }),
-      col('expiryDate', 'Nearest Expiry', { labelKey: 'app.stock.nearestExpiry', labelKm: 'ផុតកំណត់ឆាប់បំផុត', type: 'date' }),
       col('status', 'Status'),
     ],
     fields: [
@@ -266,7 +265,6 @@ export const stockModules: ModuleConfig[] = [
       col('saleNo', 'Sale No'),
       col('date', 'Date'),
       col('customer', 'Customer'),
-      col('lineCount', 'Items'),
       col('subtotal', 'Subtotal'),
       col('discountAmount', 'Discount'),
       col('deliveryPrice', 'Delivery'),
@@ -274,7 +272,6 @@ export const stockModules: ModuleConfig[] = [
       col('paidAmount', 'Paid Amount'),
       col('remainingAmount', 'Remaining'),
       col('paymentMethodLabel', 'Payment Method'),
-      col('currency', 'Currency'),
       col('status', 'Status'),
     ],
     fields: [
@@ -285,7 +282,6 @@ export const stockModules: ModuleConfig[] = [
       f('total', 'Total', 'Totals', 'number', undefined, { computed: true }),
     ],
     filters: [
-      f('customer', 'Customer', '', 'select'),
       f('status', 'Status', '', 'select', SALE_STATUS),
       f('paymentMethod', 'Payment Method', '', 'select', SALE_PAYMENT_METHODS),
     ],
@@ -311,10 +307,10 @@ export const stockModules: ModuleConfig[] = [
       col('purchaseNo', 'Purchase No'),
       col('date', 'Date'),
       col('supplier', 'Supplier'),
-      col('lineCount', 'Items'),
       col('total', 'Total'),
       col('paidAmount', 'Paid'),
       col('remaining', 'Remaining'),
+      col('paymentMethodLabel', 'Payment Method'),
       col('status', 'Status'),
     ],
     fields: [
@@ -348,8 +344,6 @@ export const stockModules: ModuleConfig[] = [
       col('invoiceTotal', 'Invoice Total'),
       col('paidAmount', 'Paid Amount'),
       col('remainingAmount', 'Remaining Amount'),
-      col('currency', 'Currency'),
-      col('dueDate', 'Due Date', { type: 'date' }),
       col('status', 'Status'),
     ],
     fields: [
@@ -388,8 +382,6 @@ export const stockModules: ModuleConfig[] = [
       col('totalAmount', 'Total Amount'),
       col('paidAmount', 'Paid Amount'),
       col('remainingAmount', 'Remaining Amount'),
-      col('currency', 'Currency'),
-      col('dueDate', 'Due Date', { type: 'date' }),
       col('status', 'Status'),
     ],
     fields: [

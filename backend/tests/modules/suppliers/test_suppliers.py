@@ -1,4 +1,4 @@
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import DEFAULT_UOM_ID, admin_headers, deactivate_then_delete
 
 
 async def test_supplier_crud_with_auto_code(client):
@@ -23,7 +23,7 @@ async def test_supplier_crud_with_auto_code(client):
     assert listing.status_code == 200
     assert listing.json()["meta"]["total"] >= 1
 
-    deleted = await client.delete(f"/api/v1/suppliers/{supplier['id']}", headers=headers)
+    deleted = await deactivate_then_delete(client, headers, f"/api/v1/suppliers/{supplier['id']}")
     assert deleted.status_code == 200
 
 

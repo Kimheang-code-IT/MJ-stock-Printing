@@ -160,3 +160,13 @@ async def reset_all_data(
     raise FeatureDisabledError(
         "Automated data reset is disabled. Use database maintenance and re-seed instead."
     )
+
+
+@router.post("/clear-transactions")
+async def clear_transactions(
+    db: AsyncSession = Depends(get_db_session),
+    actor: User = Depends(require_permission("settings.update")),
+) -> dict:
+    """Delete all sales + purchases (movements, returns, debts, payments,
+    delivery notes) and zero product stock. Master data and settings remain."""
+    return envelope(await settings_service.clear_transactions(AdministrationService(db), actor=actor))

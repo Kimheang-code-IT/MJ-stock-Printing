@@ -17,11 +17,11 @@ describe('telegram settings', () => {
     expect(keys).not.toContain('__telegramConnection')
   })
 
-  it('exposes the Phase 8 Telegram feature toggles', () => {
-    const byKey = new Map(telegramFields.map(field => [field.key, field]))
-    expect(byKey.get('telegram.passwordResetEnabled')?.type).toBe('boolean')
-    expect(byKey.get('telegram.paymentInvoiceNotifyEnabled')?.type).toBe('boolean')
-    expect(byKey.get('telegram.stockInquiryEnabled')?.type).toBe('boolean')
+  it('omits the Telegram feature toggles from Settings', () => {
+    const keys = telegramFields.map(field => field.key)
+    expect(keys).not.toContain('telegram.passwordResetEnabled')
+    expect(keys).not.toContain('telegram.paymentInvoiceNotifyEnabled')
+    expect(keys).not.toContain('telegram.stockInquiryEnabled')
   })
 
   it('exposes the bot token as an editable secret input', () => {

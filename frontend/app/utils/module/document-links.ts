@@ -1,11 +1,10 @@
 /** Cross-document navigation for document-number table cells.
  *
- *  Document numbers link to the page that owns the document, pre-filtered by
- *  the number (e.g. Customer Debt `invoiceNo` → Sales Report showing that
- *  invoice). The owning page reads `?q=` into its search box so the linked
- *  document is right there. Document numbers owned by the same page (Sales
- *  Report `saleNo`, Purchase Report `purchaseNo`) open a detail dialog
- *  instead — see WorkspaceView / ReportsDocumentDetailDialog.
+ *  Document numbers link to the page that owns the document:
+ *  - Cross-page links (debt invoice, returns, delivery, movements) open the
+ *    owning report with `?q=` so the number is prefilled in search.
+ *  - Sales Report `saleNo` opens POS checkout in view-only mode.
+ *  - Purchase Report `purchaseNo` opens the purchase detail form in view-only.
  */
 
 export type DocumentLinkTarget = {
@@ -31,7 +30,7 @@ const MOVEMENT_TARGETS: Record<string, string> = {
 }
 
 /** Target page for a document-number cell, or null when the cell is not
- *  cross-linked (self-owned numbers open the detail dialog instead). */
+ *  cross-linked. */
 export function documentLinkTargetFor(
   collection: string,
   key: string,
@@ -47,7 +46,30 @@ export function documentLinkTargetFor(
   return path && search ? { path, search } : null
 }
 
-/** Collections whose document number opens the detail dialog on the same page. */
+/**
+ * Same-page document number → full detail route (no modal).
+ * Sale No → POS checkout view; Purchase No → purchase detail view.
+ */
+export function documentDetailHrefFor(
+  collection: string,
+  key: string,
+  row: Record<string, unknown>,
+): string | null {
+  const id = String(row.id || '').trim()
+  if (!id) return null
+  if (collection === 'sales' && key === 'saleNo') {
+    return `/pos?viewSaleId=${encodeURIComponent(id)}`
+  }
+  if (collection === 'stockIns' && key === 'purchaseNo') {
+    const purchaseNo = String(row.purchaseNo || '').trim()
+    const qs = new URLSearchParams({ viewPurchaseId: id })
+    if (purchaseNo) qs.set('purchaseNo', purchaseNo)
+    return `/reports/purchases/new?${qs.toString()}`
+  }
+  return null
+}
+
+/** @deprecated Use documentDetailHrefFor — detail dialogs were removed. */
 export function documentDetailKindFor(collection: string, key: string): 'sale' | 'purchase' | null {
   if (collection === 'sales' && key === 'saleNo') return 'sale'
   if (collection === 'stockIns' && key === 'purchaseNo') return 'purchase'

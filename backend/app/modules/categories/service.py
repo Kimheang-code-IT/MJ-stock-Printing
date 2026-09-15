@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError, NotFoundError
 from app.modules.categories.models import Category
 from app.modules.categories.repository import CategoryRepository
+from app.shared.lifecycle import assert_inactive_for_delete
 
 
 class CategoryService:
@@ -57,6 +58,7 @@ class CategoryService:
 
     async def delete(self, category_id: uuid.UUID) -> None:
         category = await self.get(category_id)
+        assert_inactive_for_delete(category.status, label="category")
         if await self.repo.count_products(category_id) > 0:
             raise ConflictError(
                 "Cannot delete this category because products reference it. "

@@ -15,7 +15,7 @@ from decimal import Decimal
 import pytest
 
 from tests.modules.pos.helpers import make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, deactivate_then_delete, login
 
 
 async def _create_brand(client, headers, code: str) -> dict:
@@ -100,10 +100,10 @@ async def test_product_list_barcode_search_and_brand_filter(client):
     assert in_brand["image_url"] is None
 
     for product in (in_brand, other_brand, no_brand):
-        await client.delete(f"/api/v1/products/{product['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
-    await client.delete(f"/api/v1/brands/{brand_a['id']}", headers=headers)
-    await client.delete(f"/api/v1/brands/{brand_b['id']}", headers=headers)
+        await deactivate_then_delete(client, headers, f"/api/v1/products/{product['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/brands/{brand_a['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/brands/{brand_b['id']}")
 
 
 @pytest.mark.asyncio
@@ -149,9 +149,9 @@ async def test_product_list_status_filter_and_pagination(client):
     )
     assert len(page_two.json()["data"]) == 1
 
-    await client.delete(f"/api/v1/products/{active['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{active['id']}")
     await client.delete(f"/api/v1/products/{inactive['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")
 
 
 @pytest.mark.asyncio
@@ -178,9 +178,9 @@ async def test_product_list_sort(client):
     fallback = await client.get(f"/api/v1/products?q=Sort Widget {tag}&sort=nonsense", headers=headers)
     assert fallback.status_code == 200
 
-    await client.delete(f"/api/v1/products/{first['id']}", headers=headers)
-    await client.delete(f"/api/v1/products/{second['id']}", headers=headers)
-    await client.delete(f"/api/v1/categories/{category['id']}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{first['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{second['id']}")
+    await deactivate_then_delete(client, headers, f"/api/v1/categories/{category['id']}")
 
 
 # ----------------------------------------------------------------- movements
@@ -244,7 +244,7 @@ async def test_movement_rows_expose_movements_page_columns(client):
     types = [row["movement_type"] for row in default_order.json()["data"]]
     assert types == ["SALE", "STOCK_IN"]
 
-    await client.delete(f"/api/v1/products/{pid}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{pid}")
 
 
 @pytest.mark.asyncio
@@ -315,7 +315,7 @@ async def test_movement_list_filters_pagination_and_sort(client):
     assert first_row["movement_type"] == "STOCK_IN"
     assert Decimal(first_row["qty_in"]) == Decimal("8.0000")
 
-    await client.delete(f"/api/v1/products/{pid}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{pid}")
 
 
 @pytest.mark.asyncio
@@ -358,7 +358,7 @@ async def test_movement_list_requires_stock_view_permission(client, db_session):
     allowed = await client.get(f"/api/v1/stock/movements?product_id={pid}", headers=viewer)
     assert allowed.status_code == 200
 
-    await client.delete(f"/api/v1/products/{pid}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{pid}")
 
 
 @pytest.mark.asyncio
@@ -385,4 +385,4 @@ async def test_movements_are_immutable_read_only(client):
     ).json()["data"]
     assert before == after
 
-    await client.delete(f"/api/v1/products/{pid}", headers=headers)
+    await deactivate_then_delete(client, headers, f"/api/v1/products/{pid}")

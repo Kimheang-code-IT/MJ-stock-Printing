@@ -24,7 +24,10 @@ async def test_finance_summary_alias_matches_finance(client):
     data = summary.json()["data"]
     # The frontend financeSummary mapper reads these aliases.
     assert Decimal(data["income"]) == Decimal(data["total_sales"])
-    assert Decimal(data["expense"]) == Decimal(data["operating_expenses"])
+    assert Decimal(data["expense"]) == Decimal(data["total_expense"])
+    assert Decimal(data["expense"]) == (
+        Decimal(data["operating_expenses"]) + Decimal(data["supplier_payments"])
+    )
     assert Decimal(data["net"]) == Decimal(data["net_result"])
     assert Decimal(data["outstanding"]) == (
         Decimal(data["total_customer_debt"]) + Decimal(data["total_supplier_debt"])

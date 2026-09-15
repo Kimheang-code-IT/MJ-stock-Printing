@@ -58,11 +58,11 @@ export interface PosCompleteSaleInput {
   paidAmount: number
   discount?: number
   note?: string | null
-  /** Open customer-debt rows to include on this invoice and settle from paid now. */
+  /** Open customer-debt rows settled from `deposit` (separate from paidAmount). */
   includedDebtIds?: string[]
   /** Delivery fee added to the sale total (editable on checkout). */
   deliveryPrice?: number
-  /** Extra amount due on this invoice (selected debts and/or typed deposit). */
+  /** Budget for settling selected prior debts — not part of sale grand total. */
   deposit?: number
   /** Document currency: every amount sent is in THIS currency (USD | KHR). */
   currency?: 'USD' | 'KHR'
@@ -212,13 +212,16 @@ export interface ProductScopedQuery {
   endDate?: string
   page?: number
   limit?: number
+  /** Disambiguates cancelPrevious keys when several panels load the same product. */
+  requestScope?: string
 }
 
 /** Batch status dialect (UI): Active | Expired | Depleted. */
 export type BatchStatus = 'Active' | 'Expired' | 'Depleted'
 
 /** One batch lot of a product, derived from the immutable movement ledger
- *  (GET /stock/movements?productId=… grouped by batch_no). Read-only. */
+ *  (GET /stock/movements?productId=… grouped by batch_no). Read-only lots;
+ *  pricing active/inactive comes from the batch-scoped sale-price version. */
 export interface ProductBatchRow {
   /** Batch identity = product + batch_no (the ledger's batch key). */
   id: string
@@ -237,6 +240,18 @@ export interface ProductBatchRow {
   purchaseNo: string
   createdDate: string
   status: BatchStatus
+  /** Opening Stock In date (purchase date). */
+  purchaseDate?: string | null
+  /** Purchase-line UOM symbol (fallback: product base UOM). */
+  purchaseUom?: string | null
+  /** Document currency of the opening Stock In (USD / KHR). */
+  currency?: string | null
+  /** Batch-scoped sale price when set; else general / product fallback. */
+  salePrice?: number | null
+  /** Active (or latest) sale-price version id for this batch scope. */
+  salePriceId?: string | null
+  /** True when this lot has an active batch-scoped sale-price version (POS). */
+  pricingActive?: boolean
 }
 
 /** Read-only product-scoped queries used by the Stock list dialogs. */
@@ -264,6 +279,8 @@ export interface StockQueryRepository {
   }): Promise<ProductSalePriceRow>
   /** Activate one version — exactly one stays active; copies onto products.salePrice. */
   activateSalePrice(productId: string, priceId: string): Promise<ProductSalePriceRow>
+  /** Set `isActive` on a version (`false` deactivates that scope for POS). */
+  setSalePriceActive(priceId: string, isActive: boolean): Promise<ProductSalePriceRow>
 }
 
 /** One original sale line for POS return mode (GET /pos/sales/{id}). */

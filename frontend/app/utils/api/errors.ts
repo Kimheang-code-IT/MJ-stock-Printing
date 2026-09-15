@@ -38,6 +38,17 @@ export function isApiErrorHandled(error: unknown): boolean {
   )
 }
 
+/** True when a request was cancelled (e.g. cancelPrevious) — callers should not toast. */
+export function isRequestAborted(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const err = error as { name?: string, message?: string, cause?: unknown }
+  if (err.name === 'AbortError') return true
+  const message = String(err.message || '').toLowerCase()
+  if (message.includes('aborted') || message.includes('abort')) return true
+  if (err.cause) return isRequestAborted(err.cause)
+  return false
+}
+
 /**
  * Human-readable message for any thrown error.
  *

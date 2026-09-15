@@ -111,15 +111,37 @@ describe('usePosPrintSizeDialog (POS post-sale invoice chooser)', () => {
     expect(dialog.printing.value).toBe(true)
     expect(dialog.open.value).toBe(false)
 
+    // Second click while the first confirm is still open/printing — ignored.
     await dialog.confirm('A5')
-    dialog.cancel()
-    expect(print).toHaveBeenCalledTimes(1)
 
     gate.resolve()
     await first
     expect(print).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledWith(true)
+  })
+
+  it('Cancel while printing only keeps the dialog shut (confirm owns finish)', async () => {
+    const gate = deferred()
+    const print = vi.fn<(payload: Payload, size: Size) => Promise<void>>(() => gate.promise)
+    const onClose = vi.fn()
+    const dialog = usePosPrintSizeDialog<Payload, Size>({ print, onClose })
+
+    dialog.requestPrint({ invoiceNo: 'INV-STUCK' })
+    const first = dialog.confirm('A4')
+    dialog.open.value = true
+    expect(dialog.printing.value).toBe(true)
+
+    dialog.cancel()
+    expect(dialog.open.value).toBe(false)
+    expect(dialog.printing.value).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+
+    gate.resolve()
+    await first
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledWith(true)
+    expect(dialog.printing.value).toBe(false)
   })
 
   it('closes and clears state even when printing throws', async () => {

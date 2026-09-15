@@ -99,8 +99,12 @@ class SaleItemRequest(BaseModel):
 
 class SaleCreateRequest(BaseModel):
     """PosCompleteSaleInput — camelCase keys from the frontend, snake_case
-    accepted too. `deposit` (selected open debts) is settled from the paid
-    amount via included_debt_ids; delivery_price is added to grand_total.
+    accepted too.
+
+    `amount_received` / paidAmount is payment for THIS sale only (grand_total =
+    subtotal − discount + delivery). `deposit` is the separate budget applied
+    to selected prior customer debts via included_debt_ids and never inflates
+    the current sale total.
 
     Canonical payment methods: CASH | BANK_QR | CUSTOMER_DEBT. The UI's
     display labels map one-to-one: Cash→CASH, Card / Mobile Payment /
@@ -129,14 +133,13 @@ class SaleCreateRequest(BaseModel):
         ge=0,
         validation_alias=AliasChoices("delivery_price", "deliveryPrice"),
     )
-    # Open customer-debt rows included on this invoice and settled from the
-    # paid amount in the same transaction.
+    # Open customer-debt rows settled in this transaction from `deposit`
+    # (separate from amount_received / current-sale payment).
     included_debt_ids: list[UUID] = Field(
         default_factory=list,
         validation_alias=AliasChoices("included_debt_ids", "includedDebtIds"),
     )
-    # Extra amount due on this invoice (informational; the settled debts use
-    # their authoritative remaining amounts from the database).
+    # Budget for settling included prior debts (not part of sale grand_total).
     deposit: Decimal = Field(default=Decimal("0"), ge=0)
     deposit_method: str | None = Field(default=None, pattern="^(CASH|BANK_QR)$")
     reference_no: str | None = Field(default=None, max_length=100)

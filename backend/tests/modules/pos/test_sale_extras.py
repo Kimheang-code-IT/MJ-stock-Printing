@@ -170,14 +170,15 @@ async def test_included_debts_settled_from_paid_amount(client):
     assert open_debt["invoice_no"]
     assert open_debt["date"] is not None
 
-    # Second sale includes the open debt and settles it from the paid amount:
-    # 10 (new items) + 5 (part of the old debt) = 15.00 received now.
+    # Second sale pays THIS sale in full (10) and settles the old debt from
+    # deposit (10) — deposit never inflates the current sale grand total.
     second = await client.post(
         "/api/v1/pos/sales/complete",
         json={
             "customerId": customer["id"],
             "paymentMethod": "CASH",
-            "paidAmount": "15.00",
+            "paidAmount": "10.00",
+            "deposit": "10.00",
             "includedDebtIds": [open_debt["id"]],
             "items": [{"productId": product["id"], "quantity": "1"}],
         },
@@ -186,26 +187,41 @@ async def test_included_debts_settled_from_paid_amount(client):
     assert second.status_code == 201, second.text
     sale = second.json()["data"]
     assert Decimal(sale["grand_total"]) == Decimal("10.00")
-    # The paid amount settles included debts first; the remainder goes to the
-    # new sale (10 debt + 5 sale covered, 5 still owed on the new invoice).
-    assert Decimal(sale["paid_amount"]) == Decimal("5.00")
-    assert Decimal(sale["debt_amount"]) == Decimal("5.00")
-    assert sale["payment_status"] == "PARTIAL"
+    assert Decimal(sale["paid_amount"]) == Decimal("10.00")
+    assert Decimal(sale["debt_amount"]) == Decimal("0.00")
+    assert sale["payment_status"] == "PAID"
 
     debts_after = (await client.get(f"/api/v1/customers/{customer['id']}/debts", headers=headers)).json()["data"]
     settled = next(row for row in debts_after if row["id"] == open_debt["id"])
     assert Decimal(settled["remaining_amount"]) == Decimal("0.00")
     assert settled["status"] == "PAID"
 
-    # The second sale left a 5.00 debt of its own; include it next and settle
-    # exactly its remaining 5.00 (never more — no overpayment).
-    open_after = next(row for row in debts_after if Decimal(row["remaining_amount"]) == Decimal("5.00"))
+    # Partial sale payment with separate prior-debt deposit: pay 5 on a new
+    # 10 sale while settling a leftover debt of 5 via deposit.
+    leftover = await client.post(
+        "/api/v1/pos/sales/complete",
+        json={
+            "customerId": customer["id"],
+            "paymentMethod": "CASH",
+            "paidAmount": "5.00",
+            "items": [{"productId": product["id"], "quantity": "1"}],
+        },
+        headers=headers,
+    )
+    assert leftover.status_code == 201, leftover.text
+    leftover_sale = leftover.json()["data"]
+    assert Decimal(leftover_sale["paid_amount"]) == Decimal("5.00")
+    assert Decimal(leftover_sale["debt_amount"]) == Decimal("5.00")
+
+    debts_mid = (await client.get(f"/api/v1/customers/{customer['id']}/debts", headers=headers)).json()["data"]
+    open_after = next(row for row in debts_mid if Decimal(row["remaining_amount"]) == Decimal("5.00"))
     third = await client.post(
         "/api/v1/pos/sales/complete",
         json={
             "customerId": customer["id"],
             "paymentMethod": "CASH",
-            "paidAmount": "20.00",
+            "paidAmount": "15.00",
+            "deposit": "5.00",
             "includedDebtIds": [open_after["id"]],
             "items": [{"productId": product["id"], "quantity": "1"}],
         },
@@ -213,7 +229,7 @@ async def test_included_debts_settled_from_paid_amount(client):
     )
     assert third.status_code == 201, third.text
     data = third.json()["data"]
-    # 20 received - 5 debt settlement - 10 sale = 5 change.
+    # Paid now 15 on a 10 sale → 5 change; deposit 5 settles the old debt.
     assert Decimal(data["change_amount"]) == Decimal("5.00")
     assert data["payment_status"] == "PAID"
 

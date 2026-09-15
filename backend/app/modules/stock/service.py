@@ -11,6 +11,7 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.modules.categories.repository import CategoryRepository
 from app.modules.brands.repository import BrandRepository
 from app.modules.auth.models import User
+from app.shared.lifecycle import assert_inactive_for_delete
 from app.modules.stock.models import (
     Product,
     PurchaseReturn,
@@ -51,12 +52,19 @@ class ProductService:
         self.repo = ProductRepository(session)
 
     async def _next_barcode(self) -> str:
-        """Auto-issue a unique barcode (BAR-<hex>) for products created
-        without one. Collision-checked against existing rows."""
-        candidate = f"BAR-{uuid.uuid4().hex[:12].upper()}"
+        """Auto-issue a unique numeric barcode for products created without one.
+
+        Digits only so it scans at POS and prints as a plain number; derived
+        from a UUID and collision-checked against existing rows."""
+        candidate = self._numeric_barcode()
         while await self.repo.get_by_barcode(candidate):
-            candidate = f"BAR-{uuid.uuid4().hex[:12].upper()}"
+            candidate = self._numeric_barcode()
         return candidate
+
+    @staticmethod
+    def _numeric_barcode() -> str:
+        """13-digit numeric code (UUID entropy, zero-padded)."""
+        return f"{uuid.uuid4().int % 10**13:013d}"
 
     async def list(
         self, *, q, category_id, brand_id=None, status, page, limit, sort=None
@@ -200,6 +208,7 @@ class ProductService:
         product = await self.repo.get(product_id)
         if product is None:
             raise NotFoundError("Product not found")
+        assert_inactive_for_delete(product.status, label="product")
         referenced = (
             await self.repo.count_movements(product.id)
             + await self.repo.count_sale_items(product.id)

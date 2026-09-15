@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError, NotFoundError
 from app.modules.brands.models import Brand
 from app.modules.brands.repository import BrandRepository
+from app.shared.lifecycle import assert_inactive_for_delete
 
 
 class BrandService:
@@ -60,6 +61,7 @@ class BrandService:
 
     async def delete(self, brand_id: uuid.UUID) -> None:
         brand = await self.get(brand_id)
+        assert_inactive_for_delete(brand.status, label="brand")
         if await self.repo.count_products(brand_id) > 0:
             raise ConflictError(
                 "Cannot delete this brand because products reference it. "

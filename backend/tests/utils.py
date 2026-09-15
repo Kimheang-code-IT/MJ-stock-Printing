@@ -6,7 +6,13 @@ from app.core.security import hash_password
 from app.modules.auth.models import Role, User
 from tests.conftest import DEFAULT_UOM_ID
 
-__all__ = ["DEFAULT_UOM_ID", "login", "admin_headers", "create_user_with_role"]
+__all__ = [
+    "DEFAULT_UOM_ID",
+    "login",
+    "admin_headers",
+    "create_user_with_role",
+    "deactivate_then_delete",
+]
 
 
 async def login(client, email: str, password: str) -> dict:
@@ -18,6 +24,23 @@ async def login(client, email: str, password: str) -> dict:
 async def admin_headers(client) -> dict:
     data = await login(client, "admin@gmail.com", "123456")
     return {"Authorization": f"Bearer {data['access_token']}"}
+
+
+async def deactivate_then_delete(
+    client,
+    headers: dict,
+    path: str,
+    *,
+    status: str = "INACTIVE",
+):
+    """Deactivate a status-bearing record, then hard-delete it.
+
+    Active rows are intentionally non-deletable; tests must deactivate first.
+    Roles use DISABLED instead of INACTIVE.
+    """
+    patched = await client.patch(path, json={"status": status}, headers=headers)
+    assert patched.status_code == 200, patched.text
+    return await client.delete(path, headers=headers)
 
 
 async def uom_option(client, headers, code: str = "PCS") -> dict:

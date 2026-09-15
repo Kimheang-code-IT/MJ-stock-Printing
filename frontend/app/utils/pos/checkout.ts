@@ -14,34 +14,45 @@ export function checkoutDeliveryFee(needsDelivery: boolean, deliveryPrice: numbe
   return roundMoney(Math.max(0, Number(deliveryPrice) || 0))
 }
 
+/** Subtotal − discount + delivery — the current sale only (never includes old debts). */
 export function checkoutSaleNet(subtotal: number, discount: number, deliveryPrice = 0) {
   return roundMoney(Math.max(0, subtotal - discount + deliveryPrice))
 }
 
-/** Selected open invoices included on this checkout (added to amount due). */
+/** Selected open invoices to settle at checkout (separate from sale grand total). */
 export function checkoutDepositTotal(remainings: number[]) {
   return roundMoney(remainings.reduce((sum, value) => sum + (Number(value) || 0), 0))
 }
 
-export function checkoutDue(saleNet: number, depositTotal: number) {
-  return roundMoney(saleNet + depositTotal)
+/**
+ * Amount due for THIS sale (grand total). Old-debt / deposit payments are
+ * settled separately and must not inflate this figure.
+ */
+export function checkoutDue(saleNet: number, _depositTotal = 0) {
+  return roundMoney(Math.max(0, Number(saleNet) || 0))
 }
 
-export function checkoutOutstanding(due: number, paidNow: number) {
-  return roundMoney(Math.max(0, due - (Number(paidNow) || 0)))
+/** Remaining on the current sale after Paid now (never below zero). */
+export function checkoutOutstanding(grandTotal: number, paidNow: number) {
+  return roundMoney(Math.max(0, (Number(grandTotal) || 0) - (Number(paidNow) || 0)))
+}
+
+/** Cash change when Paid now exceeds the sale grand total. */
+export function checkoutChange(paidNow: number, grandTotal: number) {
+  return roundMoney(Math.max(0, (Number(paidNow) || 0) - Math.max(0, Number(grandTotal) || 0)))
 }
 
 /**
- * Paid-now amount used for the sale. An **untouched** input (undefined) pays
- * the amount due in full, so a walk-in cash sale submits without typing the
- * tender (spec §5.11: walk-in customers cannot leave an outstanding balance).
- * Credit tenders nothing (the balance becomes customer debt); a typed amount
- * is capped at the amount due.
+ * Paid-now amount for THIS sale only. An **untouched** input (undefined / NaN)
+ * defaults to the grand total so a walk-in cash sale submits without typing
+ * tender. Credit tenders nothing (balance becomes customer debt). Overpay is
+ * allowed and surfaces as change — deposit / old-debt payments are never added.
  */
-export function checkoutPaidNow(paidInput: number | undefined, due: number, isCredit: boolean): number {
+export function checkoutPaidNow(paidInput: number | undefined, grandTotal: number, isCredit: boolean): number {
   if (isCredit) return 0
-  if (paidInput == null) return roundMoney(Math.max(0, Number(due) || 0))
+  const due = roundMoney(Math.max(0, Number(grandTotal) || 0))
+  if (paidInput == null) return due
   const typed = Number(paidInput)
-  if (!Number.isFinite(typed)) return roundMoney(Math.max(0, Number(due) || 0))
-  return roundMoney(Math.min(Math.max(0, typed), Math.max(0, Number(due) || 0)))
+  if (!Number.isFinite(typed)) return due
+  return roundMoney(Math.max(0, typed))
 }

@@ -269,80 +269,20 @@ function partyTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): Do
 }
 
 /**
- * Product form tabs (spec §5.9): exactly **General** (identity + Stock
- * Costing toggles incl. Track Batch / Track Expiry + read-only nearest
- * Expire Date + the product's read-only batch lots), **Pricing** (editable
- * UOM conversion + sale-price table bound to the record's `uomConversions`
- * and saved with the same Save as General, plus sale-price version history),
- * and **Movements** (read-only batch-traceable movement ledger). No Cost
- * column, no separate Convert UOM tab and no separate Expire tab.
+ * Product form tabs (spec §5.9): exactly **General** (identity fields) and
+ * **Pricing** (editable UOM conversion + sale-price table bound to the
+ * record's `uomConversions` and saved with the same Save as General, plus
+ * sale-price version history). Batch tracking, expiry tracking and FIFO are
+ * always on system-wide, so the Stock Costing toggles and the read-only
+ * nearest Expire Date are not shown (lots live on the Batches tab).
  *
- * Create mode keeps only the editable inputs: the Expiry & Batches section
- * (read-only nearest expiry + lots) and the Movements tab have no data yet,
- * so they appear only once the product exists (detail/edit).
+ * Create mode keeps only the editable inputs: the Batches tab has no data
+ * yet, so it appears only once the product exists (detail/edit).
  */
 function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
   const generalSections: DocumentSectionSchema[] = [
     ...fieldsToSections(module.fields, options.readOnlyKeys, options),
-    {
-      id: 'stock-costing',
-      titleKey: 'app.stock.costingTitle',
-      title: 'Stock Costing',
-      fields: [
-        {
-          key: 'trackBatch',
-          labelKey: 'app.stock.trackBatch',
-          label: 'Track Batch',
-          type: 'boolean',
-          helpKey: 'app.stock.trackBatchHint',
-        },
-        // Track Expiry implies Track Batch — an expiry lot is always a
-        // batch lot. Kept consistent on save (DocumentView).
-        {
-          key: 'expiryTracking',
-          labelKey: 'app.stock.expiryTracking',
-          label: 'Track Expiry',
-          type: 'boolean',
-          helpKey: 'app.stock.expiryTrackingHint',
-        },
-        {
-          key: 'fifo',
-          labelKey: 'app.stock.fifo',
-          label: 'FIFO (First In, First Out)',
-          type: 'boolean',
-          helpKey: 'app.stock.fifoHint',
-        },
-      ],
-    },
   ]
-
-  if (!options.isCreate) {
-    generalSections.push({
-      id: 'stock-expire',
-      titleKey: 'app.stock.batchesTitle',
-      title: 'Expiry & Batches',
-      fields: [
-        // Read-only nearest-expiry readout from Stock In lots.
-        {
-          key: 'expiryDate',
-          labelKey: 'app.stock.expiryDate',
-          label: 'Expire Date',
-          type: 'date',
-          readOnly: true,
-          helpKey: 'app.stock.expiryDateHint',
-        },
-        // Read-only batch lots of this product (loaded only when the tab
-        // is open — no global batch fetch).
-        {
-          key: '__record',
-          labelKey: 'app.stock.batchesTab',
-          type: 'batches',
-          colSpan: 2,
-          helpKey: 'app.stock.batchesTitle',
-        },
-      ],
-    })
-  }
 
   const tabs: DocumentTabSchema[] = [
     {
@@ -372,20 +312,37 @@ function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): 
 
   if (!options.isCreate) {
     tabs.push({
-      id: 'movements',
-      labelKey: 'app.stock.tabMovements',
-      label: 'Stock Movements',
+      id: 'batches',
+      labelKey: 'app.stock.tabBatches',
+      label: 'Batches',
       sections: [{
-        id: 'movements',
-        titleKey: 'app.stock.tabMovements',
+        id: 'batches',
+        titleKey: 'app.stock.tabBatches',
         fields: [
-          // Read-only batch-traceable movement ledger of this product.
           {
             key: '__record',
-            labelKey: 'app.stock.tabMovements',
-            type: 'product-movements',
+            labelKey: 'app.stock.tabBatches',
+            type: 'product-batches',
             colSpan: 2,
-            helpKey: 'app.stock.tabMovements',
+            helpKey: 'app.stock.batchManageHint',
+          },
+        ],
+      }],
+    })
+    tabs.push({
+      id: 'barcode',
+      labelKey: 'app.stock.tabBarcode',
+      label: 'Barcode',
+      sections: [{
+        id: 'barcode',
+        titleKey: 'app.stock.tabBarcode',
+        fields: [
+          {
+            key: '__record',
+            labelKey: 'app.stock.tabBarcode',
+            type: 'product-barcode',
+            colSpan: 2,
+            helpKey: 'app.stock.barcodeHint',
           },
         ],
       }],

@@ -18,10 +18,17 @@ export interface ResetAllDataResult {
   requiresReauth?: boolean
 }
 
+export interface ClearTransactionsResult {
+  cleared: boolean
+  message: string
+}
+
 export interface AppConfigRepository {
   get: () => Promise<AppConfig>
   update: (input: Partial<AppConfig>) => Promise<AppConfig>
   resetAllData: () => Promise<ResetAllDataResult>
+  /** Delete all sales + purchases and zero stock (master data kept). */
+  clearTransactions: () => Promise<ClearTransactionsResult>
   testEmailConnection: () => Promise<{ status: ConnectionStatus, message: string }>
   sendTestEmail: (to: string) => Promise<{ status: ConnectionStatus, message: string }>
   testTelegramConnection: () => Promise<{ status: ConnectionStatus, message: string }>

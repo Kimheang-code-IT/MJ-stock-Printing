@@ -17,9 +17,9 @@ import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
 import { documentSequencePreview, documentSequenceTypeLabel, documentSequenceTypeOptions, normalizeDocumentSequenceType } from '~/utils/document-sequences'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import {
+  canHardDeleteRecord,
   isRecordInactive,
   statusValueFor,
-  supportsHardDelete,
   supportsStatusToggle,
 } from '~/utils/module/row-actions'
 import {
@@ -181,7 +181,7 @@ const readOnly = computed(() => {
 const canMutateRecord = computed(() => Boolean(module.value) && !readOnly.value && !isCreate.value && Boolean(model.value.id))
 const canDeleteRecord = computed(() => {
   if (!module.value || isCreate.value || !model.value.id) return false
-  if (!supportsHardDelete(module.value.collection)) return false
+  if (!canHardDeleteRecord(module.value.collection, model.value.status)) return false
   if (module.value.collection === 'roles' && (model.value.isSystem || Number(model.value.userCount || 0) > 0)) return false
   return auth.canAccessPage(moduleActionPermission('delete'))
 })
@@ -361,13 +361,9 @@ async function save() {
       return
     }
     if (module.value.collection === 'products') {
-      // Spec: Track Expiry implies Track Batch — an expiry lot is always a
-      // batch lot. Keep the pair consistent before saving.
-      const trackExpiry = payload.trackExpiry === true || payload.expiryTracking === true
-      const trackBatch = payload.trackBatch === true || trackExpiry
-      if (trackBatch !== payload.trackBatch || trackExpiry !== payload.trackExpiry) {
-        payload = { ...payload, trackBatch, trackExpiry, expiryTracking: trackExpiry }
-      }
+      // Batch tracking, expiry tracking and FIFO are always on system-wide
+      // (the Stock Costing toggles are not shown), so stamp them on save.
+      payload = { ...payload, trackBatch: true, trackExpiry: true, expiryTracking: true, fifo: true }
       // Spec §5.9 Pricing: the base UOM row's sale price is required > 0.
       // (It lives on the product record, edited from the Pricing tab.)
       if (!(Number(payload.salePrice ?? 0) > 0)) {
@@ -439,6 +435,10 @@ async function setRecordStatus(active: boolean) {
 
 async function deleteRecord() {
   if (!module.value || !canDeleteRecord.value || saving.value) return
+  if (!canHardDeleteRecord(module.value.collection, model.value.status)) {
+    toast.add({ title: t('core.rowActions.deactivateBeforeDelete'), color: 'warning' })
+    return
+  }
   const ok = await confirm({
     kind: 'delete',
     titleKey: 'core.confirm.deleteTitle',

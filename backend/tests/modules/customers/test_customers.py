@@ -1,5 +1,5 @@
 from tests.modules.pos.helpers import make_customer, make_stocked_product
-from tests.utils import admin_headers
+from tests.utils import admin_headers, deactivate_then_delete
 
 
 async def test_customer_crud_auto_code_and_walkin_protection(client):
@@ -34,7 +34,7 @@ async def test_customer_crud_auto_code_and_walkin_protection(client):
     patched = await client.patch(f"/api/v1/customers/{customer['id']}", json={"note": "VIP"}, headers=headers)
     assert patched.status_code == 200
 
-    deleted = await client.delete(f"/api/v1/customers/{customer['id']}", headers=headers)
+    deleted = await deactivate_then_delete(client, headers, f"/api/v1/customers/{customer['id']}")
     assert deleted.status_code == 200
 
 

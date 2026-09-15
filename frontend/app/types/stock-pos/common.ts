@@ -72,7 +72,9 @@ export type FieldType =
   | 'related-records'
   | 'uom-conversions'
   | 'batches'
+  | 'product-batches'
   | 'product-movements'
+  | 'product-barcode'
   | 'party-sales-history'
   | 'party-purchase-history'
 

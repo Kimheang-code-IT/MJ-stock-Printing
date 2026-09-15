@@ -30,13 +30,14 @@ function moduleFixture(overrides: Partial<ModuleConfig> = {}): ModuleConfig {
 describe('product document tabs (spec §5.9)', () => {
   const productModule = stockModules.find(item => item.collection === 'products')!
 
-  it('has exactly General | Pricing | Movements — no Expire or Convert UOM tab', () => {
+  it('has exactly General | Pricing | Batches | Barcode — no Expire or Convert UOM tab', () => {
     const tabs = moduleDocumentTabs(productModule)
-    expect(tabs.map(tab => tab.id)).toEqual(['general', 'pricing', 'movements'])
+    expect(tabs.map(tab => tab.id)).toEqual(['general', 'pricing', 'batches', 'barcode'])
     expect(tabs.map(tab => tab.labelKey)).toEqual([
       'app.stock.tabGeneral',
       'app.stock.tabPricing',
-      'app.stock.tabMovements',
+      'app.stock.tabBatches',
+      'app.stock.tabBarcode',
     ])
   })
 
@@ -62,24 +63,15 @@ describe('product document tabs (spec §5.9)', () => {
     expect(pricingField?.colSpan).toBe(2)
   })
 
-  it('owns Track Expiry + read-only Expire Date + Batches on the General tab', () => {
+  it('hides the Stock Costing toggles and the read-only Expire Date', () => {
     const tabs = moduleDocumentTabs(productModule)
     const general = tabs[0]!
-    const fields = general.sections
-      .filter(section => section.id === 'stock-costing' || section.id === 'stock-expire')
-      .flatMap(s => s.fields)
-    const tracking = fields.find(f => f.key === 'expiryTracking')
-    const expiry = fields.find(f => f.key === 'expiryDate')
-    expect(tracking?.type).toBe('boolean')
-    expect(expiry?.type).toBe('date')
-    expect(expiry?.readOnly).toBe(true)
-    // Batch lots table stays on the same tab for easy expiry management.
-    expect(fields.some(f => f.type === 'batches')).toBe(true)
-    // No raw i18n keys — every label/help resolves to a defined locale entry.
-    for (const field of fields) {
-      expect(field.labelKey).toMatch(/^app\.stock\./)
-      expect(field.helpKey).toMatch(/^app\.stock\./)
-    }
+    expect(general.sections.some(s => s.id === 'stock-costing' || s.id === 'stock-expire')).toBe(false)
+    const keys = general.sections.flatMap(s => s.fields.map(f => f.key))
+    expect(keys).not.toContain('trackBatch')
+    expect(keys).not.toContain('expiryTracking')
+    expect(keys).not.toContain('fifo')
+    expect(keys).not.toContain('expiryDate')
   })
 
   it('create mode hides Barcode, Expire Date/batches and the Movements tab', () => {
@@ -88,14 +80,15 @@ describe('product document tabs (spec §5.9)', () => {
 
     const sections = tabs.flatMap(tab => tab.sections)
     expect(sections.some(section => section.id === 'stock-expire')).toBe(false)
+    expect(sections.some(section => section.id === 'stock-costing')).toBe(false)
 
     const keys = sections.flatMap(section => section.fields.map(field => field.key))
     expect(keys).not.toContain('barcode')
     expect(keys).not.toContain('expiryDate')
+    expect(keys).not.toContain('trackBatch')
     // Editable create inputs stay.
     expect(keys).toContain('name')
     expect(keys).toContain('uomId')
-    expect(keys).toContain('trackBatch')
   })
 })
 

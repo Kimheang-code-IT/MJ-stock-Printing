@@ -95,6 +95,8 @@ export const ApiEndpoints = {
   PRODUCT_SALE_PRICES: (productId: string) => `/api/v1/products/${productId}/sale-prices`,
   PRODUCT_SALE_PRICE_ACTIVATE: (productId: string, priceId: string) =>
     `/api/v1/products/${productId}/sale-prices/${priceId}/activate`,
+  /** Flat patch path for activate/deactivate (`{ isActive }`). */
+  SALE_PRICE: (priceId: string) => `/api/v1/products/sale-prices/${priceId}`,
 
   DASHBOARD: '/api/v1/dashboard/summary',
   /** Canonical Finance summary (spec §7 Reports). */
@@ -123,6 +125,7 @@ export const ApiEndpoints = {
   APP_INFO: '/api/v1/settings/app-info',
   APP_INFO_RESET: '/api/v1/settings/app-info/reset',
   RESET_ALL_DATA: '/api/v1/settings/reset-data',
+  CLEAR_TRANSACTIONS: '/api/v1/settings/clear-transactions',
   APP_CONFIG: '/api/v1/settings/app-config',
   /** Grouped backend settings (shop/currency/pos/stock/telegram/invoice/system). */
   ADMIN_SETTINGS: '/api/v1/admin/settings',

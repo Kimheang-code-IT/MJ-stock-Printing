@@ -34,6 +34,7 @@ export type AppHeaderListNavConfig = {
 export type AppHeaderSaveConfig = {
   label: string
   loading?: boolean
+  disabled?: boolean
   onClick: () => void
 }
 

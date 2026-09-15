@@ -18,6 +18,7 @@ export function isFullWidthField(field: DocumentFormField) {
     || field.type === 'uom-conversions'
     || field.type === 'related-records'
     || field.type === 'batches'
+    || field.type === 'product-barcode'
 }
 
 /** Normal single-column fields that may sit to the left of an image upload. */

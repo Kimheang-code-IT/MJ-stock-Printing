@@ -13,6 +13,7 @@ from app.modules.suppliers.models import Supplier, SupplierDebt
 from app.modules.suppliers.repository import SupplierRepository
 from app.shared.audit.service import record_audit
 from app.shared.documents import allocate_document_number
+from app.shared.lifecycle import assert_inactive_for_delete
 
 logger = logging.getLogger("stock_pos.suppliers")
 
@@ -66,6 +67,7 @@ class SupplierService:
 
     async def delete(self, supplier_id) -> None:
         supplier = await self.get(supplier_id)
+        assert_inactive_for_delete(supplier.status, label="supplier")
         referenced = (
             await self.repo.count_purchases(supplier.id)
             + await self.repo.count_purchase_returns(supplier.id)

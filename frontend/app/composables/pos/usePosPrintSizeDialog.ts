@@ -1,17 +1,15 @@
-import { ref, watch } from 'vue'
+import { nextTick, ref, watch } from 'vue'
+
+/** Macrotask gap so the closed modal can paint before print() blocks the UI. */
+const CLOSE_PAINT_MS = 150
 
 /**
  * Parent-owned state machine for the post-sale invoice print-size dialog.
  *
- * The POS submits a sale, stores its print payload in `pending`, opens the
- * A4/A5 chooser and returns to the normal sale screen. Confirming prints
- * exactly once, then always closes the dialog and clears the completed-sale
- * state — even when printing throws. Closing via X / Cancel / Esc / overlay
- * clears the state without printing and never re-submits the completed sale.
- *
- * `window.print()` can block and `afterprint` is not reliable across browsers,
- * so the dialog is closed as soon as the print has been triggered: `confirm`
- * closes `open` before awaiting `print`.
+ * Choosing A4/A5 closes the chooser immediately, waits for the close to paint,
+ * then triggers print. That way a blocking `window.print()` cannot freeze the
+ * modal on screen. X/Cancel skips printing; the sale is already saved and is
+ * never re-submitted.
  */
 export function usePosPrintSizeDialog<TPayload, TSize>(options: {
   /** Trigger the print. May reject; the dialog still closes and state clears. */
@@ -38,29 +36,55 @@ export function usePosPrintSizeDialog<TPayload, TSize>(options: {
     if (settled) return
     settled = true
     pending = null
+    printing.value = false
+    open.value = false
     options.onClose?.(printed)
   }
 
-  /** A4/A5 chosen: print once, then close and clear the completed-sale state. */
+  /**
+   * Wait until the browser has painted the closed modal (before print blocks).
+   * nextTick + rAF covers Vue/DOM; the short timeout covers modal leave / compositor.
+   */
+  async function waitForClosePaint() {
+    await nextTick()
+    if (typeof requestAnimationFrame === 'function') {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve())
+        })
+      })
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, CLOSE_PAINT_MS)
+    })
+  }
+
+  /** A4/A5 chosen: close the chooser immediately, then print once. */
   async function confirm(size: TSize) {
     if (printing.value || pending === null) return
     const payload = pending
+    // Mark printing first so the open→false watch does not treat this as Cancel.
     printing.value = true
     open.value = false
+    await waitForClosePaint()
     try {
       await options.print(payload, size)
     }
     finally {
-      printing.value = false
       finish(true)
     }
   }
 
-  /** X / Cancel / Esc / overlay: clear the completed-sale state without printing. */
+  /**
+   * X / Cancel / Esc / overlay. While a confirm-close is in flight, only keep
+   * the dialog shut — confirm owns finish(true). Otherwise clear without print.
+   */
   function cancel() {
-    if (printing.value) return
-    if (pending === null) return
-    open.value = false
+    if (printing.value) {
+      open.value = false
+      return
+    }
+    if (settled && !open.value) return
     finish(false)
   }
 

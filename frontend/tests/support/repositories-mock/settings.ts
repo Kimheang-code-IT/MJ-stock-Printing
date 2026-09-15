@@ -9,6 +9,7 @@ import type {
 import type {
   AppConfigRepository,
   AppInfoRepository,
+  ClearTransactionsResult,
   ResetAllDataResult,
   StorageRepository,
 } from '~/repositories/contracts/settings'
@@ -183,6 +184,10 @@ export function createMockAppConfigRepository(): AppConfigRepository {
     resetAllData: async (): Promise<ResetAllDataResult> => mockLatency({
       message: 'Mock mode: data reset is a no-op.',
       requiresReauth: false,
+    }),
+    clearTransactions: async (): Promise<ClearTransactionsResult> => mockLatency({
+      cleared: true,
+      message: 'Mock mode: transactions cleared (no-op).',
     }),
     testEmailConnection: () => connectionResult('Mock SMTP connection is healthy.'),
     sendTestEmail: to => connectionResult(`Mock test email queued for ${to || 'demo@stockpos.local'}.`),

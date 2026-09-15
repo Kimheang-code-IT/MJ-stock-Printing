@@ -249,7 +249,9 @@ const isLineTable = computed(() => props.field.type === 'line-table')
 const isRelatedRecords = computed(() => props.field.type === 'related-records')
 const isUomConversions = computed(() => props.field.type === 'uom-conversions')
 const isBatches = computed(() => props.field.type === 'batches')
+const isProductBatches = computed(() => props.field.type === 'product-batches')
 const isProductMovements = computed(() => props.field.type === 'product-movements')
+const isProductBarcode = computed(() => props.field.type === 'product-barcode')
 const isPartyHistory = computed(() =>
   props.field.type === 'party-sales-history' || props.field.type === 'party-purchase-history',
 )
@@ -414,8 +416,9 @@ watch(() => props.field.key, () => {
       </div>
       <div class="flex items-center justify-between gap-6">
         <span class="text-muted">{{ $t('app.fields.discount') }}</span>
-        <CommonAppCurrencyInput
+        <CommonAppMoneyField
           v-if="editableTotals"
+          inline
           :model-value="moneyAmount('discount')"
           :currency="docCurrency"
           :min="0"
@@ -436,8 +439,9 @@ watch(() => props.field.key, () => {
         class="flex items-center justify-between gap-6"
       >
         <span class="text-muted">{{ $t('app.fields.tax') }}</span>
-        <CommonAppCurrencyInput
+        <CommonAppMoneyField
           v-if="editableTotals"
+          inline
           :model-value="moneyAmount('tax')"
           :currency="docCurrency"
           :min="0"
@@ -460,8 +464,9 @@ watch(() => props.field.key, () => {
       <template v-if="showPaidRemaining">
         <div class="flex items-center justify-between gap-6">
           <span class="text-muted">{{ $t('app.pos.paidNow') }}</span>
-          <CommonAppCurrencyInput
+          <CommonAppMoneyField
             v-if="editableTotals"
+            inline
             :model-value="moneyAmount('paidNow')"
             :currency="docCurrency"
             :min="0"
@@ -494,13 +499,21 @@ watch(() => props.field.key, () => {
 
   <StockPricingField
     v-else-if="isUomConversions"
-    class="md:col-span-2"
+    class="md:col-span-2 flex min-h-112 flex-1 flex-col"
     :model-value="modelValue"
     :disabled="disabled || field.readOnly"
     @update:model-value="emit('update:modelValue', $event)"
   />
 
-  <!-- Read-only batch lots of this product (product detail Batches tab). -->
+  <!-- Product Batches tab: lots + Pricing active toggle. -->
+  <StockBatchManagePanel
+    v-else-if="isProductBatches"
+    class="md:col-span-2 flex min-h-112 flex-1 flex-col"
+    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
+    :disabled="disabled || field.readOnly"
+  />
+
+  <!-- Read-only batch lots of this product (legacy dialog panel). -->
   <StockBatchListPanel
     v-else-if="isBatches"
     class="md:col-span-2"
@@ -512,6 +525,14 @@ watch(() => props.field.key, () => {
     v-else-if="isProductMovements"
     class="md:col-span-2"
     :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
+  />
+
+  <!-- Barcode sticker preview + print sheet (Barcode tab). -->
+  <StockProductBarcodePanel
+    v-else-if="isProductBarcode"
+    class="md:col-span-2"
+    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
+    :disabled="disabled || field.readOnly"
   />
 
   <!-- Customer / Supplier detail History tab. -->
@@ -663,9 +684,10 @@ watch(() => props.field.key, () => {
           size="md"
           class="w-full"
         />
-        <CommonAppCurrencyInput
+        <CommonAppMoneyField
           v-else-if="isMoneyField"
           v-model="numberValue"
+          inline
           :currency="documentCurrency"
           :disabled="disabled || field.readOnly"
           align="right"

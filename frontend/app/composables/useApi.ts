@@ -2,7 +2,7 @@ import { useAuthStore } from '~/stores/auth'
 import { ref } from 'vue'
 import type { TableQueryParams } from '~/types/api'
 import { compactQuery } from '~/utils/api/query'
-import { markApiErrorHandled, normalizeApiError } from '~/utils/api/errors'
+import { markApiErrorHandled, normalizeApiError, isRequestAborted } from '~/utils/api/errors'
 import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from '~/utils/auth/tokens'
 import { createAuthRefresher } from '~/utils/api/auth-refresher'
 import { isAutoApiBase, isSameOriginApiBase, resolveApiBase } from '~/utils/api/base-url'
@@ -210,7 +210,7 @@ export function useApi() {
       }
       catch (err: unknown) {
         const fetchError = err as ApiFetchError
-        if (fetchError.name === 'AbortError') {
+        if (fetchError.name === 'AbortError' || isRequestAborted(err)) {
           return Promise.reject(err)
         }
 

@@ -10,6 +10,7 @@ import type {
   DocumentTabSchema,
 } from '~/types/stock-pos/common'
 import { conversionForUom, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
+import { checkoutPaidNow } from '~/utils/pos/checkout'
 import { buildPurchaseEditLines, buildPurchaseReturnLines } from '~/utils/reports/returns'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 
@@ -84,16 +85,21 @@ const returnReason = ref('')
 const editMode = ref(false)
 const editPurchaseId = ref('')
 
+/** View-only: Purchase Report Purchase No → detail form, no edits. */
+const viewMode = ref(false)
+
 function fieldValue(key: string): unknown {
   // Computed document totals consumed by the line-table footer.
   if (key === 'subtotal') return subtotal.value
   if (key === 'total') return total.value
+  if (key === 'paidNow') return paidNow.value
   if (key === 'remaining') return remaining.value
   if (key === 'returnReason') return returnReason.value
   return model[key]
 }
 
 function setFieldValue(key: string, value: unknown): void {
+  if (viewMode.value) return
   if (key === 'returnReason') {
     returnReason.value = String(value ?? '')
     return
@@ -107,6 +113,11 @@ onMounted(async () => {
   const returnId = String(route.query.returnPurchaseId || '')
   if (returnId) {
     await loadReturnPurchase(returnId, String(route.query.purchaseNo || ''))
+    return
+  }
+  const viewId = String(route.query.viewPurchaseId || '')
+  if (viewId) {
+    await loadViewPurchase(viewId, String(route.query.purchaseNo || ''))
     return
   }
   const editId = String(route.query.editPurchaseId || '')
@@ -202,6 +213,8 @@ async function loadEditPurchase(purchaseId: string, purchaseNo: string) {
     model.note = String(doc.note || '')
     model.discount = Number(doc.discount ?? doc.discountAmount ?? 0) || undefined
     model.tax = Number(doc.tax ?? doc.taxAmount ?? 0) || undefined
+    model.paymentMethod = String(doc.paymentMethodLabel || doc.paymentMethod || 'Cash') || 'Cash'
+    model.paidNow = Number(doc.paidAmount ?? 0)
     const productById = new Map(store.list('products').map(row => [String(row.id), row]))
     const editLines = buildPurchaseEditLines(doc, productById)
     if (!editLines.length) {
@@ -226,6 +239,15 @@ async function loadEditPurchase(purchaseId: string, purchaseNo: string) {
   finally {
     returnLoading.value = false
   }
+}
+
+/** Load a purchase for view-only detail (Purchase Report Purchase No). */
+async function loadViewPurchase(purchaseId: string, purchaseNo: string) {
+  await loadEditPurchase(purchaseId, purchaseNo)
+  if (!editMode.value) return
+  editMode.value = false
+  viewMode.value = true
+  setTitle(t('app.purchase.viewTitle'))
 }
 
 function blankLine(): Record<string, unknown> {
@@ -305,30 +327,44 @@ function batchOptionsFor(row: Record<string, unknown>): Array<{ label: string, v
   return items
 }
 
+/** Find the live line to mutate after an async batch fetch (row objects are
+ *  replaced on each deep-watch pass, so identity alone is not enough). */
+function liveLineForBatch(row: Record<string, unknown>, productId: string) {
+  const lines = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
+  if (lines.includes(row) && String(row.productId || '') === productId) return row
+  return lines.find(line =>
+    String(line.productId || '') === productId
+    && (!String(line.batchNo || '').trim() || String(line.batchNo) === NEW_BATCH))
+    || null
+}
+
 /** After selecting a product: default the Batch No. to its latest lot
- *  (+ expiry). Re-validates against the live row: product unchanged, batch
- *  untouched. */
+ *  (+ expiry). When the product has no lots yet, invent the next batch no
+ *  (BATCH-001…) so Submit is not stuck waiting for a manual batch pick. */
 async function autofillLatestBatch(row: Record<string, unknown>, productId: string) {
   const batches = await ensureBatches(productId)
-  if (!(model.lines as Array<Record<string, unknown>>).includes(row)) return
-  if (String(row.productId || '') !== productId) return
-  if (String(row.batchNo || '')) return
+  const live = liveLineForBatch(row, productId)
+  if (!live) return
+  if (String(live.batchNo || '').trim() && String(live.batchNo) !== NEW_BATCH) return
   const product = productFor(productId)
   if (!product || !tracksBatch(product)) return
   const latest = latestBatch(batches)
-  if (!latest) return
-  row.batchNo = latest.batchNo
-  if (latest.expiryDate) row.expiryDate = latest.expiryDate
+  if (latest) {
+    live.batchNo = latest.batchNo
+    if (latest.expiryDate) live.expiryDate = latest.expiryDate
+    return
+  }
+  live.batchNo = generateBatchNo(batches)
 }
 
 /** "+ New Batch" picked: resolve the generated number once the product's
  *  batches are loaded, then show it as the row's selected batch. */
 async function applyNewBatch(row: Record<string, unknown>, productId: string) {
   const batches = await ensureBatches(productId)
-  if (!(model.lines as Array<Record<string, unknown>>).includes(row)) return
-  if (String(row.productId || '') !== productId) return
-  if (String(row.batchNo || '') !== NEW_BATCH) return
-  row.batchNo = generateBatchNo(batches)
+  const live = liveLineForBatch(row, productId)
+  if (!live) return
+  if (String(live.batchNo || '') !== NEW_BATCH) return
+  live.batchNo = generateBatchNo(batches)
 }
 
 const supplierOptions = computed(() => store.list('suppliers').map(row => ({
@@ -398,8 +434,9 @@ function suggestedCost(productId: string, uomId: string): number {
 // suggested cost when empty + batch/expiry clearing for unbatched products
 // (the generic line table cannot derive cross-column defaults itself).
 watch(() => model.lines, (rows) => {
+  if (viewMode.value || returnMode.value) return
   if (!Array.isArray(rows)) return
-  const next = (rows as Array<Record<string, unknown>>).map((row, index) => {
+  const next = (rows as Array<Record<string, unknown>>).map((row) => {
     const product = productFor(String(row.productId || ''))
     if (!product) return row
     // Internal UOM: the product's default/base UOM (hidden column, conversion
@@ -416,24 +453,23 @@ watch(() => model.lines, (rows) => {
       nextRow.batchNo = ''
     }
     if (!tracksExpiry(product)) nextRow.expiryDate = ''
-    // Product changed → default the Batch No. to the product's latest lot.
-    const prevRow = (rows as Array<Record<string, unknown>>)[index]
-    if (String(nextRow.productId || '') !== String(prevRow?.productId || '')) {
-      applyDefaultSupplier(product)
+
+    // Prefill supplier from the product when the header is still empty / auto.
+    applyDefaultSupplier(product)
+
+    const picked = String(nextRow.batchNo || '')
+    if (tracksBatch(product) && !picked.trim()) {
+      // Deep watch cannot reliably detect productId changes (same-array
+      // mutation). Autofill whenever a batch-tracked line has no batch yet.
       void autofillLatestBatch(nextRow, String(nextRow.productId || ''))
     }
-    else if (nextRow.batchNo !== prevRow?.batchNo) {
-      const picked = String(nextRow.batchNo || '')
-      if (picked === NEW_BATCH) {
-        // Generate the next batch number (shown as the selected value).
-        void applyNewBatch(nextRow, String(nextRow.productId || ''))
-      }
-      else if (picked) {
-        // Picking an existing lot stamps the row's expiry from that lot.
-        const lot = (batchCache.value.get(String(nextRow.productId || '')) || [])
-          .find(batch => batch.batchNo === picked)
-        if (lot?.expiryDate) nextRow.expiryDate = lot.expiryDate
-      }
+    else if (picked === NEW_BATCH) {
+      void applyNewBatch(nextRow, String(nextRow.productId || ''))
+    }
+    else if (picked && tracksExpiry(product) && !String(nextRow.expiryDate || '').trim()) {
+      const lot = (batchCache.value.get(String(nextRow.productId || '')) || [])
+        .find(batch => batch.batchNo === picked)
+      if (lot?.expiryDate) nextRow.expiryDate = lot.expiryDate
     }
     if (JSON.stringify(nextRow) !== JSON.stringify(row)) return nextRow
     return row
@@ -444,9 +480,8 @@ watch(() => model.lines, (rows) => {
 // ---------------------------------------------------------------- schema
 
 const linesTable = computed<ModuleTable>(() => {
-  // Return mode: original lines are fixed (read-only) — only the return qty
-  // is editable, so Add-row / row actions are hidden.
-  if (returnMode.value) {
+  // Return / view: lines are fixed (read-only).
+  if (returnMode.value || viewMode.value) {
     return {
       key: 'lines',
       title: t('app.purchase.lines'),
@@ -456,7 +491,14 @@ const linesTable = computed<ModuleTable>(() => {
         { key: 'batchNo', label: t('app.stock.batchNo'), type: 'text', computed: true, width: 'w-40 min-w-32' },
         { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date', computed: true, width: 'w-32' },
         { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number', computed: true },
-        { key: 'quantity', label: t('app.reports.returnQty'), type: 'number', required: true, width: 'w-28 min-w-24' },
+        {
+          key: 'quantity',
+          label: returnMode.value ? t('app.reports.returnQty') : t('app.fields.quantity'),
+          type: 'number',
+          computed: viewMode.value,
+          required: returnMode.value,
+          width: 'w-28 min-w-24',
+        },
         { key: 'amount', label: t('app.fields.lineTotal'), type: 'number', computed: true },
       ],
     }
@@ -548,6 +590,48 @@ const tabs = computed<DocumentTabSchema[]>(() => {
         ],
       },
     ]
+  }
+  if (viewMode.value) {
+    return [{
+      id: 'general',
+      labelKey: 'app.stock.tabGeneral',
+      label: t('app.stock.tabGeneral'),
+      sections: [
+        {
+          id: 'purchase',
+          titleKey: 'app.purchase.infoSection',
+          fields: [
+            { key: 'purchaseNo', labelKey: 'app.reports.purchaseNo', type: 'text', readOnly: true },
+            { key: 'supplierName', labelKey: 'app.nav.suppliers', type: 'text', readOnly: true },
+            { key: 'transactionDate', labelKey: 'app.fields.date', type: 'date', readOnly: true },
+            { key: 'paymentMethod', labelKey: 'app.pos.paymentMethod', type: 'text', readOnly: true },
+            { key: 'currency', labelKey: 'app.fields.currency', type: 'text', readOnly: true },
+            { key: 'note', labelKey: 'app.fields.note', type: 'textarea', colSpan: 2, readOnly: true },
+          ],
+        },
+        {
+          id: 'products',
+          titleKey: 'app.purchase.lines',
+          fields: [
+            {
+              key: 'lines',
+              labelKey: 'app.purchase.lines',
+              type: 'line-table',
+              colSpan: 2,
+              meta: {
+                table: linesTable.value,
+                showPricingTotals: true,
+                includeTax: true,
+                showPaidRemaining: true,
+                hideAdd: true,
+                hideRowActions: true,
+                viewOnly: true,
+              },
+            },
+          ],
+        },
+      ],
+    }]
   }
   return [{
   id: 'general',
@@ -660,7 +744,12 @@ const subtotal = computed(() =>
 const discount = computed(() => round2(Math.max(0, Number(model.discount ?? 0))))
 const tax = computed(() => round2(Math.max(0, Number(model.tax ?? 0))))
 const total = computed(() => round2(Math.max(0, subtotal.value - discount.value + tax.value)))
-const paidNow = computed(() => round2(Math.min(Math.max(0, Number(model.paidNow ?? 0)), total.value)))
+/** Untouched Paid now = pay in full (same as POS cash). Credit pays nothing. */
+const paidNow = computed(() => checkoutPaidNow(
+  model.paidNow as number | undefined,
+  total.value,
+  String(model.paymentMethod || '') === 'Credit',
+))
 const remaining = computed(() => round2(Math.max(0, total.value - paidNow.value)))
 
 const canSave = computed(() =>
@@ -670,11 +759,64 @@ const canSave = computed(() =>
       && (remaining.value <= 0 || Boolean(model.supplierId))
       && (model.currency !== 'KHR' || Number(model.exchangeRate || 0) > 0)))
 
+/** Human reason Submit stays blocked — shown as a toast when the user clicks. */
+function saveBlockedReason(): string | null {
+  if (returnMode.value) {
+    if (!completedLines.value.length) return t('app.purchase.needLines')
+    if (!returnReason.value.trim()) return t('app.purchase.needReturnReason')
+    return null
+  }
+  if (!pricedLines.value.length) return t('app.purchase.needLines')
+  if (!completedLines.value.length) {
+    const incomplete = lines.value.find((row) => {
+      if (!row.productId || !(Number(row.quantity) > 0)) return false
+      const product = productFor(row.productId)
+      if (tracksBatch(product) && (!String(row.batchNo ?? '').trim() || String(row.batchNo) === NEW_BATCH)) return true
+      if (tracksExpiry(product) && !String(row.expiryDate ?? '').trim()) return true
+      return false
+    })
+    if (incomplete) {
+      const product = productFor(incomplete.productId)
+      if (tracksExpiry(product) && !String(incomplete.expiryDate ?? '').trim()) {
+        return t('app.purchase.needExpiry')
+      }
+      return t('app.purchase.needBatch')
+    }
+    return t('app.purchase.needLines')
+  }
+  if (remaining.value > 0 && !model.supplierId) return t('app.purchase.needSupplier')
+  if (model.currency === 'KHR' && !(Number(model.exchangeRate || 0) > 0)) {
+    return t('app.purchase.needExchangeRate')
+  }
+  return null
+}
+
+/** Header CTA: Submit for new purchases, Save changes for edits, Confirm for returns. */
+const purchaseSaveLabel = computed(() => {
+  if (returnMode.value) return t('app.reports.confirmReturn')
+  if (editMode.value) return t('core.common.save')
+  return t('core.confirm.submit')
+})
+
 // ---------------------------------------------------------------- submit
 
 const saving = ref(false)
 
-/** Submit the Purchase Return against the original document (immutable). */
+/** Resolve any leftover "+ New Batch" sentinels before posting. */
+async function resolvePendingBatches() {
+  const rows = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
+  for (const row of rows) {
+    const productId = String(row.productId || '')
+    if (!productId) continue
+    if (String(row.batchNo || '') === NEW_BATCH) {
+      await applyNewBatch(row, productId)
+    }
+    else if (tracksBatch(productFor(productId)) && !String(row.batchNo || '').trim()) {
+      await autofillLatestBatch(row, productId)
+    }
+  }
+}
+
 async function saveReturn() {
   if (!canSave.value || saving.value) return
   saving.value = true
@@ -711,6 +853,7 @@ async function saveEdit() {
   if (!canSave.value || saving.value) return
   saving.value = true
   try {
+    await resolvePendingBatches()
     await posCommands.updatePurchase({
       stockInId: editPurchaseId.value,
       lines: completedLines.value.map((row) => {
@@ -754,6 +897,13 @@ async function saveEdit() {
 }
 
 async function save() {
+  if (saving.value) return
+  await resolvePendingBatches()
+  const blocked = saveBlockedReason()
+  if (blocked) {
+    toast.add({ title: blocked, color: 'warning' })
+    return
+  }
   if (returnMode.value) {
     await saveReturn()
     return
@@ -762,7 +912,7 @@ async function save() {
     await saveEdit()
     return
   }
-  if (!canSave.value || saving.value) return
+  if (!canSave.value) return
   saving.value = true
   try {
     await posCommands.createPurchase({
@@ -776,9 +926,6 @@ async function save() {
           uomId: String(row.uomId || product?.uomId || '') || undefined,
           uomSymbol: String(conversion?.uomSymbol || product?.uomSymbol || product?.uom || '') || undefined,
           factorToBase: conversion?.factorToBase ?? 1,
-          // Batch traceability: receive into the named lot with its expiry —
-          // an existing lot is restocked (identity preserved), the generated
-          // "+ New Batch" number creates the lot at confirmation only.
           batchNo: String(row.batchNo || '').trim() || null,
           expiryDate: String(row.expiryDate || '').trim() || null,
         }
@@ -794,6 +941,8 @@ async function save() {
       note: String(model.note || '').trim() || null,
     })
     toast.add({ title: t('app.purchase.created'), color: 'success' })
+    void store.fetchList('products')
+    void store.fetchList('stockIns')
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
@@ -822,6 +971,14 @@ async function save() {
       <span v-if="model.purchaseNo" class="text-muted">· {{ model.purchaseNo }}</span>
     </div>
     <div
+      v-if="viewMode"
+      class="flex items-center gap-2 border-b border-info/40 bg-info/10 px-3 py-1.5 text-sm font-medium text-info"
+    >
+      <UIcon name="i-lucide-eye" class="size-4" />
+      <span>{{ t('app.purchase.viewMode') }}</span>
+      <span v-if="model.purchaseNo" class="text-muted">· {{ model.purchaseNo }}</span>
+    </div>
+    <div
       v-if="editMode"
       class="flex items-center gap-2 border-b border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-medium text-primary"
     >
@@ -836,9 +993,11 @@ async function save() {
       :set-field-value="setFieldValue"
       :pending="returnLoading"
       :saving="saving"
-      :can-save="canSave"
-      :save-label="returnMode ? t('app.reports.confirmReturn') : editMode ? t('app.ui.save') : undefined"
-      :is-create="true"
+      :can-save="!viewMode"
+      :confirm-save="canSave"
+      :save-label="purchaseSaveLabel"
+      :read-only="viewMode"
+      :is-create="!editMode && !returnMode && !viewMode"
       :show-tabs="false"
       content-wide
       :show-cancel="true"
