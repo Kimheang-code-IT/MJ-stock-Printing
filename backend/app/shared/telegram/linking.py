@@ -68,22 +68,27 @@ async def _deliver_reset_code(session: AsyncSession, user: User, chat_id: str) -
     Best effort: failures are logged and never bubble into the bot reply.
     """
     from app.core.config import settings
+    from app.modules.administration.service import get_setting_value
     from app.modules.auth.service import AuthService
     from app.shared.telegram.client import send_message
-    from app.shared.telegram.delivery import RESET_CODE_TEXT, RESET_LINK_TEXT
+    from app.shared.telegram.delivery import format_reset_code_text, normalize_language
 
     try:
         code, ttl_minutes, handoff_token = await AuthService(session).issue_reset_code(user)
     except Exception as exc:
         logger.error("Failed to issue reset code after telegram link: %s", exc)
         return
-    text = RESET_CODE_TEXT.format(code=code, minutes=ttl_minutes)
-    if handoff_token and settings.frontend_base_url:
-        base = settings.frontend_base_url.rstrip("/")
-        text += "\n" + RESET_LINK_TEXT.format(
-            link=f"{base}/auth/reset-password?handoff={handoff_token}"
-        )
+    base = settings.frontend_base_url.rstrip("/") if settings.frontend_base_url else ""
+    handoff_url = (
+        f"{base}/auth/reset-password?handoff={handoff_token}"
+        if handoff_token and base
+        else None
+    )
+    lang = normalize_language(
+        await get_setting_value(session, "telegram", "notification_language", "en")
+    )
+    text = format_reset_code_text(code, ttl_minutes, handoff_url=handoff_url, lang=lang)
     try:
-        await send_message(chat_id, text)
+        await send_message(chat_id, text, parse_mode="HTML")
     except Exception:
         logger.exception("Failed to send reset code to chat %s", chat_id)

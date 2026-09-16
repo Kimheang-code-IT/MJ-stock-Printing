@@ -53,7 +53,7 @@ export const adminModules: ModuleConfig[] = [
       col('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'),
       col('email', 'Email', 'អ៊ីមែល'),
       col('role', 'Role', 'តួនាទី', { labelKey: 'core.fields.roleAssignments' }),
-      col('telegramUsername', 'Telegram', 'Telegram'),
+      col('telegramName', 'Telegram', 'Telegram'),
       col('status', 'Status', 'ស្ថានភាព'),
       col('lastLogin', 'Last Login', 'ចូលចុងក្រោយ'),
     ],
@@ -75,15 +75,11 @@ export const adminModules: ModuleConfig[] = [
         optionsEndpoint: '/api/v1/admin/roles/options',
         helpKey: 'app.modules.users.fieldHelp.roleId',
       }),
-      f('telegramUsername', 'Telegram Username', 'ឈ្មោះអ្នកប្រើ Telegram', 'Telegram', 'Telegram', 'text', undefined, {
-        computed: true,
-        hideOnCreate: true,
-        help: 'Linked automatically through the Telegram bot.',
+      f('telegramName', 'Telegram Name', 'ឈ្មោះ Telegram', 'Telegram', 'Telegram', 'text', undefined, {
+        help: 'Label of the linked Telegram account, e.g. the person or @handle. Linked automatically through the bot, or edited here.',
       }),
       f('telegramChatId', 'Telegram Chat ID', 'លេខ Chat ID Telegram', 'Telegram', 'Telegram', 'text', undefined, {
-        computed: true,
-        hideOnCreate: true,
-        help: 'Linked automatically through the Telegram bot. Password reset codes are sent only to this private chat.',
+        help: 'Private chat ID that receives notifications and password-reset codes. Enter it here to link manually; clear it to unlink.',
       }),
     ],
   }),

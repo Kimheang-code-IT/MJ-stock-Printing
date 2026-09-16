@@ -38,19 +38,28 @@ async def resolve_bot_token(session=None) -> str:
 
 
 async def send_message(
-    chat_id: str, text: str, *, bot_token: str | None = None, session=None
+    chat_id: str,
+    text: str,
+    *,
+    bot_token: str | None = None,
+    session=None,
+    parse_mode: str | None = None,
 ) -> bool:
     """Send a message via the Telegram Bot API. Returns True on success.
 
-    Fails soft (returns False) when Telegram is not configured or unreachable;
-    callers must not leak delivery errors to end users.
+    `parse_mode` enables Telegram formatting (the notification cards send
+    "HTML" for bold titles and monospace codes). Fails soft (returns False)
+    when Telegram is not configured or unreachable; callers must not leak
+    delivery errors to end users.
     """
     token = str(bot_token or "").strip() or await resolve_bot_token(session)
     if not settings.telegram_enabled or not token:
         logger.warning("Telegram delivery skipped: bot token not configured")
         return False
     url = f"{API_BASE}/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
+    payload: dict = {"chat_id": chat_id, "text": text}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(url, json=payload)

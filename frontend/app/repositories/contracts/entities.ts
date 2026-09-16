@@ -128,6 +128,20 @@ export interface DeliveryNoteUpdateInput {
   lines?: DeliveryNoteLineInput[]
 }
 
+/**
+ * POS auto-entry: create the delivery note for one sale (POST
+ * /pos/sales/:id/delivery). With no `lines` the note covers every sale line's
+ * remaining undelivered qty, so the cashier never rebuilds the note by hand.
+ */
+export interface DeliveryNoteFromSaleInput {
+  deliveryPhone?: string | null
+  deliveryLocation?: string | null
+  /** Delivery price charged on the invoice (snapshotted onto the note). */
+  deliveryFee?: number | null
+  note?: string | null
+  confirm?: boolean
+}
+
 export type DeliveryStatusActionInput = 'confirm' | 'out_for_delivery' | 'deliver' | 'cancel'
 
 /** Movement-kind filter for the product history dialog (Current Stock is display-only). */
@@ -493,6 +507,8 @@ export interface PosCommandRepository {
  */
 export interface DeliveryCommandRepository {
   createDeliveryNote(input: DeliveryNoteCreateInput): Promise<AppRecord>
+  /** POS auto-entry: build the note from one sale's remaining quantities. */
+  createDeliveryNoteFromSale(saleId: string, input?: DeliveryNoteFromSaleInput): Promise<AppRecord>
   /** Edit a DRAFT note (delivery.update) — header fields and/or line set. */
   updateDeliveryNote(id: string, input: DeliveryNoteUpdateInput): Promise<AppRecord>
   /** Update Status (spec §5.13): set a legal next status; cancel needs a reason. */

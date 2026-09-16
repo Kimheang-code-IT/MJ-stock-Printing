@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.v1.export import router as export_router
 from app.api.v1.search import router as search_router
 from app.modules.administration.router import router as administration_router
 from app.modules.administration.settings_router import router as settings_router
@@ -33,5 +34,6 @@ api_router.include_router(delivery_notes_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(reports_router)
 api_router.include_router(image_router)
+api_router.include_router(export_router)
 
 # All Stock & POS module routers are registered.

@@ -532,6 +532,7 @@ class DeliveryNoteService:
             customer_id=sale.customer_id,
             delivery_phone=getattr(payload, "delivery_phone", None),
             delivery_location=getattr(payload, "delivery_location", None),
+            delivery_fee=getattr(payload, "delivery_fee", None),
             note=getattr(payload, "note", None),
             confirm=bool(getattr(payload, "confirm", False)),
             lines=[

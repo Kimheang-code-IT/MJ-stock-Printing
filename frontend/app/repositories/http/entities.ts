@@ -24,6 +24,7 @@ import type {
 } from '~/repositories/contracts/entities'
 import { ApiEndpoints, CollectionEndpoints, type ApiCollection } from '~/utils/constants/api-endpoints'
 import { documentSequencePreview } from '~/utils/document-sequences'
+import { normalizeDeliveryStatusInput } from '~/utils/delivery/notes'
 import { flatKeysToPermissionRows, permissionRowsToFlatKeys } from '~/utils/role/permissions'
 import { mediaObjectKey } from '~/utils/security/url'
 
@@ -87,9 +88,11 @@ function adaptUserOut(user: Record<string, unknown>): Record<string, unknown> {
     effectivePermissions,
     permissionRows: permissionRowsFromFlatKeys(effectivePermissions),
     lastLogin: user.lastLoginAt ?? user.last_login_at ?? user.lastLogin ?? null,
-    // Telegram linking is server-managed; show chat ID when linked.
+    // Admin-editable Telegram label + private Chat ID (Users form).
+    telegramName: String(user.telegram_name ?? user.telegramName ?? '') || '',
+    telegramChatId: String(user.telegram_chat_id ?? user.telegramChatId ?? '') || '',
     telegramUsername: telegramLinked
-      ? String(user.telegram_chat_id ?? user.telegramChatId ?? 'Linked')
+      ? String(user.telegram_name ?? user.telegram_chat_id ?? 'Linked')
       : '',
   }
 }
@@ -102,14 +105,17 @@ function adaptUserIn(input: Record<string, unknown>): Record<string, unknown> {
   const status = String(input.status ?? '').trim()
   const password = String(input.password ?? '')
   const roleId = input.roleId ?? input.role_id
-  const chatId = String(input.telegramChatId ?? input.telegram_chat_id ?? '').trim()
+  const telegramName = input.telegramName ?? input.telegram_name
+  const chatId = input.telegramChatId ?? input.telegram_chat_id
 
   if (fullName) output.full_name = fullName
   if (email) output.email = email
   if (status) output.status = /^(inactive|disabled)$/i.test(status) ? 'DISABLED' : 'ACTIVE'
   if (roleId != null && roleId !== '') output.role_id = String(roleId)
   if (password.trim()) output.password = password
-  if (chatId) output.telegram_chat_id = chatId
+  // Telegram name / Chat ID are admin-editable; an empty value clears them.
+  if (telegramName !== undefined) output.telegram_name = String(telegramName ?? '').trim() || null
+  if (chatId !== undefined) output.telegram_chat_id = String(chatId ?? '').trim() || null
   return output
 }
 
@@ -385,24 +391,6 @@ function adaptPurchaseReturnRow(row: Record<string, unknown>): Record<string, un
   }
 }
 
-/** UI delivery status label ⇄ canonical backend status (one mapping). */
-const DELIVERY_STATUS_TO_API: Record<string, string> = {
-  Draft: 'DRAFT',
-  Confirmed: 'CONFIRMED',
-  'Out for Delivery': 'OUT_FOR_DELIVERY',
-  Delivered: 'DELIVERED',
-  Cancelled: 'CANCELLED',
-}
-
-const DELIVERY_STATUS_FROM_API: Record<string, string> = Object.fromEntries(
-  Object.entries(DELIVERY_STATUS_TO_API).map(([ui, api]) => [api, ui]),
-)
-
-function deliveryStatusLabel(value: unknown): string {
-  const raw = String(value ?? '')
-  return DELIVERY_STATUS_FROM_API[raw] ?? raw
-}
-
 /** Backend DeliveryNoteOut → UI camelCase note shape (multi-invoice, spec §2.1.9). */
 function adaptDeliveryNoteOut(row: Record<string, unknown>): Record<string, unknown> {
   const links = Array.isArray(row.sales) ? row.sales as Record<string, unknown>[] : []
@@ -427,7 +415,10 @@ function adaptDeliveryNoteOut(row: Record<string, unknown>): Record<string, unkn
     deliveryDate: row.deliveryDate ?? row.delivery_date ?? null,
     deliveryFee: row.deliveryFee ?? row.delivery_fee ?? null,
     deliveredAt: row.deliveredAt ?? row.delivered_at ?? null,
-    status: deliveryStatusLabel(row.status),
+    // Collapse the backend lifecycle into the simplified Processing/Completed;
+    // keep the raw backend enum so editability (PENDING only) stays accurate.
+    status: normalizeDeliveryStatusInput(row.status),
+    statusRaw: String(row.status ?? ''),
     note: row.note ?? null,
     cancelReason: row.cancelReason ?? row.cancel_reason ?? null,
     createdBy: asRecordId(row.createdBy ?? row.created_by),

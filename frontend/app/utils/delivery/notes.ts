@@ -7,49 +7,51 @@ import type { AppRecord } from '~/config/admin-seed'
  * may cover MANY invoices of the SAME customer (`note.sales`).
  */
 
-export const DELIVERY_STATUSES = ['Draft', 'Confirmed', 'Out for Delivery', 'Delivered', 'Cancelled'] as const
+/**
+ * Simplified delivery lifecycle shown in the UI: a note is still being
+ * delivered (**Processing**) or it is done (**Completed**). `Cancelled` is a
+ * terminal exception (backend RETURNED/CANCELLED/FAILED) kept out of the
+ * selectable list but still displayable. All richer backend statuses
+ * (PENDING/PREPARING/OUT_FOR_DELIVERY/…) collapse into these labels.
+ */
+export const DELIVERY_STATUSES = ['Processing', 'Completed'] as const
 
-export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number]
+export type DeliveryStatus = 'Processing' | 'Completed' | 'Cancelled'
 
 export type DeliveryStatusAction = 'confirm' | 'out_for_delivery' | 'deliver' | 'cancel'
 
-/** Allowed next statuses per note status (spec §2.1.9 transition table);
- *  Delivered and Cancelled are terminal. */
+/** Allowed next statuses per note status; Completed and Cancelled are terminal. */
 export const DELIVERY_TRANSITIONS: Record<DeliveryStatus, DeliveryStatus[]> = {
-  Draft: ['Confirmed', 'Cancelled'],
-  Confirmed: ['Out for Delivery', 'Delivered', 'Cancelled'],
-  'Out for Delivery': ['Delivered', 'Cancelled'],
-  Delivered: [],
+  Processing: ['Completed', 'Cancelled'],
+  Completed: [],
   Cancelled: [],
 }
 
 /** Action shortcuts of the same transition service (§5.13 aliases). */
 const ACTION_TO_STATUS: Record<DeliveryStatusAction, DeliveryStatus> = {
-  confirm: 'Confirmed',
-  out_for_delivery: 'Out for Delivery',
-  deliver: 'Delivered',
+  confirm: 'Processing',
+  out_for_delivery: 'Processing',
+  deliver: 'Completed',
   cancel: 'Cancelled',
 }
 
 export function isDeliveryStatus(value: unknown): value is DeliveryStatus {
-  return (DELIVERY_STATUSES as readonly string[]).includes(String(value))
+  return value === 'Processing' || value === 'Completed' || value === 'Cancelled'
 }
 
 /** Canonical backend status for a UI label or legacy verb alias (§5.13). */
 export const DELIVERY_STATUS_TO_API: Record<string, string> = {
-  Draft: 'DRAFT',
-  Confirmed: 'CONFIRMED',
-  'Out for Delivery': 'OUT_FOR_DELIVERY',
-  Delivered: 'DELIVERED',
+  Processing: 'PREPARING',
+  Completed: 'DELIVERED',
   Cancelled: 'CANCELLED',
   // §5.13 verb aliases of the same transition service.
-  confirm: 'CONFIRMED',
+  confirm: 'PREPARING',
   out_for_delivery: 'OUT_FOR_DELIVERY',
   deliver: 'DELIVERED',
   cancel: 'CANCELLED',
 }
 
-/** Accepts a UI status label ('Out for Delivery') or a legacy verb alias
+/** Accepts a UI status label ('Processing') or a legacy verb alias
  *  ('deliver'); returns the canonical backend status for POST /status. */
 export function deliveryApiStatus(value: unknown): string {
   const raw = String(value ?? '').trim()
@@ -59,7 +61,7 @@ export function deliveryApiStatus(value: unknown): string {
 }
 
 /** Normalize any status dialect (UI label, verb alias, backend enum) to the
- *  UI label the components use. */
+ *  simplified UI label the components use. */
 export function normalizeDeliveryStatusInput(value: unknown): DeliveryStatus {
   const raw = String(value ?? '').trim()
   if (isDeliveryStatus(raw)) return raw
@@ -67,18 +69,18 @@ export function normalizeDeliveryStatusInput(value: unknown): DeliveryStatus {
   if (byVerb) return byVerb
   const byApi: Record<string, DeliveryStatus> = {
     // Backend vocabulary (delivery/models.py) plus legacy aliases.
-    PENDING: 'Draft',
-    DRAFT: 'Draft',
-    PREPARING: 'Confirmed',
-    CONFIRMED: 'Confirmed',
-    OUT_FOR_DELIVERY: 'Out for Delivery',
-    DELIVERED: 'Delivered',
-    PARTIALLY_DELIVERED: 'Out for Delivery',
+    PENDING: 'Processing',
+    DRAFT: 'Processing',
+    PREPARING: 'Processing',
+    CONFIRMED: 'Processing',
+    OUT_FOR_DELIVERY: 'Processing',
+    PARTIALLY_DELIVERED: 'Processing',
+    FAILED: 'Processing',
+    DELIVERED: 'Completed',
     RETURNED: 'Cancelled',
     CANCELLED: 'Cancelled',
-    FAILED: 'Cancelled',
   }
-  return byApi[raw.toUpperCase()] ?? 'Draft'
+  return byApi[raw.toUpperCase()] ?? 'Processing'
 }
 
 export function deliveryStatusOf(note: AppRecord | null | undefined): DeliveryStatus {
@@ -88,24 +90,13 @@ export function deliveryStatusOf(note: AppRecord | null | undefined): DeliverySt
 
 /** i18n key of a delivery status label (must exist in every locale). */
 export function deliveryStatusLabelKey(status: unknown): string {
-  const raw = String(status ?? '').trim()
-  const normalized = isDeliveryStatus(raw) ? raw : normalizeDeliveryStatusInput(raw)
+  const normalized = normalizeDeliveryStatusInput(status)
   const keys: Record<DeliveryStatus, string> = {
-    Draft: 'app.delivery.statusDraft',
-    Confirmed: 'app.delivery.statusConfirmed',
-    'Out for Delivery': 'app.delivery.statusOutForDelivery',
-    Delivered: 'app.delivery.statusDelivered',
+    Processing: 'app.delivery.statusProcessing',
+    Completed: 'app.delivery.statusCompleted',
     Cancelled: 'app.delivery.statusCancelled',
   }
-  if (keys[normalized]) return keys[normalized]!
-  // Fulfillment-specific statuses outside the note lifecycle.
-  const extra: Record<string, string> = {
-    Pending: 'app.delivery.statusPending',
-    Preparing: 'app.delivery.statusPreparing',
-    Failed: 'app.delivery.statusFailed',
-    Returned: 'app.delivery.statusReturned',
-  }
-  return extra[raw] ?? 'app.delivery.statusPending'
+  return keys[normalized]
 }
 
 /** i18n key of an invoice delivery-fulfillment status (backend enum). */
@@ -156,7 +147,13 @@ export function isDeliveryActive(note: AppRecord): boolean {
 }
 
 export function isDeliveryEditable(note: AppRecord): boolean {
-  return deliveryStatusOf(note) === 'Draft'
+  // Only a not-yet-confirmed note is editable (backend: PENDING/DRAFT). The
+  // HTTP adapter keeps the raw enum in `statusRaw` because `status` is the
+  // collapsed Processing/Completed label.
+  const raw = String((note as Record<string, unknown>)?.statusRaw ?? note?.status ?? '')
+    .trim()
+    .toUpperCase()
+  return raw === 'PENDING' || raw === 'DRAFT' || raw === 'PROCESSING'
 }
 
 /**

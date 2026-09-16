@@ -7,8 +7,46 @@ from app.core.config import settings
 
 logger = logging.getLogger("stock_pos.telegram")
 
-RESET_CODE_TEXT = "Your Stock & POS password reset code is {code}. It expires in {minutes} minutes."
-RESET_LINK_TEXT = "Or reset directly: {link}"
+_RESET_TITLES = {
+    "en": "Password Reset Code",
+    "km": "លេខកូដកំណត់ពាក្យសម្ងាត់ឡើងវិញ",
+}
+_RESET_BODIES = {
+    "en": "Your password reset code is:\n\n{code}\n\nIt expires in {minutes} minutes.",
+    "km": "លេខកូដកំណត់ពាក្យសម្ងាត់របស់អ្នកគឺ:\n\n{code}\n\nផុតកំណត់ក្នុងរយៈពេល {minutes} នាទី។",
+}
+_RESET_LINKS = {
+    "en": "Or reset directly:",
+    "km": "ឬកំណត់ឡើងវិញដោយផ្ទាល់:",
+}
+
+
+def normalize_language(value) -> str:
+    return "km" if str(value or "").strip().lower() == "km" else "en"
+
+
+def format_reset_code_text(
+    code: str, minutes: int, *, handoff_url: str | None = None, lang: str = "en"
+) -> str:
+    """Card-style (Telegram HTML) password-reset message with the code in a
+    monospace block. `lang` follows the Settings notification language."""
+    language = normalize_language(lang)
+    lines = [
+        f"🔐 <b>{_RESET_TITLES[language]}</b>",
+        "",
+        _RESET_BODIES[language].format(code=f"<code>{code}</code>", minutes=minutes),
+    ]
+    if handoff_url:
+        lines += ["", f"{_RESET_LINKS[language]} {handoff_url}"]
+    return "\n".join(lines)
+
+
+async def _notification_language(session) -> str:
+    from app.modules.administration.service import get_setting_value
+
+    return normalize_language(
+        await get_setting_value(session, "telegram", "notification_language", "en")
+    )
 
 
 def queue_reset_code_delivery(
@@ -22,13 +60,13 @@ def queue_reset_code_delivery(
     if not settings.telegram_enabled:
         logger.warning("Telegram reset-code delivery skipped: Telegram is disabled")
         return False
-    text = RESET_CODE_TEXT.format(
-        code=code,
-        minutes=minutes if minutes and minutes > 0 else settings.telegram_reset_code_expire_minutes,
+    ttl = minutes if minutes and minutes > 0 else settings.telegram_reset_code_expire_minutes
+    base = settings.frontend_base_url.rstrip("/") if settings.frontend_base_url else ""
+    handoff_url = (
+        f"{base}/auth/reset-password?handoff={handoff_token}"
+        if handoff_token and base
+        else None
     )
-    if handoff_token and settings.frontend_base_url:
-        base = settings.frontend_base_url.rstrip("/")
-        text += "\n" + RESET_LINK_TEXT.format(link=f"{base}/auth/reset-password?handoff={handoff_token}")
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -36,9 +74,17 @@ def queue_reset_code_delivery(
         return False
 
     async def _send() -> None:
+        from app.core.database import SessionFactory
         from app.shared.telegram.client import send_message
 
-        ok = await send_message(str(chat_id), text)
+        language = "en"
+        try:
+            async with SessionFactory() as session:
+                language = await _notification_language(session)
+        except Exception:  # noqa: BLE001 - fall back to English, never fail the send
+            logger.warning("Could not read the notification language; using English")
+        text = format_reset_code_text(code, ttl, handoff_url=handoff_url, lang=language)
+        ok = await send_message(str(chat_id), text, parse_mode="HTML")
         if not ok:
             logger.error("Telegram reset-code send failed for chat %s", chat_id)
 

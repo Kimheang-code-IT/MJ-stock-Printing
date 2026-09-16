@@ -130,11 +130,16 @@ class AdministrationService:
 
         from app.core.security import hash_password
 
+        # A Chat ID entered by an administrator is trusted, so it is marked
+        # verified and immediately eligible for notifications/reset codes.
+        chat_id = (payload.telegram_chat_id or "").strip() or None
         user = User(
             full_name=payload.full_name.strip(),
             email=payload.email.lower(),
             password_hash=hash_password(payload.password),
-            telegram_chat_id=payload.telegram_chat_id,
+            telegram_chat_id=chat_id,
+            telegram_name=(payload.telegram_name or "").strip() or None,
+            telegram_verified=bool(chat_id),
             role_id=role.id,
             status=payload.status,
         )
@@ -172,9 +177,16 @@ class AdministrationService:
         if payload.full_name is not None:
             user.full_name = payload.full_name.strip()
             changes["full_name"] = user.full_name
+        if payload.telegram_name is not None:
+            user.telegram_name = (payload.telegram_name or "").strip() or None
+            changes["telegram_name"] = user.telegram_name
         if payload.telegram_chat_id is not None:
-            user.telegram_chat_id = payload.telegram_chat_id
-            changes["telegram_chat_id"] = user.telegram_chat_id
+            # Empty clears the link; a non-empty admin-entered Chat ID is
+            # trusted and marked verified so notifications start working.
+            chat_id = (payload.telegram_chat_id or "").strip() or None
+            user.telegram_chat_id = chat_id
+            user.telegram_verified = bool(chat_id)
+            changes["telegram_chat_id"] = chat_id
         if payload.status is not None and payload.status != user.status:
             if payload.status == "DISABLED" and user.id == actor.id:
                 raise ValidationError("You cannot disable your own account")

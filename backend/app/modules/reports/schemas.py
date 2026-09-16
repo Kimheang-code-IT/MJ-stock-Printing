@@ -76,6 +76,8 @@ class PurchaseReportRow(BaseModel):
     note: str | None = None
     discount_amount: Decimal = Decimal("0")
     tax_amount: Decimal = Decimal("0")
+    # Tender recorded for the stock-in (earliest purchase/supplier-debt payment).
+    payment_method: str | None = None
 
 
 class CustomerDebtReportRow(BaseModel):

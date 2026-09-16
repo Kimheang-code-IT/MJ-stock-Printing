@@ -15,7 +15,7 @@ import {
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import type { AppRecord } from '~/config/admin-seed'
 import { appModules, type ModuleSelectOption } from '~/config/modules'
-import { isMoneyKey, isNumericKey } from '~/utils/module/field-keys'
+import { isDateFieldKey, isDateTimeFieldKey, isMoneyKey, isNumericKey } from '~/utils/module/field-keys'
 import { limitFilterSelects, parseFilterQuery } from '~/utils/filter/values'
 import { documentDetailHrefFor, documentLinkTargetFor } from '~/utils/module/document-links'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
@@ -31,7 +31,10 @@ import {
 } from '~/utils/module/row-actions'
 import { openDebts, selectedDebtsShareScope } from '~/utils/reports/debts'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
-import { usePosCommands } from '~/repositories/index'
+import { deliveryStatusOf } from '~/utils/delivery/notes'
+import { downloadTableExport } from '~/utils/export/table'
+import type { ExportRequest } from '~/types/stock-pos/export'
+import { useDeliveryCommands, usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
 import { STOCK_OPERATION_META, STOCK_OPERATION_PERMISSIONS, STOCK_OPERATION_TYPES, type StockHistoryKind, type StockOperationType } from '~/config/pos-options'
 import type { DebtPaymentKind } from '~/components/reports/DebtPaymentDialog.vue'
@@ -45,6 +48,7 @@ const { setTitle, setBreadcrumbs, clear } = useAppHeader()
 const { confirm } = useConfirm()
 const toast = useToast()
 const posCommands = usePosCommands()
+const deliveryCommands = useDeliveryCommands()
 const { localization } = useAppLocalization()
 
 const q = ref('')
@@ -57,6 +61,7 @@ const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
 const filters = reactive<Record<string, string[]>>({})
 const rowSelection = ref<Record<string, boolean>>({})
 const busyId = ref('')
+const exporting = ref(false)
 const preferences = usePreferencesStore()
 const stockOperationOpen = ref(false)
 const stockOperationType = ref<StockOperationType>('stock_in')
@@ -142,6 +147,8 @@ const canPaySupplierDebt = computed(() =>
   auth.canAccessPage('supplier.debt.pay')
   || auth.canAccessPage('report.supplier_debt'),
 )
+/** Delivery table: mark a Processing note Completed (POST /delivery/{id}/status). */
+const canDeliver = computed(() => auth.canAccessPage('delivery.deliver'))
 /** Bulk toolbar: deactivate is offered wherever a status toggle is supported. */
 const canBulkDeactivate = computed(() => Boolean(
   current.value
@@ -397,6 +404,101 @@ const pageSummary = computed(() =>
   listTablePageSummary(t, result.value.total, pagination.value),
 )
 
+/** Export dialog fields = the module's visible columns (label + key). */
+const exportFieldOptions = computed(() =>
+  (current.value?.columns || []).map(column => ({ label: fieldLabel(column), value: column.key })))
+
+/** Classify a column so PDF/Excel align and total it correctly. */
+function exportColumnType(column: { key: string, type?: string }): 'text' | 'number' | 'money' | 'date' {
+  if (
+    column.type === 'date' || column.type === 'datetime'
+    || isDateFieldKey(column.key) || isDateTimeFieldKey(column.key)
+  ) return 'date'
+  if (isMoneyKey(column.key)) return 'money'
+  if (isNumericKey(column.key)) return 'number'
+  return 'text'
+}
+
+/** Excel/PDF export: the Python backend renders the page's filtered rows. */
+async function onExport(request: ExportRequest) {
+  const module = current.value
+  if (!module || exporting.value) return
+  exporting.value = true
+  try {
+    const codes = request.fieldCodes?.length ? request.fieldCodes : module.columns.map(column => column.key)
+    const columns = module.columns
+      .filter(column => codes.includes(column.key))
+      .map(column => ({ key: column.key, label: fieldLabel(column), type: exportColumnType(column) }))
+    if (!columns.length) {
+      toast.add({ title: t('core.exportDialog.fieldRequired'), color: 'warning' })
+      return
+    }
+
+    let rows = result.value.all as unknown as Record<string, unknown>[]
+    if (request.scope === 'selected') {
+      const selected = new Set(Object.keys(rowSelection.value).filter(id => rowSelection.value[id]))
+      rows = rows.filter(row => selected.has(String(row.id)))
+    }
+    else if (request.scope === 'current_page') {
+      const start = pagination.value.pageIndex * pagination.value.pageSize
+      rows = rows.slice(start, start + pagination.value.pageSize)
+    }
+    // The export dialog's range narrows the already search/date-filtered rows.
+    if (dateField.value && (request.startDate || request.endDate)) {
+      const key = dateField.value
+      rows = rows.filter((row) => {
+        const value = String(row[key] ?? '').slice(0, 10)
+        if (!value) return false
+        if (request.startDate && value < request.startDate) return false
+        if (request.endDate && value > request.endDate) return false
+        return true
+      })
+    }
+
+    const exportRows = rows.map((row) => {
+      const out: Record<string, unknown> = {}
+      for (const column of columns) {
+        const value = row[column.key]
+        if (column.type === 'date') {
+          // Send ISO so Excel writes real dates and PDF formats consistently.
+          out[column.key] = String(value ?? '').slice(0, 10)
+        }
+        else if (column.type === 'money' || column.type === 'number') {
+          const numeric = Number(value)
+          out[column.key] = Number.isFinite(numeric) ? numeric : cellText(row, column.key)
+        }
+        else {
+          out[column.key] = cellText(row, column.key)
+        }
+      }
+      return out
+    })
+
+    await downloadTableExport({
+      title: moduleTitle(module),
+      format: request.format,
+      columns,
+      rows: exportRows,
+      subtitle: request.startDate || request.endDate
+        ? `${request.startDate || '…'} → ${request.endDate || '…'}`
+        : null,
+    })
+    toast.add({ title: t('core.exportDialog.exported', { n: exportRows.length }), color: 'success' })
+  }
+  catch (error: unknown) {
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('core.exportDialog.exportFailed'),
+        description: apiErrorMessage(error, t('core.exportDialog.exportFailed')),
+        color: 'error',
+      })
+    }
+  }
+  finally {
+    exporting.value = false
+  }
+}
+
 function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   const collection = current.value?.collection
   if (collection === 'sales') {
@@ -463,6 +565,17 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       label: t('app.ui.open'),
       icon: 'i-lucide-eye',
       onSelect: () => openRow(row),
+    })
+  }
+  // Delivery: one-click Processing → Completed for the whole note.
+  if (collection === 'deliveryNotes'
+    && canDeliver.value
+    && deliveryStatusOf(row as AppRecord) === 'Processing') {
+    items.push({
+      label: t('app.delivery.markCompleted'),
+      icon: 'i-lucide-circle-check',
+      color: 'success',
+      onSelect: () => { void completeDelivery(row) },
     })
   }
   if (collection === 'products' && canOperate.value) {
@@ -743,7 +856,7 @@ async function deleteIds(ids: string[]) {
   if (!current.value || !canDelete.value || !ids.length || busyId.value) return
   const collection = current.value.collection
   const deletable = ids.filter((id) => {
-    const row = result.value.all.find(item => String(item.id) === id)
+    const row = result.value.all.find(item => String(item.id) === id) as Record<string, unknown> | undefined
     return row ? canHardDeleteRecord(collection, row.status) : false
   })
   if (!deletable.length) {
@@ -818,6 +931,30 @@ async function setRowStatus(row: Record<string, unknown>, active: boolean) {
       title: t(active ? 'core.common.activated' : 'core.common.deactivated'),
       color: 'success',
     })
+  }
+  catch (error: unknown) {
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('app.ui.operationFailed'),
+        description: apiErrorMessage(error, t('app.ui.operationFailed')),
+        color: 'error',
+      })
+    }
+  }
+  finally {
+    busyId.value = ''
+  }
+}
+
+/** Delivery row action: move a Processing note to Completed (audited server-side). */
+async function completeDelivery(row: Record<string, unknown>) {
+  if (!row.id || busyId.value) return
+  const id = String(row.id)
+  busyId.value = id
+  try {
+    await deliveryCommands.setDeliveryStatus(id, 'Completed')
+    toast.add({ title: t('app.delivery.markedCompleted'), color: 'success' })
+    void store.reloadCollection('deliveryNotes')
   }
   catch (error: unknown) {
     if (!isApiErrorHandled(error)) {
@@ -934,13 +1071,14 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
   <div v-if="current" class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/20">
     <LayoutAppHeaderPageActions
       :can-create="canCreate"
-      :can-export="false"
-      :export-fields="[]"
-      :exporting="false"
+      :can-export="true"
+      :export-fields="exportFieldOptions"
+      :exporting="exporting"
       :create-label="t('app.ui.newEntity', { entity: moduleSingular(current) })"
       :refreshing="pending"
       @create="openCreate"
       @refresh="refresh"
+      @export="onExport"
     />
 
     <TableAppListTable

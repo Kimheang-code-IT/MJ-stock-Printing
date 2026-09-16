@@ -84,6 +84,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stock_pos}:${POSTGRES_PASSWORD:-stock_pos}@db:5432/${POSTGRES_DB:-stock_pos}
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-secret-change-me-in-production-0123456789abcdef}
+      # 24-hour access token so users stay signed in through the day.
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
       TELEGRAM_BOT_CLIENT_ID: ${TELEGRAM_BOT_CLIENT_ID:-stock-pos-telegram-bot}
       TELEGRAM_BOT_CLIENT_SECRET: ${TELEGRAM_BOT_CLIENT_SECRET:-dev-only-telegram-secret-change-me-0123456789abcdef}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}

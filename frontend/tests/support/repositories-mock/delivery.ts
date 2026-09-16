@@ -2,11 +2,12 @@ import type { AppRecord } from '~/config/admin-seed'
 import type {
   DeliveryCommandRepository,
   DeliveryNoteCreateInput,
+  DeliveryNoteFromSaleInput,
   DeliveryNoteUpdateInput,
 } from '~/repositories/contracts/entities'
 import { createId, mockLatency, nowIso } from '../mocks/query'
 import { mockInsert, mockUpdate, useMockDb } from '../mocks/db'
-import { normalizeDeliveryStatusInput, saleItemReservedQty, saleHasDeliverableLines } from '~/utils/delivery/notes'
+import { deliveryStatusOf, normalizeDeliveryStatusInput, saleItemReservedQty, saleHasDeliverableLines } from '~/utils/delivery/notes'
 
 /**
  * In-memory delivery-note commands mirroring the backend contract (spec
@@ -122,7 +123,8 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
         vehicleNo: input.vehicleNo || null,
         deliveryDate: input.deliveryDate || null,
         deliveredAt: null,
-        status: input.confirm ? 'Confirmed' : 'Draft',
+        // Simplified lifecycle: both draft and confirmed notes are Processing.
+        status: 'Processing',
         note: input.note || null,
         cancelReason: null,
         // Same normalized shape as the HTTP adapter of DeliveryNoteOut:
@@ -140,12 +142,36 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
       return mockLatency(note)
     },
 
+    async createDeliveryNoteFromSale(saleId: string, input: DeliveryNoteFromSaleInput = {}): Promise<AppRecord> {
+      const db = useMockDb()
+      const sale = db.collections.sales.find(row => String(row.id) === String(saleId))
+      if (!sale) throw new Error(`Sale not found: ${saleId}`)
+      const saleItems = Array.isArray(sale.items) ? sale.items as AppRecord[] : []
+      const lines = saleItems.flatMap((item) => {
+        const reserved = saleItemReservedQty(sale.id, item.id, db.collections.deliveryNotes)
+        const qty = Number(item.quantity || 0) - Number(item.returnedQuantity || 0) - reserved
+        return qty > 0
+          ? [{ saleId, saleItemId: String(item.id), productId: String(item.productId), qtyToDeliver: qty }]
+          : []
+      })
+      if (!lines.length) throw new Error('This sale has no remaining quantity to deliver')
+      return this.createDeliveryNote({
+        saleId,
+        deliveryPhone: input.deliveryPhone ?? null,
+        deliveryLocation: input.deliveryLocation ?? null,
+        deliveryFee: input.deliveryFee ?? null,
+        note: input.note ?? null,
+        confirm: input.confirm ?? false,
+        lines,
+      })
+    },
+
     async updateDeliveryNote(id: string, input: DeliveryNoteUpdateInput): Promise<AppRecord> {
       const db = useMockDb()
       const note = db.collections.deliveryNotes.find(row => String(row.id) === String(id))
       if (!note) throw new Error(`Delivery note not found: ${id}`)
-      if (String(note.status) !== 'Draft') {
-        throw new Error('Only draft delivery notes can be edited')
+      if (deliveryStatusOf(note) !== 'Processing') {
+        throw new Error('Only processing delivery notes can be edited')
       }
 
       const patch: Record<string, unknown> = {}
@@ -233,19 +259,18 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
       const note = db.collections.deliveryNotes.find(row => String(row.id) === String(id))
       if (!note) throw new Error(`Delivery note not found: ${id}`)
 
-      // Accepts UI labels ('Out for Delivery'), verb aliases ('deliver') and
-      // backend enums ('OUT_FOR_DELIVERY') — one transition service.
+      // Accepts UI labels, verb aliases ('deliver') and backend enums
+      // ('OUT_FOR_DELIVERY') — one transition service.
       const target = normalizeDeliveryStatusInput(status)
-      // Mirrors DELIVERY_TRANSITIONS (spec §2.1.9): Delivered/Cancelled are
-      // terminal; a cancel reason is mandatory.
+      // Mirrors DELIVERY_TRANSITIONS: Completed/Cancelled are terminal; a
+      // cancel reason is mandatory. Re-applying the current status is a no-op.
+      const current = deliveryStatusOf(note)
+      if (current === target) return mockLatency(note)
       const transitions: Record<string, string[]> = {
-        Draft: ['Confirmed', 'Cancelled'],
-        Confirmed: ['Out for Delivery', 'Delivered', 'Cancelled'],
-        'Out for Delivery': ['Delivered', 'Cancelled'],
-        Delivered: [],
+        Processing: ['Completed', 'Cancelled'],
+        Completed: [],
         Cancelled: [],
       }
-      const current = String(note.status || 'Draft')
       if (!transitions[current]?.includes(target)) {
         throw new Error(`Cannot move a ${current} delivery note to ${target}`)
       }
@@ -255,7 +280,7 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
       }
 
       const patch: Record<string, unknown> = { status: target }
-      if (target === 'Delivered') {
+      if (target === 'Completed') {
         patch.deliveredAt = nowIso()
         patch.items = (Array.isArray(note.items) ? note.items as AppRecord[] : []).map(line => ({
           ...line,

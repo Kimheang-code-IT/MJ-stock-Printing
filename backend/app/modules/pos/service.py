@@ -599,6 +599,17 @@ class POSService:
                 debt=sale.debt_amount,
                 cashier=actor.full_name,
                 item_count=len(item_rows),
+                customer_phone=getattr(customer, "phone", None),
+                items=[
+                    {
+                        "name": item.product_name,
+                        "quantity": str(item.quantity),
+                        "uom": item.uom_symbol or "",
+                        "unit_price": str(item.unit_price),
+                        "line_total": str(item.line_total),
+                    }
+                    for item in item_rows
+                ],
             )
         return sale_to_out(sale, customer_name=customer.name, change_amount=change_amount, items=item_rows)
 

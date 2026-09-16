@@ -39,7 +39,11 @@ async def test_pos_alias_prefills_note_from_one_sale(client):
 
     response = await client.post(
         f"/api/v1/pos/sales/{sale['id']}/delivery",
-        json={"delivery_phone": "012345678", "delivery_location": "Street 1, Phnom Penh"},
+        json={
+            "delivery_phone": "012345678",
+            "delivery_location": "Street 1, Phnom Penh",
+            "delivery_fee": "2.50",
+        },
         headers=headers,
     )
     assert response.status_code == 201, response.text
@@ -52,6 +56,8 @@ async def test_pos_alias_prefills_note_from_one_sale(client):
     assert note["sales"][0]["invoice_no"] == sale["invoice_no"]
     assert note["delivery_phone"] == "012345678"
     assert note["delivery_location"] == "Street 1, Phnom Penh"
+    # The invoice delivery price captured at POS is snapshotted onto the note.
+    assert Decimal(note["delivery_fee"]) == Decimal("2.50")
     assert len(note["items"]) == 1
     assert Decimal(note["items"][0]["qty_to_deliver"]) == Decimal("4.0000")
 

@@ -190,7 +190,7 @@ async def test_forgot_password_unlinked_account_gets_bot_link_then_code(client, 
 
     captured: list[tuple[str, str]] = []
 
-    async def fake_send(chat_id: str, text: str) -> bool:
+    async def fake_send(chat_id: str, text: str, **kwargs) -> bool:
         captured.append((chat_id, text))
         return True
 

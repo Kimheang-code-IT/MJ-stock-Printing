@@ -22,6 +22,21 @@ async def test_login_success_and_me(client):
     assert me.json()["data"]["email"] == ADMIN_EMAIL
 
 
+async def test_access_token_lasts_24_hours(client):
+    """Users stay signed in for a full day without re-authenticating."""
+    from app.core.security import decode_token
+
+    response = await _login(client)
+    assert response.status_code == 200
+    data = response.json()["data"]
+
+    payload = decode_token(data["access_token"], expected_type="access")
+    lifetime_seconds = int(payload["exp"]) - int(payload["iat"])
+    assert lifetime_seconds >= 24 * 3600 - 60
+    # The SPA receives the matching expires_in (seconds).
+    assert abs(int(data["expires_in"]) - lifetime_seconds) <= 1
+
+
 async def test_login_failure_and_logout_revocation(client):
     response = await _login(client, password="wrong-password")
     assert response.status_code == 401

@@ -696,33 +696,47 @@ class ReportsService:
     # ------------------------------------------------- finance entries (table)
 
     def _finance_income_stmt(self) -> select:
-        """Income rows derived from confirmed POS sales (never manually added)."""
-        latest_method = (
-            select(Payment.payment_method)
-            .where(Payment.sale_id == Sale.id, Payment.payment_type == "SALE_PAYMENT")
-            .order_by(Payment.created_at.desc(), Payment.id)
-            .limit(1)
-            .correlate(Sale)
-            .scalar_subquery()
-        )
+        """Income rows = customer cash actually received (never manually added).
+
+        Cash-basis: the tender taken at checkout (`SALE_PAYMENT`) plus every
+        later customer-debt collection (`CUSTOMER_DEBT_PAYMENT`). A credit sale
+        only becomes income when the customer pays, so unpaid debt never
+        inflates income and collections always show as their own row."""
+        sale = aliased(Sale)
+        debt = aliased(CustomerDebt)
+        debt_sale = aliased(Sale)
         return (
             select(
-                Sale.id.label("id"),
-                Sale.sale_date.label("entry_date"),
+                Payment.id.label("id"),
+                Payment.created_at.label("entry_date"),
                 literal("income", type_=String).label("entry_type"),
-                Sale.invoice_no.label("reference"),
-                literal("Sales", type_=String).label("category"),
+                func.coalesce(
+                    sale.invoice_no,
+                    Payment.reference_no,
+                    debt_sale.invoice_no,
+                    Payment.payment_no,
+                ).label("reference"),
+                case(
+                    (Payment.payment_type == "SALE_PAYMENT", literal("Sales")),
+                    else_=literal("Customer Payment"),
+                ).label("category"),
                 func.coalesce(Customer.name, literal("")).label("description"),
-                Sale.grand_total.label("amount"),
-                Sale.currency.label("currency"),
-                Sale.exchange_rate.label("exchange_rate"),
-                func.coalesce(latest_method, literal("UNPAID")).label("payment_method"),
+                Payment.amount.label("amount"),
+                # Payment has no currency of its own: inherit the sale's
+                # document currency (directly, or via the debt it settles).
+                func.coalesce(sale.currency, debt_sale.currency, literal("USD")).label("currency"),
+                func.coalesce(sale.exchange_rate, debt_sale.exchange_rate, literal(1)).label("exchange_rate"),
+                Payment.payment_method.label("payment_method"),
                 func.coalesce(User.full_name, literal("")).label("created_by_name"),
-                Sale.created_at.label("created_at"),
+                Payment.created_at.label("created_at"),
             )
-            .select_from(Sale)
-            .join(Customer, Customer.id == Sale.customer_id)
-            .join(User, User.id == Sale.cashier_id)
+            .select_from(Payment)
+            .outerjoin(sale, sale.id == Payment.sale_id)
+            .outerjoin(Customer, Customer.id == Payment.customer_id)
+            .outerjoin(User, User.id == Payment.created_by)
+            .outerjoin(debt, debt.id == Payment.customer_debt_id)
+            .outerjoin(debt_sale, debt_sale.id == debt.sale_id)
+            .where(Payment.payment_type.in_(("SALE_PAYMENT", "CUSTOMER_DEBT_PAYMENT")))
         )
 
     def _finance_expense_stmt(self) -> select:

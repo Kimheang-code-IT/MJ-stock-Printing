@@ -56,11 +56,29 @@ async def test_users_crud_and_password_reset(client):
 
     patched = await client.patch(
         f"/api/v1/admin/users/{user_id}",
-        json={"full_name": "Renamed User", "telegram_chat_id": "555444333"},
+        json={
+            "full_name": "Renamed User",
+            "telegram_chat_id": "555444333",
+            "telegram_name": "Sokha @sokha",
+        },
         headers=headers,
     )
     assert patched.status_code == 200
-    assert patched.json()["data"]["full_name"] == "Renamed User"
+    data = patched.json()["data"]
+    assert data["full_name"] == "Renamed User"
+    assert data["telegram_name"] == "Sokha @sokha"
+    assert data["telegram_chat_id"] == "555444333"
+    # A Chat ID entered by an administrator is trusted and marked verified so
+    # notifications/reset codes start working immediately.
+    assert data["telegram_verified"] is True
+
+    # Clearing the Chat ID unlinks the chat and removes verification.
+    cleared = await client.patch(
+        f"/api/v1/admin/users/{user_id}", json={"telegram_chat_id": ""}, headers=headers
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["data"]["telegram_chat_id"] is None
+    assert cleared.json()["data"]["telegram_verified"] is False
 
     # Duplicate email rejected
     dup = await client.post(

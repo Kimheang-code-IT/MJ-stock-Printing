@@ -168,6 +168,7 @@ class SupplierService:
             payment_method=payment.payment_method,
             remaining=debt.remaining_amount,
             cashier=actor.full_name,
+            currency=debt.currency,
         )
         return payment
 
@@ -252,6 +253,7 @@ class SupplierService:
             payment_method=payload.payment_method,
             remaining=total_outstanding - amount,
             cashier=actor.full_name,
+            currency=open_debts[0].currency if open_debts else "USD",
         )
         return payments
 

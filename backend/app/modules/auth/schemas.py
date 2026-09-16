@@ -35,6 +35,7 @@ class UserOut(BaseModel):
     full_name: str
     email: EmailStr
     telegram_chat_id: str | None
+    telegram_name: str | None = None
     telegram_verified: bool
     status: str
     role: str | None = None
@@ -60,6 +61,7 @@ def auth_user_payload(user) -> dict:
             "name": data["full_name"],
             "telegramLinked": bool(data["telegram_verified"] and data["telegram_chat_id"]),
             "telegramChatId": data["telegram_chat_id"],
+            "telegramName": data.get("telegram_name"),
             "effectivePermissions": list(data["permissions"]),
         }
     )

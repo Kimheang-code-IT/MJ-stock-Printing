@@ -114,6 +114,10 @@ class DeliveryNoteFromSaleCreate(BaseModel):
     driver_name: str | None = Field(
         default=None, max_length=120, validation_alias=AliasChoices("driver_name", "driverName")
     )
+    # Delivery price captured at POS checkout (the invoice already charged it).
+    delivery_fee: Decimal | None = Field(
+        default=None, ge=0, validation_alias=AliasChoices("delivery_fee", "deliveryFee")
+    )
     note: str | None = None
     confirm: bool = False
     lines: list[DeliveryNoteLineCreate] | None = Field(

@@ -5,9 +5,8 @@ settings-gated, post-commit, best-effort (never rolls back the business
 transaction) and text-only — no invoice files/PDFs are ever sent.
 """
 
-import uuid
 from decimal import Decimal
-from datetime import date
+from datetime import datetime, timezone
 
 import pytest
 
@@ -36,7 +35,7 @@ def captured_sends(monkeypatch):
     """Capture every Telegram broadcast at the client boundary."""
     sent: list[tuple[str, str]] = []
 
-    async def fake_send(chat_id: str, text: str) -> bool:
+    async def fake_send(chat_id: str, text: str, **kwargs) -> bool:
         sent.append((chat_id, text))
         return True
 
@@ -85,9 +84,12 @@ async def test_sale_notification_sent_after_commit(client, captured_sends, db_se
     chat_id, text = captured_sends[0]
     assert chat_id == "12345"
     assert sale["invoice_no"] in text
-    assert "New Sale" in text
-    assert "Currency: USD" in text
-    # No invoice files/PDFs — plain text only.
+    # Receipt-style card: emoji + bold title, products section, HTML parse mode.
+    assert "New Checkout Completed" in text
+    assert text.startswith("\U0001f9fe")
+    assert "Products:" in text
+    assert "Notify Widget" in text
+    # No invoice files/PDFs — text only.
     assert ".pdf" not in text.lower()
 
 
@@ -133,8 +135,9 @@ async def test_khr_sale_notification_keeps_currency(client, captured_sends, db_s
 
     assert len(captured_sends) == 1
     _, text = captured_sends[0]
-    assert "Currency: KHR" in text
-    assert "4100" in text
+    # KHR amounts keep their own currency symbol — never shown as USD.
+    assert "\u17db" in text
+    assert "$" not in text
 
 
 @pytest.mark.asyncio
@@ -187,8 +190,9 @@ async def test_purchase_notification_sent(client, captured_sends, db_session):
 
     assert len(captured_sends) == 1
     _, text = captured_sends[0]
-    assert "Stock In" in text
+    assert "Stock In Received" in text
     assert document_no in text
+    assert "Purchase Widget" in text
 
 
 @pytest.mark.asyncio
@@ -286,7 +290,7 @@ async def test_daily_summary_totals_never_mix_currencies(client, captured_sends,
     from app.shared.telegram.service import daily_summary_totals
 
     async with SessionFactory() as session:
-        summary = await daily_summary_totals(session, day=date.today())
+        summary = await daily_summary_totals(session, day=datetime.now(timezone.utc).date())
 
     assert summary["sales"]["USD"]["count"] >= 1
     assert Decimal(summary["sales"]["USD"]["total"]) >= Decimal("15.00")
@@ -315,11 +319,12 @@ async def test_daily_summary_format_separates_currencies():
             "out_of_stock_count": 1,
         }
     )
+    assert "Daily Summary" in text
     assert "Sales: 5" in text
-    assert "USD sales: 45.00" in text
-    assert "KHR sales: 82000.00" in text
+    assert "USD Sales: 45.00" in text
+    assert "KHR Sales: 82000.00" in text
     assert "Purchases: 1" in text
-    assert "USD purchases: 100.00" in text
+    assert "USD Purchases: 100.00" in text
     assert "Customer debt outstanding: 12.00" in text
     assert "Pending deliveries: 2" in text
     assert "Out-of-stock products: 1" in text
@@ -338,12 +343,12 @@ async def test_daily_summary_send_gated_and_delivered(client, captured_sends, db
     monkeypatch.setattr(app_settings, "telegram_enabled", True)
 
     async with SessionFactory() as session:
-        result = await send_daily_summary(session, day=date.today())
+        result = await send_daily_summary(session, day=datetime.now(timezone.utc).date())
     assert result == {"enabled": False, "sent": 0}
 
     await _enable(db_session, "daily_summary_enabled")
     async with SessionFactory() as session:
-        result = await send_daily_summary(session, day=date.today())
+        result = await send_daily_summary(session, day=datetime.now(timezone.utc).date())
     assert result["enabled"] is True
     assert result["sent"] == 1
     assert "Daily Summary" in captured_sends[0][1]
@@ -370,7 +375,7 @@ async def test_test_notification_endpoint(client, captured_sends, db_session, mo
     data = response.json()["data"]
     assert data["enabled"] is True
     assert data["sent"] == 1
-    assert "test notification" in captured_sends[0][1]
+    assert "Test Notification" in captured_sends[0][1]
 
 
 # ------------------------------------------------------------------ formatters
@@ -398,14 +403,14 @@ def test_sale_formatter_renders_fields_in_app_timezone():
         },
         timezone_name="Asia/Phnom_Penh",
     )
-    assert "Invoice: INV-000001" in text
+    assert "New Checkout Completed" in text
+    assert "Invoice ID: INV-000001" in text
     assert "Date: 2026-09-04 19:00:00" in text  # UTC+07 conversion
     assert "Customer: Dara" in text
-    assert "Items: 3" in text
-    assert "Total: 29.00" in text
-    assert "Paid: 29.00" in text
-    assert "Method: CASH" in text
-    assert "Cashier: Sok" in text
+    assert "<b>Total: $29.00</b>" in text
+    assert "Paid: $29.00" in text
+    assert "Payment: Cash" in text
+    assert "By: Sok" in text
 
 
 def test_purchase_formatter_renders_fields():
@@ -429,9 +434,40 @@ def test_purchase_formatter_renders_fields():
         },
         timezone_name="Asia/Phnom_Penh",
     )
+    assert "Stock In Received" in text
     assert "Document: STI-000001" in text
     assert "Supplier: Angkor Wholesale" in text
-    assert "Currency: KHR" in text
-    assert "Items: 4" in text
-    assert "Total: 400000.00" in text
-    assert "Recorded by: Sok" in text
+    assert "<b>Total: \u17db400000.00</b>" in text
+    assert "By: Sok" in text
+
+
+def test_formatters_render_khmer_labels_and_products():
+    """The Settings notification language switches every card to Khmer."""
+    from app.shared.telegram.service import format_sale_text
+
+    text = format_sale_text(
+        {
+            "invoice_no": "INV-000009",
+            "occurred_at": "2026-09-04T12:00:00+00:00",
+            "customer": None,
+            "currency": "USD",
+            "subtotal": "10.00",
+            "discount": "0.00",
+            "delivery_price": "0.00",
+            "total": "10.00",
+            "paid": "10.00",
+            "payment_method": "CASH",
+            "debt": "0.00",
+            "cashier": "Sok",
+            "items": [
+                {"name": "Paracetamol", "quantity": "2.0000", "uom": "pcs", "unit_price": "5.00", "line_total": "10.00"}
+            ],
+        },
+        lang="km",
+    )
+    # Title, walk-in label and Products heading are in Khmer.
+    assert "\u1780\u17b6\u179a\u179b\u1780\u17cb\u1794\u17b6\u1793\u179f\u1798\u17d2\u179a\u17c1\u1785" in text
+    assert "\u17a2\u178f\u17b7\u1790\u17b7\u1787\u1793\u1791\u17bc\u1791\u17c5" in text
+    assert "\u1791\u17c6\u1793\u17b7\u1789:" in text
+    # Decimals are trimmed in product rows.
+    assert "Paracetamol 2 pcs @ $5.00 = $10.00" in text

@@ -57,6 +57,7 @@ def user_to_out(user: User) -> UserOut:
         full_name=user.full_name,
         email=user.email,
         telegram_chat_id=user.telegram_chat_id,
+        telegram_name=user.telegram_name,
         telegram_verified=user.telegram_verified,
         status=user.status,
         role=user.role_ref.name if user.role_ref else None,

@@ -70,6 +70,9 @@ export const ApiEndpoints = {
   REPORT_SALE_RETURNS: '/api/v1/reports/sale-returns',
   REPORT_PURCHASE_RETURNS: '/api/v1/reports/purchase-returns',
 
+  /** Generic Excel/PDF export: the page posts its filtered rows for download. */
+  EXPORT_TABLE: '/api/v1/export/table',
+
   DELIVERY_NOTES: '/api/v1/delivery',
   DELIVERY_NOTE: (id: string) => `/api/v1/delivery/${id}`,
   DELIVERY_NOTE_STATUS: (id: string) => `/api/v1/delivery/${id}/status`,

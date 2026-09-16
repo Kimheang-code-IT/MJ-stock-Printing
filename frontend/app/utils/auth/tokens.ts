@@ -1,9 +1,12 @@
 /**
  * Client-only bearer token storage.
  *
- * Tokens live in sessionStorage (per tab) and are mirrored into module memory so
- * `useApi()` can attach the Authorization header without async storage reads.
- * Tokens never enter the readable `auth_user` cookie/localStorage profile.
+ * Tokens persist in localStorage so a page refresh or a full browser restart
+ * keeps the user signed in until the server-issued token actually expires
+ * (access token = 24h; a rotating refresh token extends it seamlessly). A
+ * module-level memory mirror lets `useApi()` attach the Authorization header
+ * without async storage reads. Tokens never enter the readable `auth_user`
+ * cookie/localStorage *profile* — only these dedicated keys.
  */
 
 const ACCESS_KEY = 'stockpos:auth:access-token'
@@ -15,7 +18,7 @@ let memoryRefresh: string | null = null
 function readSession(key: string): string | null {
   if (!import.meta.client) return null
   try {
-    return sessionStorage.getItem(key)
+    return localStorage.getItem(key)
   }
   catch {
     return null
@@ -25,8 +28,8 @@ function readSession(key: string): string | null {
 function writeSession(key: string, value: string | null) {
   if (!import.meta.client) return
   try {
-    if (value) sessionStorage.setItem(key, value)
-    else sessionStorage.removeItem(key)
+    if (value) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
   }
   catch {
     // Storage may be unavailable (private mode); memory mirror still works.

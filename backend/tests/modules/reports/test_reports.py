@@ -475,6 +475,8 @@ async def test_purchase_report_shows_paid_and_remaining(client):
     assert Decimal(row["paid_amount"]) == Decimal("5.00")
     assert Decimal(row["remaining_debt"]) == Decimal("15.00")
     assert row["status"] == "PARTIAL"
+    # Tender of the stock-in payment must survive response serialization.
+    assert row["payment_method"] == "CASH"
 
     # Status filter.
     confirmed = await client.get(

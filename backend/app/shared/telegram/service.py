@@ -16,6 +16,7 @@ test message. Rules:
 
 from __future__ import annotations
 
+import html
 import logging
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -30,6 +31,154 @@ from app.modules.auth.models import User
 logger = logging.getLogger("stock_pos.telegram")
 
 Sender = callable
+
+# ------------------------------------------------------- bilingual text tables
+#
+# Receipt-style notification cards (Telegram HTML). The language is the
+# `telegram.notification_language` setting (English by default) so an operator
+# can switch every bot message to Khmer from Settings.
+
+_EMOJI = {
+    "sale": "🧾",
+    "purchase": "📥",
+    "payment": "💵",
+    "supplier_payment": "💸",
+    "daily": "📊",
+    "test": "✅",
+}
+
+_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "sale": "New Checkout Completed",
+        "purchase": "Stock In Received",
+        "payment": "Debt Payment Received",
+        "supplier_payment": "Supplier Payment",
+        "daily": "Daily Summary",
+        "test": "Test Notification",
+        "invoice_id": "Invoice ID",
+        "document": "Document",
+        "customer": "Customer",
+        "supplier": "Supplier",
+        "phone": "Phone",
+        "payment_method": "Payment",
+        "delivery": "Delivery",
+        "products": "Products",
+        "subtotal": "Subtotal",
+        "delivery_fee": "Delivery Fee",
+        "discount": "Discount",
+        "tax": "Tax",
+        "total": "Total",
+        "paid": "Paid",
+        "debt": "Debt",
+        "remaining": "Remaining debt",
+        "date": "Date",
+        "by": "By",
+        "walkin": "Walk-in Customer",
+        "sales": "Sales",
+        "purchases": "Purchases",
+        "customer_debt": "Customer debt outstanding",
+        "supplier_debt": "Supplier debt outstanding",
+        "delivered": "Delivered",
+        "pending_deliveries": "Pending deliveries",
+        "out_of_stock": "Out-of-stock products",
+    },
+    "km": {
+        "sale": "ការលក់បានសម្រេច",
+        "purchase": "ទទួលស្តុកចូល",
+        "payment": "ទទួលប្រាក់បង់បំណុល",
+        "supplier_payment": "ការបង់ប្រាក់ទៅអ្នកផ្គត់ផ្គង់",
+        "daily": "សេចក្តីសង្ខេបប្រចាំថ្ងៃ",
+        "test": "សារសាកល្បង",
+        "invoice_id": "លេខវិក្កយបត្រ",
+        "document": "ឯកសារ",
+        "customer": "អតិថិជន",
+        "supplier": "អ្នកផ្គត់ផ្គង់",
+        "phone": "ទូរស័ព្ទ",
+        "payment_method": "ការបង់ប្រាក់",
+        "delivery": "ដឹកជញ្ជូន",
+        "products": "ទំនិញ",
+        "subtotal": "សរុបរង",
+        "delivery_fee": "តម្លៃដឹកជញ្ជូន",
+        "discount": "បញ្ចុះតម្លៃ",
+        "tax": "ពន្ធ",
+        "total": "សរុប",
+        "paid": "បានបង់",
+        "debt": "បំណុល",
+        "remaining": "បំណុលនៅសល់",
+        "date": "កាលបរិច្ឆេទ",
+        "by": "ដោយ",
+        "walkin": "អតិថិជនទូទៅ",
+        "sales": "ការលក់",
+        "purchases": "ការទិញ",
+        "customer_debt": "បំណុលអតិថិជននៅសល់",
+        "supplier_debt": "បំណុលអ្នកផ្គត់ផ្គង់នៅសល់",
+        "delivered": "បានដឹកជញ្ជូន",
+        "pending_deliveries": "ការដឹកជញ្ជូនកំពុងរង់ចាំ",
+        "out_of_stock": "ទំនិញអស់ស្តុក",
+    },
+}
+
+_METHOD_LABELS: dict[str, dict[str, str]] = {
+    "en": {"CASH": "Cash", "BANK_QR": "Bank/QR", "CUSTOMER_DEBT": "Credit"},
+    "km": {"CASH": "សាច់ប្រាក់", "BANK_QR": "ធនាគារ/QR", "CUSTOMER_DEBT": "ជំពាក់"},
+}
+
+
+def normalize_language(value) -> str:
+    """Map any stored setting value onto a supported message language."""
+    return "km" if str(value or "").strip().lower() == "km" else "en"
+
+
+def _esc(value) -> str:
+    """Escape dynamic text for Telegram HTML parse mode."""
+    return html.escape(str(value if value is not None else ""), quote=False)
+
+
+def _method_label(method, lang: str) -> str:
+    raw = str(method or "").upper()
+    return _METHOD_LABELS[lang].get(raw, raw or "-")
+
+
+def _money(amount, currency) -> str:
+    text = str(amount if amount is not None else "").strip()
+    if not text:
+        return "-"
+    try:
+        value = f"{Decimal(text):.2f}"
+    except (ValueError, ArithmeticError):
+        value = text
+    return f"${value}" if str(currency or "USD").upper() == "USD" else f"៛{value}"
+
+
+def _nonzero(value) -> bool:
+    try:
+        return Decimal(str(value or "0")) != 0
+    except (ValueError, ArithmeticError):
+        return False
+
+
+def _fmt_qty(value) -> str:
+    """Trim trailing zeros on a decimal quantity (2.0000 → 2)."""
+    try:
+        return format(Decimal(str(value)).normalize(), "f")
+    except (ValueError, ArithmeticError):
+        return str(value if value is not None else "-")
+
+
+def _product_lines(items, currency, label: dict) -> list[str]:
+    """Numbered product rows shared by the sale and purchase cards."""
+    if not items:
+        return []
+    lines = ["", f"<b>{label['products']}:</b>"]
+    for index, item in enumerate(items, start=1):
+        name = _esc(item.get("name") or "-")
+        quantity = _fmt_qty(item.get("quantity"))
+        unit = str(item.get("uom") or "").strip()
+        quantity_text = f"{quantity} {unit}".strip()
+        price = _money(item.get("unit_price", item.get("unit_cost")), currency)
+        line_total = _money(item.get("line_total"), currency)
+        lines.append(f"{index}. {name} {quantity_text} @ {price} = {line_total}")
+    return lines
 
 
 async def telegram_enabled(session: AsyncSession) -> bool:
@@ -76,7 +225,14 @@ async def _broadcast(session: AsyncSession, text: str, *, sender=None) -> int:
 async def _default_sender(chat_id: str, text: str) -> bool:
     from app.shared.telegram.client import send_message
 
-    return await send_message(chat_id, text)
+    # Notification cards use Telegram HTML (bold titles, monospace codes).
+    return await send_message(chat_id, text, parse_mode="HTML")
+
+
+async def notification_language(session: AsyncSession) -> str:
+    """Active message language from Settings (`telegram.notification_language`)."""
+    value = await get_setting_value(session, "telegram", "notification_language", "en")
+    return normalize_language(value)
 
 
 def _local_today(session_tz: str) -> date:
@@ -104,6 +260,8 @@ async def notify_sale(
     debt,
     cashier: str | None,
     item_count: int,
+    customer_phone: str | None = None,
+    items: list[dict] | None = None,
     sender=None,
 ) -> bool:
     """Sale notification (after commit). Never raises."""
@@ -118,6 +276,7 @@ async def notify_sale(
                 "invoice_no": invoice_no,
                 "occurred_at": occurred_at.isoformat(),
                 "customer": customer,
+                "customer_phone": customer_phone,
                 "currency": currency,
                 "exchange_rate": str(exchange_rate),
                 "subtotal": str(subtotal),
@@ -129,8 +288,10 @@ async def notify_sale(
                 "debt": str(debt),
                 "cashier": cashier,
                 "item_count": item_count,
+                "items": items or [],
             },
             timezone_name=str(tz_name or "UTC"),
+            lang=await notification_language(session),
         )
         sent = await _broadcast(session, text, sender=sender)
         return sent > 0
@@ -155,6 +316,7 @@ async def notify_purchase(
     debt,
     user: str | None,
     item_count: int,
+    items: list[dict] | None = None,
     sender=None,
 ) -> bool:
     """Stock In (purchase) notification (after commit). Never raises."""
@@ -179,8 +341,10 @@ async def notify_purchase(
                 "debt": str(debt),
                 "user": user,
                 "item_count": item_count,
+                "items": items or [],
             },
             timezone_name=str(tz_name or "UTC"),
+            lang=await notification_language(session),
         )
         sent = await _broadcast(session, text, sender=sender)
         return sent > 0
@@ -200,6 +364,7 @@ async def notify_payment_text(
     payment_method: str,
     remaining,
     cashier: str | None,
+    currency: str = "USD",
     sender=None,
 ) -> bool:
     """Debt-payment text notification (after commit). Never raises.
@@ -218,6 +383,7 @@ async def notify_payment_text(
                 "payment_no": payment_no,
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
                 "customer": customer,
+                "currency": currency,
                 "total": str(total),
                 "paid": str(paid),
                 "payment_method": payment_method,
@@ -225,6 +391,7 @@ async def notify_payment_text(
                 "cashier": cashier,
             },
             timezone_name=str(tz_name or "UTC"),
+            lang=await notification_language(session),
         )
         sent = await _broadcast(session, text, sender=sender)
         return sent > 0
@@ -244,6 +411,7 @@ async def notify_supplier_payment_text(
     payment_method: str,
     remaining,
     cashier: str | None,
+    currency: str = "USD",
     sender=None,
 ) -> bool:
     """Supplier debt-payment text notification (after commit). Never raises.
@@ -261,6 +429,7 @@ async def notify_supplier_payment_text(
                 "payment_no": payment_no,
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
                 "supplier": supplier,
+                "currency": currency,
                 "total": str(total),
                 "paid": str(paid),
                 "payment_method": payment_method,
@@ -268,6 +437,7 @@ async def notify_supplier_payment_text(
                 "cashier": cashier,
             },
             timezone_name=str(tz_name or "UTC"),
+            lang=await notification_language(session),
         )
         sent = await _broadcast(session, text, sender=sender)
         return sent > 0
@@ -281,11 +451,13 @@ async def send_test_notification(session: AsyncSession, *, sender=None) -> dict:
     if not await telegram_enabled(session):
         return {"enabled": False, "sent": 0, "recipients": 0}
     tz_name = await get_setting_value(session, "system", "timezone", "UTC")
+    lang = await notification_language(session)
+    label = _LABELS[lang]
     text = (
-        "Stock & POS — test notification\n"
-        f"Time: {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
-        f"Timezone: {tz_name}\n"
-        "Telegram notifications are configured correctly."
+        f"{_EMOJI['test']} <b>{label['test']}</b>\n\n"
+        f"Stock & POS\n"
+        f"{label['date']}: {_esc(datetime.now(timezone.utc).isoformat(timespec='seconds'))}\n"
+        f"Timezone: {_esc(tz_name)}"
     )
     chats = await recipients(session)
     sent = await _broadcast(session, text, sender=sender)
@@ -309,96 +481,124 @@ def _stamp(raw: str, timezone_name: str) -> str:
         return str(raw)
 
 
-def format_sale_text(payload: dict, *, timezone_name: str = "UTC") -> str:
-    """Plain-text sale summary. Never includes invoice files/PDFs."""
-    lines = ["Stock & POS — New Sale"]
-    lines.append(f"Invoice: {payload.get('invoice_no', '-')}")
-    lines.append(f"Date: {_stamp(payload.get('occurred_at', ''), timezone_name)}")
-    lines.append(f"Customer: {payload.get('customer') or 'Walk-in Customer'}")
+def format_sale_text(payload: dict, *, timezone_name: str = "UTC", lang: str = "en") -> str:
+    """Receipt-style HTML sale card. Never includes invoice files/PDFs."""
+    lang = normalize_language(lang)
+    label = _LABELS[lang]
     currency = payload.get("currency") or "USD"
-    rate = payload.get("exchange_rate") or "1"
-    if currency != "USD" and Decimal(str(rate)) != Decimal("1"):
-        lines.append(f"Currency: {currency} (rate {rate})")
-    else:
-        lines.append(f"Currency: {currency}")
-    if payload.get("item_count") is not None:
-        lines.append(f"Items: {payload['item_count']}")
+    lines = [f"{_EMOJI['sale']} <b>{label['sale']}</b>", ""]
+    lines.append(f"{label['invoice_id']}: {_esc(payload.get('invoice_no', '-'))}")
+    lines.append(f"{label['customer']}: {_esc(payload.get('customer') or label['walkin'])}")
+    if payload.get("customer_phone"):
+        lines.append(f"{label['phone']}: {_esc(payload['customer_phone'])}")
+    lines.append(
+        f"{label['payment_method']}: {_esc(_method_label(payload.get('payment_method'), lang))}"
+    )
+    if _nonzero(payload.get("delivery_price")):
+        lines.append(f"{label['delivery']}: {_money(payload['delivery_price'], currency)}")
+
+    lines.extend(_product_lines(payload.get("items"), currency, label))
+
+    lines.append("")
     if payload.get("subtotal") is not None:
-        lines.append(f"Subtotal: {payload['subtotal']}")
-    if payload.get("discount") is not None and Decimal(payload["discount"] or "0") != 0:
-        lines.append(f"Discount: {payload['discount']}")
-    if payload.get("delivery_price") is not None and Decimal(payload["delivery_price"] or "0") != 0:
-        lines.append(f"Delivery: {payload['delivery_price']}")
-    lines.append(f"Total: {payload.get('total', '-')}")
-    lines.append(f"Paid: {payload.get('paid', '-')}")
-    lines.append(f"Method: {payload.get('payment_method', '-')}")
-    if payload.get("debt") is not None and Decimal(payload["debt"] or "0") > 0:
-        lines.append(f"Debt: {payload['debt']}")
+        lines.append(f"{label['subtotal']}: {_money(payload['subtotal'], currency)}")
+    if _nonzero(payload.get("delivery_price")):
+        lines.append(f"{label['delivery_fee']}: {_money(payload['delivery_price'], currency)}")
+    if _nonzero(payload.get("discount")):
+        lines.append(f"{label['discount']}: {_money(payload['discount'], currency)}")
+    lines.append(f"<b>{label['total']}: {_money(payload.get('total'), currency)}</b>")
+    if payload.get("paid") is not None:
+        lines.append(f"{label['paid']}: {_money(payload['paid'], currency)}")
+    if _nonzero(payload.get("debt")):
+        lines.append(f"{label['debt']}: {_money(payload['debt'], currency)}")
+    lines.append("")
+    lines.append(f"{label['date']}: {_esc(_stamp(payload.get('occurred_at', ''), timezone_name))}")
     if payload.get("cashier"):
-        lines.append(f"Cashier: {payload['cashier']}")
+        lines.append(f"{label['by']}: {_esc(payload['cashier'])}")
     return "\n".join(lines)
 
 
-def format_purchase_text(payload: dict, *, timezone_name: str = "UTC") -> str:
-    """Plain-text purchase (Stock In) summary."""
-    lines = ["Stock & POS — Stock In"]
-    lines.append(f"Document: {payload.get('document_no', '-')}")
-    lines.append(f"Date: {_stamp(payload.get('occurred_at', ''), timezone_name)}")
-    if payload.get("supplier"):
-        lines.append(f"Supplier: {payload['supplier']}")
+def format_purchase_text(payload: dict, *, timezone_name: str = "UTC", lang: str = "en") -> str:
+    """Receipt-style HTML purchase (Stock In) card."""
+    lang = normalize_language(lang)
+    label = _LABELS[lang]
     currency = payload.get("currency") or "USD"
-    lines.append(f"Currency: {currency}")
-    if payload.get("item_count") is not None:
-        lines.append(f"Items: {payload['item_count']}")
+    lines = [f"{_EMOJI['purchase']} <b>{label['purchase']}</b>", ""]
+    lines.append(f"{label['document']}: {_esc(payload.get('document_no', '-'))}")
+    if payload.get("supplier"):
+        lines.append(f"{label['supplier']}: {_esc(payload['supplier'])}")
+
+    lines.extend(_product_lines(payload.get("items"), currency, label))
+
+    lines.append("")
     if payload.get("subtotal") is not None:
-        lines.append(f"Subtotal: {payload['subtotal']}")
-    if payload.get("discount") is not None and Decimal(payload["discount"] or "0") != 0:
-        lines.append(f"Discount: {payload['discount']}")
-    if payload.get("tax") is not None and Decimal(payload["tax"] or "0") != 0:
-        lines.append(f"Tax: {payload['tax']}")
-    lines.append(f"Total: {payload.get('total', '-')}")
-    lines.append(f"Paid: {payload.get('paid', '-')}")
-    if payload.get("debt") is not None and Decimal(payload["debt"] or "0") > 0:
-        lines.append(f"Supplier debt: {payload['debt']}")
+        lines.append(f"{label['subtotal']}: {_money(payload['subtotal'], currency)}")
+    if _nonzero(payload.get("discount")):
+        lines.append(f"{label['discount']}: {_money(payload['discount'], currency)}")
+    if _nonzero(payload.get("tax")):
+        lines.append(f"{label['tax']}: {_money(payload['tax'], currency)}")
+    lines.append(f"<b>{label['total']}: {_money(payload.get('total'), currency)}</b>")
+    if payload.get("paid") is not None:
+        lines.append(f"{label['paid']}: {_money(payload['paid'], currency)}")
+    if _nonzero(payload.get("debt")):
+        lines.append(f"{label['debt']}: {_money(payload['debt'], currency)}")
+    lines.append("")
+    lines.append(f"{label['date']}: {_esc(_stamp(payload.get('occurred_at', ''), timezone_name))}")
     if payload.get("user"):
-        lines.append(f"Recorded by: {payload['user']}")
+        lines.append(f"{label['by']}: {_esc(payload['user'])}")
     return "\n".join(lines)
 
 
-def format_payment_text(payload: dict, *, timezone_name: str = "UTC") -> str:
-    """Plain-text debt-payment summary (no invoice files — text only)."""
-    lines = ["Stock & POS — Debt Payment"]
-    lines.append(f"Invoice: {payload.get('invoice_no', '-')}")
+def format_payment_text(payload: dict, *, timezone_name: str = "UTC", lang: str = "en") -> str:
+    """Receipt-style HTML customer debt-payment card (text only)."""
+    lang = normalize_language(lang)
+    label = _LABELS[lang]
+    currency = payload.get("currency") or "USD"
+    lines = [f"{_EMOJI['payment']} <b>{label['payment']}</b>", ""]
+    lines.append(f"{label['invoice_id']}: {_esc(payload.get('invoice_no', '-'))}")
     if payload.get("payment_no"):
-        lines.append(f"Payment: {payload['payment_no']}")
-    lines.append(f"Date: {_stamp(payload.get('occurred_at', ''), timezone_name)}")
-    lines.append(f"Customer: {payload.get('customer') or 'Walk-in Customer'}")
-    lines.append(f"Total: {payload.get('total', '-')}")
-    lines.append(f"Paid: {payload.get('paid', '-')}")
-    lines.append(f"Method: {payload.get('payment_method', '-')}")
+        lines.append(f"{label['document']}: {_esc(payload['payment_no'])}")
+    lines.append(f"{label['customer']}: {_esc(payload.get('customer') or label['walkin'])}")
+    lines.append(
+        f"{label['payment_method']}: {_esc(_method_label(payload.get('payment_method'), lang))}"
+    )
+    lines.append("")
+    lines.append(f"<b>{label['paid']}: {_money(payload.get('paid'), currency)}</b>")
+    if payload.get("total") is not None:
+        lines.append(f"{label['total']}: {_money(payload['total'], currency)}")
     if payload.get("remaining") is not None:
-        lines.append(f"Remaining debt: {payload['remaining']}")
+        lines.append(f"{label['remaining']}: {_money(payload['remaining'], currency)}")
+    lines.append("")
+    lines.append(f"{label['date']}: {_esc(_stamp(payload.get('occurred_at', ''), timezone_name))}")
     if payload.get("cashier"):
-        lines.append(f"Cashier: {payload['cashier']}")
+        lines.append(f"{label['by']}: {_esc(payload['cashier'])}")
     return "\n".join(lines)
 
 
-def format_supplier_payment_text(payload: dict, *, timezone_name: str = "UTC") -> str:
-    """Plain-text supplier debt-payment summary."""
-    lines = ["Stock & POS — Supplier Payment"]
-    lines.append(f"Document: {payload.get('document_no') or '-'}")
+def format_supplier_payment_text(payload: dict, *, timezone_name: str = "UTC", lang: str = "en") -> str:
+    """Receipt-style HTML supplier debt-payment card."""
+    lang = normalize_language(lang)
+    label = _LABELS[lang]
+    currency = payload.get("currency") or "USD"
+    lines = [f"{_EMOJI['supplier_payment']} <b>{label['supplier_payment']}</b>", ""]
+    lines.append(f"{label['document']}: {_esc(payload.get('document_no') or '-')}")
     if payload.get("payment_no"):
-        lines.append(f"Payment: {payload['payment_no']}")
-    lines.append(f"Date: {_stamp(payload.get('occurred_at', ''), timezone_name)}")
+        lines.append(f"{label['invoice_id']}: {_esc(payload['payment_no'])}")
     if payload.get("supplier"):
-        lines.append(f"Supplier: {payload['supplier']}")
-    lines.append(f"Total: {payload.get('total', '-')}")
-    lines.append(f"Paid: {payload.get('paid', '-')}")
-    lines.append(f"Method: {payload.get('payment_method', '-')}")
+        lines.append(f"{label['supplier']}: {_esc(payload['supplier'])}")
+    lines.append(
+        f"{label['payment_method']}: {_esc(_method_label(payload.get('payment_method'), lang))}"
+    )
+    lines.append("")
+    lines.append(f"<b>{label['paid']}: {_money(payload.get('paid'), currency)}</b>")
+    if payload.get("total") is not None:
+        lines.append(f"{label['total']}: {_money(payload['total'], currency)}")
     if payload.get("remaining") is not None:
-        lines.append(f"Remaining debt: {payload['remaining']}")
+        lines.append(f"{label['remaining']}: {_money(payload['remaining'], currency)}")
+    lines.append("")
+    lines.append(f"{label['date']}: {_esc(_stamp(payload.get('occurred_at', ''), timezone_name))}")
     if payload.get("cashier"):
-        lines.append(f"Cashier: {payload['cashier']}")
+        lines.append(f"{label['by']}: {_esc(payload['cashier'])}")
     return "\n".join(lines)
 
 
@@ -528,31 +728,31 @@ async def daily_summary_totals(session: AsyncSession, *, day: date | None = None
     }
 
 
-def format_daily_summary_text(summary: dict) -> str:
+def format_daily_summary_text(summary: dict, *, lang: str = "en") -> str:
     """Render the daily summary; USD and KHR columns are kept separate."""
-    lines = [f"Stock & POS — Daily Summary {summary.get('day', '')}"]
+    lang = normalize_language(lang)
+    label = _LABELS[lang]
+    lines = [f"{_EMOJI['daily']} <b>{label['daily']} {summary.get('day', '')}</b>", ""]
 
     sales = summary.get("sales") or {}
     sale_count = sum(int(row["count"]) for row in sales.values())
-    lines.append(f"Sales: {sale_count}")
-    if sales.get("USD"):
-        lines.append(f"  USD sales: {sales['USD']['total']}")
-    if sales.get("KHR"):
-        lines.append(f"  KHR sales: {sales['KHR']['total']}")
+    lines.append(f"{label['sales']}: {sale_count}")
+    for currency in ("USD", "KHR"):
+        if sales.get(currency):
+            lines.append(f"  {currency} {label['sales']}: {sales[currency]['total']}")
 
     purchases = summary.get("purchases") or {}
     purchase_count = sum(int(row["count"]) for row in purchases.values())
-    lines.append(f"Purchases: {purchase_count}")
-    if purchases.get("USD"):
-        lines.append(f"  USD purchases: {purchases['USD']['total']}")
-    if purchases.get("KHR"):
-        lines.append(f"  KHR purchases: {purchases['KHR']['total']}")
+    lines.append(f"{label['purchases']}: {purchase_count}")
+    for currency in ("USD", "KHR"):
+        if purchases.get(currency):
+            lines.append(f"  {currency} {label['purchases']}: {purchases[currency]['total']}")
 
-    lines.append(f"Customer debt outstanding: {summary.get('customer_debt_total', '-')}")
-    lines.append(f"Supplier debt outstanding: {summary.get('supplier_debt_total', '-')}")
-    lines.append(f"Delivered: {summary.get('delivered_count', 0)}")
-    lines.append(f"Pending deliveries: {summary.get('pending_delivery_count', 0)}")
-    lines.append(f"Out-of-stock products: {summary.get('out_of_stock_count', 0)}")
+    lines.append(f"{label['customer_debt']}: {summary.get('customer_debt_total', '-')}")
+    lines.append(f"{label['supplier_debt']}: {summary.get('supplier_debt_total', '-')}")
+    lines.append(f"{label['delivered']}: {summary.get('delivered_count', 0)}")
+    lines.append(f"{label['pending_deliveries']}: {summary.get('pending_delivery_count', 0)}")
+    lines.append(f"{label['out_of_stock']}: {summary.get('out_of_stock_count', 0)}")
     return "\n".join(lines)
 
 
@@ -564,7 +764,7 @@ async def send_daily_summary(session: AsyncSession, *, sender=None, day: date | 
         if not await telegram_enabled(session):
             return {"enabled": False, "sent": 0}
         summary = await daily_summary_totals(session, day=day)
-        text = format_daily_summary_text(summary)
+        text = format_daily_summary_text(summary, lang=await notification_language(session))
         sent = await _broadcast(session, text, sender=sender)
         return {"enabled": True, "sent": sent, "summary": summary}
     except Exception:

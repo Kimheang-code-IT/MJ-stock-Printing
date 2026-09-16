@@ -70,6 +70,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Human-readable label of the linked Telegram account (admin-editable).
+    telegram_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     telegram_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     role_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False

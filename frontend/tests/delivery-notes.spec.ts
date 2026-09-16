@@ -28,41 +28,30 @@ async function freshSale() {
 }
 
 describe('delivery note status rules', () => {
-  it('exposes exactly the spec §2.1.9 statuses', () => {
-    expect(DELIVERY_STATUSES).toEqual(['Draft', 'Confirmed', 'Out for Delivery', 'Delivered', 'Cancelled'])
+  it('exposes the simplified Processing/Completed statuses', () => {
+    expect(DELIVERY_STATUSES).toEqual(['Processing', 'Completed'])
   })
 
-  it('allows only the Draft → Confirmed → Out for Delivery → Delivered / Cancelled flow', () => {
-    // Canonical transition table (spec §5.13; backend-enforced):
-    // Draft → Confirmed|Cancelled; Confirmed → Out for Delivery|Delivered|Cancelled;
-    // Out for Delivery → Delivered|Cancelled; Delivered/Cancelled are terminal.
-    const note = { id: 'n1', status: 'Draft' }
-    expect(canTransitionDelivery(note, 'confirm')).toBe(true)
-    expect(canTransitionDelivery(note, 'out_for_delivery')).toBe(false)
-    expect(canTransitionDelivery(note, 'deliver')).toBe(false)
-    expect(canTransitionDelivery(note, 'cancel')).toBe(true)
+  it('allows only the Processing → Completed / Cancelled flow', () => {
+    // Processing → Completed|Cancelled; Completed/Cancelled are terminal.
+    const processing = { id: 'n1', status: 'Processing' }
+    expect(canTransitionDelivery(processing, 'deliver')).toBe(true)
+    expect(canTransitionDelivery(processing, 'cancel')).toBe(true)
+    expect(canTransitionDelivery(processing, 'confirm')).toBe(false)
 
-    const confirmed = { id: 'n1', status: 'Confirmed' }
-    expect(canTransitionDelivery(confirmed, 'out_for_delivery')).toBe(true)
-    expect(canTransitionDelivery(confirmed, 'deliver')).toBe(true)
-    expect(canTransitionDelivery(confirmed, 'confirm')).toBe(false)
-    expect(canTransitionDelivery(confirmed, 'cancel')).toBe(true)
+    // Backend enum dialects collapse onto the same simplified statuses.
+    expect(canTransitionDelivery({ id: 'n1', status: 'PREPARING' }, 'deliver')).toBe(true)
+    expect(canTransitionDelivery({ id: 'n1', status: 'OUT_FOR_DELIVERY' }, 'deliver')).toBe(true)
 
-    const out = { id: 'n1', status: 'Out for Delivery' }
-    expect(canTransitionDelivery(out, 'deliver')).toBe(true)
-    expect(canTransitionDelivery(out, 'out_for_delivery')).toBe(false)
-
-    // Delivered and Cancelled are terminal; verb aliases resolve like labels.
-    for (const status of ['Delivered', 'Cancelled']) {
+    // Completed / Cancelled (and their backend enums) are terminal.
+    for (const status of ['Completed', 'Cancelled', 'DELIVERED', 'RETURNED']) {
       const terminal = { id: 'n1', status }
-      expect(canTransitionDelivery(terminal, 'confirm')).toBe(false)
-      expect(canTransitionDelivery(terminal, 'out_for_delivery')).toBe(false)
       expect(canTransitionDelivery(terminal, 'deliver')).toBe(false)
       expect(canTransitionDelivery(terminal, 'cancel')).toBe(false)
     }
   })
 
-  it('confirms before delivering (canonical §5.13 path)', async () => {
+  it('completes directly from Processing', async () => {
     const { sale, saleItem, productId } = await freshSale()
     const commands = createMockDeliveryRepository()
     const movementsBefore = mockRecords('stockMovements').length
@@ -71,19 +60,19 @@ describe('delivery note status rules', () => {
       saleId: String(sale.id),
       lines: [{ saleItemId: String(saleItem.id), productId, qtyToDeliver: 3 }],
     })
-    expect(note.status).toBe('Draft')
+    expect(note.status).toBe('Processing')
 
-    await commands.setDeliveryStatus(String(note.id), 'confirm')
     const delivered = await commands.setDeliveryStatus(String(note.id), 'deliver')
-    expect(delivered.status).toBe('Delivered')
+    expect(delivered.status).toBe('Completed')
     expect(delivered.deliveredAt).toBeTruthy()
     // Delivery never mutates stock.
     expect(mockRecords('stockMovements')).toHaveLength(movementsBefore)
   })
 
-  it('treats only drafts as editable', () => {
-    expect(isDeliveryEditable({ id: 'n1', status: 'Draft' })).toBe(true)
-    expect(isDeliveryEditable({ id: 'n1', status: 'Confirmed' })).toBe(false)
+  it('treats only processing notes as editable', () => {
+    expect(isDeliveryEditable({ id: 'n1', status: 'Processing' })).toBe(true)
+    expect(isDeliveryEditable({ id: 'n1', status: 'PENDING' })).toBe(true)
+    expect(isDeliveryEditable({ id: 'n1', status: 'Completed' })).toBe(false)
   })
 })
 
@@ -137,7 +126,7 @@ describe('mock delivery commands', () => {
     })
 
     expect(String(note.deliveryNo)).toMatch(/^DN-\d{6}$/)
-    expect(note.status).toBe('Confirmed')
+    expect(note.status).toBe('Processing')
     expect(String(note.invoiceNo || note.saleNo)).toBe(String(sale.invoiceNo || sale.saleNo))
     expect(note.items).toHaveLength(1)
     expect(mockRecords('deliveryNotes')).toHaveLength(notesBefore + 1)
@@ -189,7 +178,7 @@ describe('mock delivery commands', () => {
     expect(saleHasDeliverableLines(sale, mockRecords('deliveryNotes'))).toBe(true)
   })
 
-  it('walks Draft → Confirmed → Out for Delivery → Delivered and freezes quantities', async () => {
+  it('walks Processing → Completed and freezes quantities', async () => {
     const { sale, saleItem, productId } = await freshSale()
     const commands = createMockDeliveryRepository()
 
@@ -197,14 +186,14 @@ describe('mock delivery commands', () => {
       saleId: String(sale.id),
       lines: [{ saleItemId: String(saleItem.id), productId, qtyToDeliver: 2 }],
     })
-    expect(note.status).toBe('Draft')
+    expect(note.status).toBe('Processing')
 
     const id = String(note.id)
-    // §5.13: Delivery OK from Draft is allowed (simplified path).
+    // Legacy verb aliases are still accepted and collapse to the same statuses.
     await commands.setDeliveryStatus(id, 'confirm')
     await commands.setDeliveryStatus(id, 'out_for_delivery')
     const delivered = await commands.setDeliveryStatus(id, 'deliver')
-    expect(delivered.status).toBe('Delivered')
+    expect(delivered.status).toBe('Completed')
     expect(delivered.deliveredAt).toBeTruthy()
     expect((delivered.items as Array<{ qtyDelivered: number }>)[0]!.qtyDelivered).toBe(2)
 

@@ -31,7 +31,9 @@ class Settings(BaseSettings):
 
     jwt_secret_key: str = _DEV_JWT_SECRET
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 15
+    # Keep users signed in for a full day; the refresh token (below) renews the
+    # session seamlessly when the access token eventually expires.
+    access_token_expire_minutes: int = 1440
     refresh_token_expire_days: int = 7
     service_token_expire_minutes: int = 10
 

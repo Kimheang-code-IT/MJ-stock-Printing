@@ -8,6 +8,9 @@ import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialo
 import { usePageSeo } from '~/composables/usePageSeo'
 import { formatMoney } from '~/composables/module/useModule'
 import { PAYMENT_METHODS } from '~/config/pos-options'
+import { downloadTableExport, type ExportTableColumn } from '~/utils/export/table'
+import type { ExportRequest } from '~/types/stock-pos/export'
+import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { useFinanceRepository } from '~/repositories/index'
 import type { FinanceEntry, FinanceEntryType } from '~/repositories/contracts/entities'
 
@@ -198,6 +201,67 @@ const columns = computed<TableColumn<FinanceRow>[]>(() => [
   },
 ])
 
+/* ------------------------------ export (Excel / PDF) ------------------ */
+
+const exporting = ref(false)
+const exportFields = computed(() =>
+  columns.value
+    .map(column => ({
+      label: String(column.header || ''),
+      value: 'accessorKey' in column ? String(column.accessorKey || '') : '',
+    }))
+    .filter(field => field.value))
+
+async function onExport(request: ExportRequest) {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const codes = request.fieldCodes?.length ? request.fieldCodes : exportFields.value.map(field => field.value)
+    const cols = exportFields.value
+      .filter(field => codes.includes(field.value))
+      .map((field): ExportTableColumn => ({
+        key: field.value,
+        label: field.label,
+        type: field.value === 'date' ? 'date' : field.value === 'amount' ? 'money' : 'text',
+      }))
+    let rows = filteredEntries.value as unknown as Array<Record<string, unknown>>
+    if (request.startDate) rows = rows.filter(row => String(row.date || '') >= request.startDate!)
+    if (request.endDate) rows = rows.filter(row => String(row.date || '') <= request.endDate!)
+    const data = rows.map((row) => {
+      const out: Record<string, unknown> = {}
+      for (const column of cols) {
+        if (column.key === 'reference') out[column.key] = row.reference || row.category || ''
+        else if (column.key === 'amount') out[column.key] = Number(row.amount || 0)
+        else if (column.key === 'date') out[column.key] = String(row.date || '').slice(0, 10)
+        else out[column.key] = row[column.key] ?? ''
+      }
+      return out
+    })
+    await downloadTableExport({
+      title: t('app.pages.financeReport'),
+      format: request.format,
+      columns: cols,
+      rows: data,
+      subtitle: request.startDate || request.endDate
+        ? `${request.startDate || '…'} → ${request.endDate || '…'}`
+        : null,
+    })
+    toast.add({ title: t('core.exportDialog.exported', { n: data.length }), color: 'success' })
+  }
+  catch (error: unknown) {
+    if (!isApiErrorHandled(error)) {
+      toast.add({
+        title: t('core.exportDialog.exportFailed'),
+        description: apiErrorMessage(error, t('core.exportDialog.exportFailed')),
+        color: 'error',
+      })
+    }
+  }
+  finally {
+    exporting.value = false
+  }
+}
+
 /* ------------------------------ Add Expense modal --------------------- */
 
 const EXPENSE_CATEGORIES = ['Utilities', 'Rent', 'Salaries', 'Supplies', 'Transport', 'Marketing', 'Other'] as const
@@ -289,11 +353,14 @@ async function submitExpense() {
   <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/20">
     <LayoutAppHeaderPageActions
       :can-create="canCreateExpense"
-      :can-export="false"
+      :can-export="true"
+      :export-fields="exportFields"
+      :exporting="exporting"
       :show-refresh="false"
       :create-label="t('app.finance.addExpense')"
       :refreshing="loading"
       @create="openAddExpense"
+      @export="onExport"
     />
 
     <div class="flex flex-col gap-2 px-3 pt-2">

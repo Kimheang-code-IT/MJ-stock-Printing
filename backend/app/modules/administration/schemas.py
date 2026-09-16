@@ -13,6 +13,7 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     role_id: UUID
     telegram_chat_id: str | None = Field(default=None, max_length=100)
+    telegram_name: str | None = Field(default=None, max_length=150)
     status: str = Field(default="ACTIVE", pattern="^(ACTIVE|DISABLED)$")
 
 
@@ -21,6 +22,7 @@ class UserUpdate(BaseModel):
     email: EmailStr | None = None
     role_id: UUID | None = None
     telegram_chat_id: str | None = Field(default=None, max_length=100)
+    telegram_name: str | None = Field(default=None, max_length=150)
     status: str | None = Field(default=None, pattern="^(ACTIVE|DISABLED)$")
 
 
@@ -35,6 +37,7 @@ class AdminUserOut(BaseModel):
     full_name: str
     email: EmailStr
     telegram_chat_id: str | None
+    telegram_name: str | None = None
     telegram_verified: bool
     status: str
     role_id: UUID

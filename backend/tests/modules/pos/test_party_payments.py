@@ -187,7 +187,7 @@ async def test_customer_level_payment_notify_hook_is_awaited(client, monkeypatch
 
     calls: list[tuple[str, str]] = []
 
-    async def _record(chat_id: str, text: str) -> bool:
+    async def _record(chat_id: str, text: str, **kwargs) -> bool:
         calls.append((chat_id, text))
         return True
 

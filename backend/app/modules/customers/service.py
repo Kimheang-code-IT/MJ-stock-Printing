@@ -285,6 +285,7 @@ class CustomerService:
             payment_method=payment.payment_method,
             remaining=debt.remaining_amount,
             cashier=actor.full_name,
+            currency=debt.currency,
         )
 
     async def list_debt_payments(self, customer_id, debt_id) -> list[Payment]:

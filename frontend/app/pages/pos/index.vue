@@ -6,7 +6,7 @@ import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { usePosChrome } from '~/composables/layout/usePosChrome'
 import { usePageSeo } from '~/composables/usePageSeo'
-import { usePosCommands, useSettingsRepositories } from '~/repositories/index'
+import { useDeliveryCommands, usePosCommands, useSettingsRepositories } from '~/repositories/index'
 import type { PosCartLine } from '~/utils/pos/cart'
 import {
   availableStockInUom,
@@ -48,6 +48,7 @@ const { t, locale } = useI18n()
 const { clear } = useAppHeader()
 const { hidePosAppHeader, leavePos } = usePosChrome()
 const posCommands = usePosCommands()
+const deliveryCommands = useDeliveryCommands()
 const { appInfo } = useSettingsRepositories()
 const toast = useToast()
 
@@ -776,9 +777,9 @@ async function saveEditSale() {
  *  invoice always prints in the sale's own currency (KHR sale → KHR). The
  *  parent owns the open state: choosing A4/A5 prints then closes, while
  *  X/Cancel only closes — the sale is already saved and is never re-submitted.
- *  `pendingDelivery` is snapshotted before the checkout reset so the post-sale
- *  Create Delivery Note target survives until the print finishes. */
-const pendingDelivery = ref<{ saleId: string, phone: string, location: string } | null>(null)
+ *  `pendingDelivery` is snapshotted before the checkout reset so the delivery
+ *  note is auto-created (no second form) once the sale + print finish. */
+const pendingDelivery = ref<{ saleId: string, phone: string, location: string, fee: number } | null>(null)
 /** Checkout keypad confirmed: capture the amount paid, then submit the sale. */
 function onPaymentConfirm(amount: number) {
   paidInput.value = Number.isFinite(amount) ? amount : undefined
@@ -833,7 +834,9 @@ async function completeSale() {
     })
     lastSaleNo.value = String(sale.invoiceNo || sale.saleNo || '')
     lastSaleId.value = String(sale.id || '')
-    const shouldOpenDelivery = needsDelivery.value && canCreateDelivery.value
+    const shouldAutoCreateDelivery = needsDelivery.value && canCreateDelivery.value
+    // Delivery price captured now — the checkout reset below clears it.
+    const deliveryFee = appliedDeliveryPrice.value
     // Invoice payload comes from the sale receipt contract
     // (GET /pos/sales/{id}/receipt). Falls back to the
     // cart snapshot if the receipt cannot be read. No invoice.pdf call.
@@ -873,8 +876,8 @@ async function completeSale() {
     })
     // Capture the post-sale delivery target before the checkout reset below
     // clears the delivery fields.
-    pendingDelivery.value = shouldOpenDelivery
-      ? { saleId: lastSaleId.value, phone: deliveryPhone.value, location: deliveryLocation.value }
+    pendingDelivery.value = shouldAutoCreateDelivery
+      ? { saleId: lastSaleId.value, phone: deliveryPhone.value, location: deliveryLocation.value, fee: deliveryFee }
       : null
     cart.value = []
     paidInput.value = undefined
@@ -911,7 +914,29 @@ async function completeSale() {
       lastSaleNo.value = ''
       lastSaleId.value = ''
       if (delivery) {
-        void navigateTo(`/delivery-notes/new?saleId=${delivery.saleId}&phone=${encodeURIComponent(delivery.phone)}&location=${encodeURIComponent(delivery.location)}`)
+        // Delivery was toggled on at checkout: create the note automatically
+        // (every sold qty, destination + fee) so the cashier never rebuilds it.
+        try {
+          const note = await deliveryCommands.createDeliveryNoteFromSale(delivery.saleId, {
+            deliveryPhone: delivery.phone || null,
+            deliveryLocation: delivery.location || null,
+            deliveryFee: delivery.fee || null,
+          })
+          toast.add({
+            title: `${t('app.pos.deliveryCreated')} · ${note.deliveryNo ?? ''}`,
+            color: 'success',
+          })
+          void store.fetchList('deliveryNotes')
+        }
+        catch (error: unknown) {
+          if (!isApiErrorHandled(error)) {
+            toast.add({
+              title: t('app.pos.deliveryCreateFailed'),
+              description: apiErrorMessage(error, t('app.pos.deliveryCreateFailed')),
+              color: 'error',
+            })
+          }
+        }
       }
     }
   }

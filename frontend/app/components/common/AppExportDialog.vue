@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExportFieldOption, ExportRequest, ExportScope } from '~/types/stock-pos/export'
+import type { ExportFieldOption, ExportFormat, ExportRequest } from '~/types/stock-pos/export'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -20,17 +20,12 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const startDate = ref('')
 const endDate = ref('')
-const scope = ref<ExportScope>('all_matching')
+const format = ref<ExportFormat>('xlsx')
 const selectedFields = ref<string[]>([])
 
-const scopeItems = computed(() => [
-  { label: t('core.exportDialog.allMatching'), value: 'all_matching' },
-  { label: t('core.exportDialog.currentPage'), value: 'current_page' },
-  {
-    label: t('core.exportDialog.selectedRows', { n: props.selectedCount }),
-    value: 'selected',
-    disabled: props.selectedCount < 1,
-  },
+const formatItems = computed(() => [
+  { label: t('core.exportDialog.formatExcel'), value: 'xlsx' },
+  { label: t('core.exportDialog.formatPdf'), value: 'pdf' },
 ])
 
 const invalidRange = computed(() => Boolean(
@@ -43,12 +38,8 @@ watch(open, (isOpen) => {
   if (!isOpen) return
   startDate.value = ''
   endDate.value = ''
-  scope.value = 'all_matching'
+  format.value = 'xlsx'
   selectedFields.value = props.fields.map(field => field.value)
-})
-
-watch(() => props.selectedCount, (count) => {
-  if (count < 1 && scope.value === 'selected') scope.value = 'all_matching'
 })
 
 function toggleField(value: string, checked: boolean | 'indeterminate') {
@@ -62,8 +53,10 @@ function submit() {
   emit('submit', {
     startDate: startDate.value || undefined,
     endDate: endDate.value || undefined,
-    scope: scope.value,
+    // Exports always cover the rows currently shown on the page.
+    scope: 'current_page',
     fieldCodes: [...selectedFields.value],
+    format: format.value,
   })
 }
 </script>
@@ -72,67 +65,70 @@ function submit() {
   <CommonAppDialog
     v-model:open="open"
     :title="$t('core.exportDialog.title')"
-    :description="$t('core.exportDialog.description')"
     :loading="loading"
     width="2xl"
   >
     <div class="space-y-5">
-        <UFormField
-          :label="$t('core.exportDialog.dateRange')"
-          :help="$t('core.exportDialog.dateRangeHelp')"
+      <div class="grid gap-3 sm:grid-cols-2">
+        <CommonAppDateField
+          v-model="startDate"
+          :label="$t('core.exportDialog.startDate')"
+          granularity="day"
+          class="w-full"
+        />
+        <CommonAppDateField
+          v-model="endDate"
+          :label="$t('core.exportDialog.endDate')"
+          granularity="day"
           :error="invalidRange ? $t('core.exportDialog.invalidRange') : undefined"
-        >
-          <CommonAppDateRangeFilter
-            v-model:start="startDate"
-            v-model:end="endDate"
-            inline
-            class="w-full"
-          />
-        </UFormField>
-
-        <UFormField :label="$t('core.exportDialog.scope')" :help="$t('core.exportDialog.scopeHelp')">
-          <USelect
-            v-model="scope"
-            :items="scopeItems"
-            value-key="value"
-            class="w-full"
-          />
-        </UFormField>
-
-        <fieldset v-if="fields.length" class="rounded-sm border border-default p-3">
-          <legend class="px-1 text-sm font-medium text-highlighted">
-            {{ $t('core.exportDialog.fields') }}
-          </legend>
-          <p class="mb-3 text-xs text-muted">{{ $t('core.exportDialog.fieldsHint') }}</p>
-          <div class="grid gap-2 sm:grid-cols-2">
-            <UCheckbox
-              v-for="field in fields"
-              :key="field.value"
-              :model-value="selectedFields.includes(field.value)"
-              :label="field.label"
-              @update:model-value="toggleField(field.value, $event)"
-            />
-          </div>
-          <p v-if="noFields" class="mt-2 text-xs text-error">
-            {{ $t('core.exportDialog.fieldRequired') }}
-          </p>
-        </fieldset>
+          class="w-full"
+        />
       </div>
+
+      <UFormField :label="$t('core.exportDialog.format')">
+        <USelect
+          v-model="format"
+          :items="formatItems"
+          value-key="value"
+          class="w-full"
+        />
+      </UFormField>
+
+      <fieldset v-if="fields.length" class="rounded-sm border border-default p-3">
+        <legend class="px-1 text-sm font-medium text-highlighted">
+          {{ $t('core.exportDialog.fields') }}
+        </legend>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <UCheckbox
+            v-for="field in fields"
+            :key="field.value"
+            :model-value="selectedFields.includes(field.value)"
+            :label="field.label"
+            @update:model-value="toggleField(field.value, $event)"
+          />
+        </div>
+        <p v-if="noFields" class="mt-2 text-xs text-error">
+          {{ $t('core.exportDialog.fieldRequired') }}
+        </p>
+      </fieldset>
+    </div>
 
     <template #footer>
       <div class="flex w-full justify-end gap-2">
         <UButton
-color="neutral"
-variant="ghost"
-:disabled="loading"
-@click="open = false">
+          color="neutral"
+          variant="ghost"
+          :disabled="loading"
+          @click="open = false"
+        >
           {{ $t('actions.cancel') }}
         </UButton>
         <UButton
-icon="i-lucide-download"
-:loading="loading"
-:disabled="!canSubmit"
-@click="submit">
+          icon="i-lucide-download"
+          :loading="loading"
+          :disabled="!canSubmit"
+          @click="submit"
+        >
           {{ $t('actions.export') }}
         </UButton>
       </div>

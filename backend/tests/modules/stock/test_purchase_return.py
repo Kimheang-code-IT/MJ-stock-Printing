@@ -229,6 +229,61 @@ async def test_purchase_return_fully_paid_purchase_records_supplier_credit(clien
 
 
 @pytest.mark.asyncio
+async def test_purchase_return_all_lines(client):
+    """Purchase Report 'Return All': every received line at full qty."""
+    headers = await admin_headers(client)
+    product_a = await _make_product(client, headers, sku="PRTA-1", name="Purchase Return All A")
+    product_b = await _make_product(client, headers, sku="PRTA-2", name="Purchase Return All B")
+    supplier = await _make_supplier(client, headers, "PRTA")
+    stock_in = await _stock_in(
+        client,
+        headers,
+        [
+            {"product_id": product_a["id"], "quantity": "10", "unit_cost": "2.00"},
+            {"product_id": product_b["id"], "quantity": "5", "unit_cost": "4.00"},
+        ],
+        supplier_id=supplier["id"],
+        paid="0.00",
+    )
+
+    response = await client.post(
+        f"/api/v1/stock/in/{stock_in['id']}/return",
+        json={
+            "reason": "Return all lines",
+            "lines": [
+                {"stock_transaction_item_id": item["id"], "quantity": item["quantity"]}
+                for item in stock_in["items"]
+            ],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    # 10×2.00 + 5×4.00 = 40.00, all unpaid → the whole refund clears the debt.
+    assert Decimal(data["refund_amount"]) == Decimal("40.00")
+    assert Decimal(data["debt_reduction"]) == Decimal("40.00")
+    assert Decimal(data["credit_amount"]) == Decimal("0.00")
+
+    # Both products fully stocked out and no returnable qty remains.
+    assert await _balance(client, headers, product_a["id"]) == Decimal("0.0000")
+    assert await _balance(client, headers, product_b["id"]) == Decimal("0.0000")
+    debt = await _supplier_debt(client, headers, supplier["id"])
+    assert debt is None or Decimal(debt["remaining_amount"]) == Decimal("0.00")
+
+    second = await client.post(
+        f"/api/v1/stock/in/{stock_in['id']}/return",
+        json={
+            "reason": "Again",
+            "lines": [
+                {"stock_transaction_item_id": stock_in["items"][0]["id"], "quantity": "1"}
+            ],
+        },
+        headers=headers,
+    )
+    assert second.status_code == 422, second.text
+
+
+@pytest.mark.asyncio
 async def test_purchase_return_rolls_back_when_any_line_fails(client, db_session):
     """A failure on a later line (mid-transaction) must undo the earlier
     lines' stock movements, quantities, and the return document itself."""

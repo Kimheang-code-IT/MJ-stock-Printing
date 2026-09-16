@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 from app.modules.reports.models import Expense
 from app.shared.audit.models import AuditLog
+from tests.modules.pos.helpers import make_stocked_product
 from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
 
 FINANCE_ONLY_EMAIL = "finance-viewer@example.com"
@@ -284,6 +285,61 @@ async def test_finance_entries_income_derived_from_sales_and_filters(client):
     assert paged.status_code == 200
     assert paged.json()["meta"]["limit"] == 1
     assert len(paged.json()["data"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_finance_income_is_cash_received_not_credit_sales(client):
+    """Cash-basis income: a credit sale is NOT income until the customer pays;
+    each collection is its own income row for exactly the cash received."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await make_stocked_product(client, headers, sku=f"FINCB-{tag}", name=f"Fin Cash {tag}")
+    customer = (
+        await client.post(
+            "/api/v1/customers",
+            json={"code": f"FINCB-C-{tag}", "name": f"Fin Cash Customer {tag}"},
+            headers=headers,
+        )
+    ).json()["data"]
+
+    # Credit sale: 2 units fully on account, no cash received at checkout.
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": customer["id"],
+            "amount_received": "0",
+            "items": [{"product_id": product["id"], "quantity": "2"}],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    invoice_no = sale.json()["data"]["invoice_no"]
+    sale_total = Decimal(sale.json()["data"]["grand_total"])
+    assert sale_total > 0
+
+    # No cash received yet → the unpaid credit sale produces no income row.
+    before = (
+        await client.get(f"/api/v1/reports/finance/entries?q={invoice_no}", headers=headers)
+    ).json()["data"]
+    assert [r for r in before if r["type"] == "income"] == []
+
+    # Collect the debt → one income row for exactly the amount received.
+    pay = await client.post(
+        f"/api/v1/customers/{customer['id']}/payments",
+        json={"amount": str(sale_total), "payment_method": "CASH"},
+        headers=headers,
+    )
+    assert pay.status_code == 201, pay.text
+
+    after = (
+        await client.get(f"/api/v1/reports/finance/entries?q={invoice_no}", headers=headers)
+    ).json()["data"]
+    income = [r for r in after if r["type"] == "income"]
+    assert len(income) == 1
+    assert Decimal(income[0]["amount"]) == sale_total
+    assert income[0]["payment_method"] == "CASH"
+    assert income[0]["reference"] == invoice_no
 
 
 @pytest.mark.asyncio

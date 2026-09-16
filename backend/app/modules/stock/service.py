@@ -761,6 +761,18 @@ class StockOperationService:
             debt=(total - paid) if total > paid else Decimal("0.00"),
             user=actor.full_name,
             item_count=len(item_rows),
+            # `quantity`/`unit_cost` are stored per BASE UOM, so the row omits
+            # the entered UOM symbol (base quantity × base cost = line total).
+            items=[
+                {
+                    "name": products[item.product_id].name,
+                    "quantity": str(item.quantity),
+                    "uom": "",
+                    "unit_cost": str(item.unit_cost),
+                    "line_total": str(item.line_total),
+                }
+                for item in item_rows
+            ],
         )
         return self._operation_out(transaction, items=item_rows, total_amount=total, paid_amount=paid, debt=debt)
 

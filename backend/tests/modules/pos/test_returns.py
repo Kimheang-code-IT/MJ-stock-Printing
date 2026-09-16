@@ -134,6 +134,74 @@ async def test_full_return_marks_sale_returned(client):
 
 
 @pytest.mark.asyncio
+async def test_return_all_restocks_every_sale_line(client):
+    """Sales Report 'Return All': every returnable line at full qty → RETURNED."""
+    headers = await admin_headers(client)
+    product_a = await make_stocked_product(client, headers, sku="RETA-1", name="Return All A")
+    product_b = await make_stocked_product(client, headers, sku="RETA-2", name="Return All B")
+
+    sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "1000.00",
+            "items": [
+                {"product_id": product_a["id"], "quantity": "3"},
+                {"product_id": product_b["id"], "quantity": "2"},
+            ],
+        },
+        headers=headers,
+    )
+    assert sale.status_code == 201, sale.text
+    sale = sale.json()["data"]
+
+    # 'Return All' preloads every line at its full returnable quantity.
+    response = await client.post(
+        f"/api/v1/pos/sales/{sale['id']}/return",
+        json={
+            "reason": "Return all lines",
+            "items": [
+                {"sale_item_id": item["id"], "quantity": item["quantity"], "restock": True}
+                for item in sale["items"]
+            ],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    assert Decimal(response.json()["data"]["refund_amount"]) == Decimal("50.00")
+
+    detail = (await client.get(f"/api/v1/pos/sales/{sale['id']}", headers=headers)).json()["data"]
+    assert detail["sale_status"] == "RETURNED"
+    assert all(
+        Decimal(item["returned_quantity"]) == Decimal(item["quantity"]) for item in detail["items"]
+    )
+
+    # Both products are back to their pre-sale balance (helper seeds 10 each).
+    assert await balance_of(client, headers, product_a["id"]) == Decimal("10.0000")
+    assert await balance_of(client, headers, product_b["id"]) == Decimal("10.0000")
+    movements = await client.get(
+        "/api/v1/stock/movements?movement_type=SALE_RETURN", headers=headers
+    )
+    returned = [
+        row
+        for row in movements.json()["data"]
+        if str(row["product_id"]) in {product_a["id"], product_b["id"]}
+    ]
+    assert len(returned) == 2
+
+    # Nothing left to return a second time.
+    again = await client.post(
+        f"/api/v1/pos/sales/{sale['id']}/return",
+        json={
+            "reason": "Again",
+            "items": [{"sale_item_id": sale["items"][0]["id"], "quantity": "1", "restock": True}],
+        },
+        headers=headers,
+    )
+    assert again.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_return_reduces_customer_debt(client):
     headers = await admin_headers(client)
     product = await make_stocked_product(client, headers, sku="RET-5", name="Debt Return Widget")
