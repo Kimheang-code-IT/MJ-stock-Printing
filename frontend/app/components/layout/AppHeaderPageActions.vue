@@ -25,6 +25,10 @@ const props = withDefaults(defineProps<{
   exportFields?: ExportFieldOption[]
   selectedCount?: number
   exporting?: boolean
+  exportPartyOptions?: ExportFieldOption[]
+  exportPartyLabel?: string
+  exportUserOptions?: ExportFieldOption[]
+  exportUserLabel?: string
   showListNav?: boolean
   listTo?: string
   canNavigatePrevious?: boolean
@@ -55,6 +59,10 @@ const props = withDefaults(defineProps<{
   exportFields: () => [],
   selectedCount: 0,
   exporting: false,
+  exportPartyOptions: () => [],
+  exportPartyLabel: '',
+  exportUserOptions: () => [],
+  exportUserLabel: '',
   showListNav: false,
   listTo: '',
   canNavigatePrevious: false,
@@ -276,6 +284,10 @@ onBeforeUnmount(() => {
     :fields="props.exportFields"
     :selected-count="props.selectedCount"
     :loading="props.exporting"
+    :party-options="props.exportPartyOptions"
+    :party-label="props.exportPartyLabel"
+    :user-options="props.exportUserOptions"
+    :user-label="props.exportUserLabel"
     @submit="submitExport"
   />
 </template>

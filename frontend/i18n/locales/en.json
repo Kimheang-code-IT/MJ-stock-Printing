@@ -439,6 +439,10 @@
       "dateRange": "Date range",
       "startDate": "Start date",
       "endDate": "End date",
+      "oneParty": "Export for one {party}",
+      "selectParty": "Select a {party}",
+      "user": "User",
+      "allUsers": "All users",
       "scope": "Data to export",
       "allMatching": "All matching data",
       "currentPage": "Current page",
@@ -648,6 +652,7 @@
     },
     "pos": {
       "searchPlaceholder": "Scan barcode or search product name",
+      "barcodeNotFound": "Barcode not found: {code}",
       "product": "Product",
       "barcode": "Barcode",
       "uom": "UOM",

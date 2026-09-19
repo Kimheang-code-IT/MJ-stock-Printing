@@ -95,6 +95,8 @@ async def customer_debt_report(
     status: str | None = Query(default=None, pattern="^(UNPAID|PARTIAL|PAID)$"),
     # Optional document-currency filter (USD | KHR); rows are never mixed.
     currency: str | None = Query(default=None, pattern="^(USD|KHR)$"),
+    # Optional staff filter: the cashier who created the source sale.
+    user_id: UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("report.customer_debt")),
 ) -> dict:
@@ -104,6 +106,7 @@ async def customer_debt_report(
         customer_id=customer_id,
         status=status,
         currency=currency,
+        user_id=user_id,
         start=params.start_date,
         end=params.end_date,
         page=params.page,
@@ -122,6 +125,8 @@ async def supplier_debt_report(
     status: str | None = Query(default=None, pattern="^(UNPAID|PARTIAL|PAID)$"),
     # Optional document-currency filter (USD | KHR); rows are never mixed.
     currency: str | None = Query(default=None, pattern="^(USD|KHR)$"),
+    # Optional staff filter: the user who created the source Stock In.
+    user_id: UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("report.supplier_debt")),
 ) -> dict:
@@ -131,6 +136,7 @@ async def supplier_debt_report(
         supplier_id=supplier_id,
         status=status,
         currency=currency,
+        user_id=user_id,
         start=params.start_date,
         end=params.end_date,
         page=params.page,

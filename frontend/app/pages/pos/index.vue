@@ -5,6 +5,7 @@ import PosProductBrowser from '~/components/pos/PosProductBrowser.vue'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { usePosChrome } from '~/composables/layout/usePosChrome'
+import { usePosScanner } from '~/composables/pos/usePosScanner'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { useDeliveryCommands, usePosCommands, useSettingsRepositories } from '~/repositories/index'
 import type { PosCartLine } from '~/utils/pos/cart'
@@ -28,6 +29,7 @@ import {
 } from '~/utils/pos/checkout'
 import { printSaleInvoice, type SaleInvoicePrintInput } from '~/utils/print/invoice'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
+import { resolveExactBarcode } from '~/utils/pos/barcode-scan'
 import { saleEditCartLines, saleReturnCartLines } from '~/utils/pos/return'
 import type { PrintPaperSize } from '~/utils/print/html'
 import { conversionForUom, salePriceForUom } from '~/utils/stock/uom-conversions'
@@ -325,6 +327,12 @@ const canCreateDelivery = computed(() =>
 /** Cart line UOM options: every Pricing row's Original UOM of that product. */
 const lineUomOptions = uomOptionsFor
 
+/** Look up a product by id over the full loaded list (not the category/search
+ *  filtered view), so scanner-added or filtered-out products still resolve. */
+function productById(productId: string): Record<string, unknown> | null {
+  return store.list('products').find(row => String(row.id) === productId) ?? null
+}
+
 function addProduct(row: Record<string, unknown>) {
   if (returnMode.value) return
   const id = String(row.id)
@@ -373,7 +381,7 @@ function addProduct(row: Record<string, unknown>) {
 function changeUom(productId: string, uomId: string) {
   const line = cart.value.find(item => item.productId === productId)
   if (!line || !uomId || line.uomId === uomId) return
-  const product = products.value.find(row => String(row.id) === productId)
+  const product = productById(productId)
   if (!product) return
   const usdPrice = salePriceForUom(product, uomId)
   if (usdPrice == null) return
@@ -389,13 +397,46 @@ function changeUom(productId: string, uomId: string) {
   line.availableStock = availableStockInUom(product.quantity, factor)
 }
 
-function onSearchEnter() {
-  const exact = products.value.find(row => String(row.barcode || '') === search.value.trim())
-  if (exact) {
-    addProduct(exact)
+/**
+ * Scanner / manual Enter: resolve the code to an ACTIVE product and add it to
+ * the cart. The local product cache is checked first (instant, no request);
+ * on a miss the exact-barcode API is queried so products beyond the loaded
+ * page still scan. Unknown codes show a warning and clear the input.
+ */
+async function onScanCode(raw: string) {
+  if (returnMode.value || !canOperate.value) return
+  const code = String(raw || '').trim()
+  if (!code) return
+  const local = resolveExactBarcode(products.value, code)
+  if (local) {
+    addProduct(local)
     search.value = ''
+    return
   }
+  const remote = await posCommands.getProductByBarcode(code)
+  if (remote) {
+    addProduct(remote)
+    // Cache the record so UOM switching / line edits can resolve it later.
+    void store.fetchOne('products', String(remote.id))
+  }
+  else {
+    toast.add({ title: t('app.pos.barcodeNotFound', { code }), color: 'warning' })
+  }
+  search.value = ''
 }
+
+function onSearchEnter() {
+  void onScanCode(search.value)
+}
+
+// USB/HID scanner: captures scans anywhere on the cart screen (when focus is
+// not in an editable field) so products can be added without touching the UI.
+usePosScanner({
+  enabled: () => step.value === 'cart' && canOperate.value && !returnMode.value,
+  onScan: (code) => {
+    void onScanCode(code)
+  },
+})
 
 function changeQty(productId: string, delta: number) {
   const line = cart.value.find(item => item.productId === productId)

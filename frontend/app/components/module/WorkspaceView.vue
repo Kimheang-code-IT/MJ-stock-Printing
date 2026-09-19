@@ -33,8 +33,9 @@ import { openDebts, selectedDebtsShareScope } from '~/utils/reports/debts'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { deliveryStatusOf } from '~/utils/delivery/notes'
 import { downloadTableExport } from '~/utils/export/table'
-import type { ExportRequest } from '~/types/stock-pos/export'
-import { useDeliveryCommands, usePosCommands } from '~/repositories/index'
+import { fetchAllListRows } from '~/utils/export/fetch-all'
+import type { ExportFieldOption, ExportRequest } from '~/types/stock-pos/export'
+import { useDeliveryCommands, useEntityRepository, usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
 import { STOCK_OPERATION_META, STOCK_OPERATION_PERMISSIONS, STOCK_OPERATION_TYPES, type StockHistoryKind, type StockOperationType } from '~/config/pos-options'
 import type { DebtPaymentKind } from '~/components/reports/DebtPaymentDialog.vue'
@@ -49,6 +50,7 @@ const { confirm } = useConfirm()
 const toast = useToast()
 const posCommands = usePosCommands()
 const deliveryCommands = useDeliveryCommands()
+const entityRepository = useEntityRepository()
 const { localization } = useAppLocalization()
 
 const q = ref('')
@@ -352,6 +354,17 @@ function reloadModuleData() {
   }
   if (current.value.collection === 'uoms') void store.fetchList('products')
   if (current.value.collection === 'brands') void store.fetchList('products')
+  // Debt reports: the export dialog needs the party/user option lists. These
+  // follow the module permission; a missing grant silently yields no options.
+  if (current.value.collection === 'customerDebts' && auth.canAccessPage('customer.view')) {
+    void store.fetchList('customers')
+  }
+  if (current.value.collection === 'supplierDebts' && auth.canAccessPage('supplier.view')) {
+    void store.fetchList('suppliers')
+  }
+  if (isDebtReport.value && auth.canAccessPage('user.view')) {
+    void store.fetchList('users')
+  }
 }
 
 onMounted(() => {
@@ -419,6 +432,85 @@ function exportColumnType(column: { key: string, type?: string }): 'text' | 'num
   return 'text'
 }
 
+/** Debt report party side: Customer Debt exports one customer, Supplier one supplier. */
+const debtPartyType = computed<'customer' | 'supplier' | null>(() => {
+  const collection = current.value?.collection
+  if (collection === 'customerDebts') return 'customer'
+  if (collection === 'supplierDebts') return 'supplier'
+  return null
+})
+
+const exportPartyLabel = computed(() => debtPartyType.value === 'supplier'
+  ? t('app.modules.supplierDebts.fields.supplier')
+  : t('app.modules.customerDebts.fields.customer'))
+
+const exportUserLabel = computed(() => t('app.fields.user'))
+
+/** De-duplicate option lists (id → label), dropping empty values. */
+function dedupeExportOptions(options: ExportFieldOption[]): ExportFieldOption[] {
+  const seen = new Set<string>()
+  const out: ExportFieldOption[] = []
+  for (const option of options) {
+    const value = option.value.trim()
+    const label = option.label.trim()
+    if (!value || !label || seen.has(value)) continue
+    seen.add(value)
+    out.push({ label, value })
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/** Party options for the debt export dialog (loaded records + rows on screen). */
+const exportPartyOptions = computed<ExportFieldOption[]>(() => {
+  const type = debtPartyType.value
+  if (!type) return []
+  const fromStore = type === 'customer'
+    ? store.list('customers').map(row => ({ label: String(row.name || ''), value: String(row.id || '') }))
+    : store.list('suppliers').map(row => ({ label: String(row.name || ''), value: String(row.id || '') }))
+  const fromRows = (result.value.all as unknown as Record<string, unknown>[]).map(row => type === 'customer'
+    ? { label: String(row.customer || ''), value: String(row.customerId || '') }
+    : { label: String(row.supplier || ''), value: String(row.supplierId || '') })
+  return dedupeExportOptions([...fromStore, ...fromRows])
+})
+
+/** Staff-user options for the debt export dialog (loaded users + rows on screen). */
+const exportUserOptions = computed<ExportFieldOption[]>(() => {
+  if (!isDebtReport.value) return []
+  const fromStore = store.list('users').map(row => ({
+    label: String(row.displayName || row.name || row.username || row.email || ''),
+    value: String(row.id || ''),
+  }))
+  const fromRows = (result.value.all as unknown as Record<string, unknown>[])
+    .map(row => ({ label: String(row.user || ''), value: String(row.userId || '') }))
+  return dedupeExportOptions([...fromStore, ...fromRows])
+})
+
+/**
+ * Debt export rows: fetch EVERY document matching the dialog filters (date
+ * range + party + user) from the backend, not just the page cached on screen.
+ */
+async function fetchDebtExportRows(request: ExportRequest): Promise<Record<string, unknown>[]> {
+  const collection = current.value?.collection
+  if (!collection) return []
+  const partyType = debtPartyType.value
+  const query = {
+    q: debouncedQ.value || undefined,
+    startDate: request.startDate || dateFrom.value || undefined,
+    endDate: request.endDate || dateTo.value || undefined,
+    currency: currencyFilter.value || undefined,
+    customerId: partyType === 'customer' ? (request.partyId || undefined) : undefined,
+    supplierId: partyType === 'supplier' ? (request.partyId || undefined) : undefined,
+    userId: request.userId || undefined,
+  }
+  return fetchAllListRows<Record<string, unknown>>(async ({ page, limit }) => {
+    const pageResult = await entityRepository.list(collection, { ...query, page, limit })
+    return {
+      items: pageResult.items as unknown as Record<string, unknown>[],
+      total: pageResult.meta?.total ?? null,
+    }
+  })
+}
+
 /** Excel/PDF export: the Python backend renders the page's filtered rows. */
 async function onExport(request: ExportRequest) {
   const module = current.value
@@ -434,25 +526,32 @@ async function onExport(request: ExportRequest) {
       return
     }
 
-    let rows = result.value.all as unknown as Record<string, unknown>[]
-    if (request.scope === 'selected') {
-      const selected = new Set(Object.keys(rowSelection.value).filter(id => rowSelection.value[id]))
-      rows = rows.filter(row => selected.has(String(row.id)))
+    // Debt reports: the export dialog filters drive a full backend fetch.
+    let rows: Record<string, unknown>[]
+    if (isDebtReport.value) {
+      rows = await fetchDebtExportRows(request)
     }
-    else if (request.scope === 'current_page') {
-      const start = pagination.value.pageIndex * pagination.value.pageSize
-      rows = rows.slice(start, start + pagination.value.pageSize)
-    }
-    // The export dialog's range narrows the already search/date-filtered rows.
-    if (dateField.value && (request.startDate || request.endDate)) {
-      const key = dateField.value
-      rows = rows.filter((row) => {
-        const value = String(row[key] ?? '').slice(0, 10)
-        if (!value) return false
-        if (request.startDate && value < request.startDate) return false
-        if (request.endDate && value > request.endDate) return false
-        return true
-      })
+    else {
+      rows = result.value.all as unknown as Record<string, unknown>[]
+      if (request.scope === 'selected') {
+        const selected = new Set(Object.keys(rowSelection.value).filter(id => rowSelection.value[id]))
+        rows = rows.filter(row => selected.has(String(row.id)))
+      }
+      else if (request.scope === 'current_page') {
+        const start = pagination.value.pageIndex * pagination.value.pageSize
+        rows = rows.slice(start, start + pagination.value.pageSize)
+      }
+      // The export dialog's range narrows the already search/date-filtered rows.
+      if (dateField.value && (request.startDate || request.endDate)) {
+        const key = dateField.value
+        rows = rows.filter((row) => {
+          const value = String(row[key] ?? '').slice(0, 10)
+          if (!value) return false
+          if (request.startDate && value < request.startDate) return false
+          if (request.endDate && value > request.endDate) return false
+          return true
+        })
+      }
     }
 
     const exportRows = rows.map((row) => {
@@ -1073,6 +1172,10 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
       :can-create="canCreate"
       :can-export="true"
       :export-fields="exportFieldOptions"
+      :export-party-options="exportPartyOptions"
+      :export-party-label="exportPartyLabel"
+      :export-user-options="exportUserOptions"
+      :export-user-label="exportUserLabel"
       :exporting="exporting"
       :create-label="t('app.ui.newEntity', { entity: moduleSingular(current) })"
       :refreshing="pending"

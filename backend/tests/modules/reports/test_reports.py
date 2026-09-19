@@ -659,6 +659,83 @@ async def test_debt_reports_rows_filters_and_unpaid_inclusion(client):
 
 
 @pytest.mark.asyncio
+async def test_debt_reports_user_filter(client, db_session):
+    """Debt reports expose the staff user and filter by them: customer rows by
+    the sale cashier, supplier rows by the Stock In creator."""
+    import uuid as _uuid
+
+    headers = await admin_headers(client)
+    seeded = await _seed(client, headers)
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()["data"]
+    admin_id = me["id"]
+
+    # A second cashier records their own debt sale.
+    tag = _uuid.uuid4().hex[:6]
+    clerk_email = f"debt-clerk-{tag}@example.com"
+    clerk = await create_user_with_role(
+        db_session,
+        email=clerk_email,
+        password="clerkpass1",
+        role_name=f"Debt Clerk {tag}",
+        permissions=["pos.access", "report.customer_debt"],
+    )
+    await db_session.commit()
+    clerk_login = await login(client, clerk_email, "clerkpass1")
+    clerk_headers = {"Authorization": f"Bearer {clerk_login['access_token']}"}
+    clerk_sale = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CUSTOMER_DEBT",
+            "customer_id": seeded["customer"]["id"],
+            "amount_received": "0.00",
+            "items": [{"product_id": seeded["product"]["id"], "quantity": "1"}],
+        },
+        headers=clerk_headers,
+    )
+    assert clerk_sale.status_code == 201, clerk_sale.text
+    clerk_invoice = clerk_sale.json()["data"]["invoice_no"]
+
+    # Filter by the clerk: only their debt, attributed to them.
+    by_clerk = await client.get(
+        f"/api/v1/reports/customer-debts?customer_id={seeded['customer']['id']}"
+        f"&user_id={clerk.id}",
+        headers=headers,
+    )
+    assert by_clerk.status_code == 200, by_clerk.text
+    payload = by_clerk.json()
+    assert payload["meta"]["total"] == 1
+    row = payload["data"][0]
+    assert row["user_id"] == str(clerk.id)
+    assert row["user_name"] == f"User {clerk_email}"
+    assert row["invoice_no"] == clerk_invoice
+
+    # Filter by the admin: the seeded debt, never the clerk's.
+    by_admin = await client.get(
+        f"/api/v1/reports/customer-debts?customer_id={seeded['customer']['id']}&user_id={admin_id}",
+        headers=headers,
+    )
+    assert by_admin.json()["meta"]["total"] >= 1
+    assert all(r["user_id"] == admin_id for r in by_admin.json()["data"])
+    assert all(r["invoice_no"] != clerk_invoice for r in by_admin.json()["data"])
+
+    # Supplier report: the seeded Stock In was created by the admin.
+    supplier_admin = await client.get(
+        f"/api/v1/reports/supplier-debts?supplier_id={seeded['supplier']['id']}&user_id={admin_id}",
+        headers=headers,
+    )
+    assert supplier_admin.status_code == 200, supplier_admin.text
+    assert supplier_admin.json()["meta"]["total"] == 1
+    assert supplier_admin.json()["data"][0]["user_id"] == admin_id
+
+    unknown = await client.get(
+        f"/api/v1/reports/supplier-debts?supplier_id={seeded['supplier']['id']}"
+        f"&user_id={_uuid.uuid4()}",
+        headers=headers,
+    )
+    assert unknown.json()["meta"]["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_debt_reports_currency_filter(client):
     """Optional document-currency filter keeps USD and KHR rows separate on
     both debt reports (spec 2.1.10) and rejects unknown codes."""

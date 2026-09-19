@@ -94,6 +94,9 @@ class CustomerDebtReportRow(BaseModel):
     status: str
     currency: str = "USD"
     exchange_rate: Decimal = Decimal("1")
+    # Staff (cashier) who created the source sale — export/report user filter.
+    user_id: UUID | None = None
+    user_name: str | None = None
     created_at: datetime
 
 
@@ -111,6 +114,9 @@ class SupplierDebtReportRow(BaseModel):
     status: str
     currency: str = "USD"
     exchange_rate: Decimal = Decimal("1")
+    # Staff who created the source Stock In — export/report user filter.
+    user_id: UUID | None = None
+    user_name: str | None = None
     created_at: datetime
 
 

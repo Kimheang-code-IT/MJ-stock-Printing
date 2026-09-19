@@ -14,6 +14,8 @@ export interface EntityListQuery {
   supplierId?: string
   productId?: string
   paymentMethod?: string
+  /** Staff user filter (debt reports: the sale cashier / Stock In creator). */
+  userId?: string
   type?: string
   /** Document-currency filter for the debt reports (USD | KHR). */
   currency?: string
@@ -485,6 +487,12 @@ export interface PosCommandRepository {
   getSaleReceipt(saleId: string): Promise<SaleReceipt>
   /** Original sale (lines + currency + customer) loaded into POS return mode. */
   getSale(saleId: string): Promise<SaleDetail>
+  /**
+   * Scanner lookup: the ACTIVE product with this exact barcode, or null when no
+   * product matches. Unlike the local product cache this is not limited to the
+   * first page, so any in-stock barcode can be auto-added to the cart.
+   */
+  getProductByBarcode(barcode: string): Promise<AppRecord | null>
   /** Customer return against a confirmed sale (POST /pos/sales/{id}/return). */
   returnSale(input: {
     saleId: string

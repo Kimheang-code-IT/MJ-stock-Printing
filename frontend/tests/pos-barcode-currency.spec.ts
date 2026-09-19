@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { cartSubtotal, cartTotal, lineNet, roundMoney, type PosCartLine } from '../app/utils/pos/cart'
+import { resolveExactBarcode } from '../app/utils/pos/barcode-scan'
 import { checkoutDue, checkoutOutstanding, checkoutSaleNet } from '../app/utils/pos/checkout'
 
 /**
@@ -83,6 +84,39 @@ describe('barcode scan flow (USB/HID scanner → add/increment → refocus)', ()
     expect(cart[0]!.quantity).toBe(2)
     // A miss leaves the cart untouched (the scan field keeps focus for retry).
     onSearchEnter('unknown')
+    expect(cart).toHaveLength(1)
+  })
+
+  it('falls back to the exact-barcode API when the code is not in the loaded list', async () => {
+    // Mirrors pages/pos/index.vue onScanCode: local cache miss → API hit → add.
+    const loaded = [{ id: 'p1', name: 'Glove', barcode: '8801001234501', quantity: 10, salePrice: 3.15 }]
+    const cart: PosCartLine[] = []
+    const apiProduct = { id: 'p9', name: 'Syringe', barcode: '9990001112223', quantity: 4, salePrice: 0.5 }
+    const getProductByBarcode = async (code: string) => code === apiProduct.barcode ? apiProduct : null
+    const addProduct = (row: Record<string, unknown>) => {
+      const existing = cart.find(item => item.productId === String(row.id))
+      if (existing) {
+        existing.quantity += 1
+        return
+      }
+      cart.push(line({ productId: String(row.id), name: String(row.name), barcode: String(row.barcode), unitPrice: Number(row.salePrice), quantity: 1 }))
+    }
+    const onScanCode = async (raw: string) => {
+      const code = raw.trim()
+      const local = resolveExactBarcode(loaded, code)
+      if (local) {
+        addProduct(local)
+        return
+      }
+      const remote = await getProductByBarcode(code)
+      if (remote) addProduct(remote)
+    }
+
+    await onScanCode('9990001112223')
+    expect(cart).toHaveLength(1)
+    expect(cart[0]!.productId).toBe('p9')
+    // Unknown barcode resolves to null and adds nothing.
+    await onScanCode('0000000000000')
     expect(cart).toHaveLength(1)
   })
 })

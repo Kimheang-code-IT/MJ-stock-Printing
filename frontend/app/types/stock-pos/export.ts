@@ -14,4 +14,11 @@ export interface ExportRequest {
   scope: ExportScope
   fieldCodes: string[]
   format: ExportFormat
+  /**
+   * Debt reports only: narrow the export to one party (`customerId` for the
+   * Customer Debt Report, `supplierId` for the Supplier Debt Report) and/or one
+   * staff user. Undefined means "all".
+   */
+  partyId?: string
+  userId?: string
 }

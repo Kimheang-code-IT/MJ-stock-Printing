@@ -113,6 +113,28 @@ describe('http entity repository', () => {
     expect(result.meta?.page).toBe(2)
   })
 
+  it('maps UI camelCase list filters to backend snake_case query params', async () => {
+    const captured = withFakeApi(() => ({ data: [], meta: { page: 1, limit: 100, total: 0 } }))
+    const repository = createHttpEntityRepository()
+    await repository.list('customerDebts', {
+      customerId: 'cus-1',
+      userId: 'usr-1',
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+      currency: 'USD',
+    })
+    expect(captured[0]?.query).toMatchObject({
+      customer_id: 'cus-1',
+      user_id: 'usr-1',
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+      currency: 'USD',
+      limit: 100,
+    })
+    expect('customerId' in (captured[0]?.query ?? {})).toBe(false)
+    expect('userId' in (captured[0]?.query ?? {})).toBe(false)
+  })
+
   it('unwraps single-record envelopes on create', async () => {
     withFakeApi(() => ({ data: { id: 'cus-099', code: 'CUS-099' }, meta: { page: 1, limit: 1, total: 1 } }))
     const repository = createHttpEntityRepository()
@@ -424,5 +446,24 @@ describe('complete purchase (Stock In) commands', () => {
     expect('supplier_id' in body).toBe(false)
     expect('uom_id' in (body.items as Array<Record<string, unknown>>)[0]!).toBe(false)
     expect('unit_cost' in (body.items as Array<Record<string, unknown>>)[0]!).toBe(false)
+  })
+
+  it('looks a product up by exact barcode and normalizes the response', async () => {
+    const captured = withFakeApi(() => ({
+      data: { id: 'prd-9', barcode: '8801001234501', name: 'Glove', selling_price: 3.15 },
+    }))
+    const commands = createHttpPosCommandRepository()
+    const product = await commands.getProductByBarcode('8801001234501')
+    expect(captured[0]?.method).toBe('GET')
+    expect(captured[0]?.url).toBe('/api/v1/pos/products/barcode/8801001234501')
+    expect(product).toMatchObject({ id: 'prd-9', barcode: '8801001234501', salePrice: 3.15 })
+  })
+
+  it('returns null when no active product matches the scanned barcode (404)', async () => {
+    withFakeApi(() => {
+      throw new Error('API Error: 404')
+    })
+    const commands = createHttpPosCommandRepository()
+    await expect(commands.getProductByBarcode('nope')).resolves.toBeNull()
   })
 })

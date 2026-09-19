@@ -1151,6 +1151,17 @@ export function createMockPosRepository(): PosCommandRepository {
       } as SaleDetail)
     },
 
+    async getProductByBarcode(barcode: string): Promise<AppRecord | null> {
+      const db = useMockDb()
+      const code = String(barcode || '').trim()
+      if (!code) return null
+      const product = db.collections.products.find(row =>
+        String(row.barcode || '').trim() === code
+        && String(row.status || 'Active') !== 'Inactive',
+      )
+      return mockLatency(product ? ({ ...product } as AppRecord) : null)
+    },
+
     async createStockOperation(input): Promise<AppRecord> {
       const db = useMockDb()
       const product = db.collections.products.find(row => String(row.id) === String(input.productId))

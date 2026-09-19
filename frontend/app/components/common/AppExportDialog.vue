@@ -7,10 +7,20 @@ const props = withDefaults(defineProps<{
   fields?: ExportFieldOption[]
   selectedCount?: number
   loading?: boolean
+  /** Debt reports: when set, offer "export for one party" + a party picker. */
+  partyOptions?: ExportFieldOption[]
+  partyLabel?: string
+  /** Debt reports: when set, offer a staff-user filter. */
+  userOptions?: ExportFieldOption[]
+  userLabel?: string
 }>(), {
   fields: () => [],
   selectedCount: 0,
   loading: false,
+  partyOptions: () => [],
+  partyLabel: '',
+  userOptions: () => [],
+  userLabel: '',
 })
 
 const emit = defineEmits<{
@@ -22,17 +32,27 @@ const startDate = ref('')
 const endDate = ref('')
 const format = ref<ExportFormat>('xlsx')
 const selectedFields = ref<string[]>([])
+const oneParty = ref(false)
+const partyId = ref('')
+const userId = ref('')
 
 const formatItems = computed(() => [
   { label: t('core.exportDialog.formatExcel'), value: 'xlsx' },
   { label: t('core.exportDialog.formatPdf'), value: 'pdf' },
 ])
 
+const userSelectItems = computed(() => [
+  { label: t('core.exportDialog.allUsers'), value: '' },
+  ...props.userOptions,
+])
+
 const invalidRange = computed(() => Boolean(
   startDate.value && endDate.value && startDate.value > endDate.value,
 ))
 const noFields = computed(() => props.fields.length > 0 && selectedFields.value.length === 0)
-const canSubmit = computed(() => !invalidRange.value && !noFields.value && !props.loading)
+const partyMissing = computed(() => oneParty.value && !partyId.value)
+const canSubmit = computed(() =>
+  !invalidRange.value && !noFields.value && !partyMissing.value && !props.loading)
 
 watch(open, (isOpen) => {
   if (!isOpen) return
@@ -40,6 +60,9 @@ watch(open, (isOpen) => {
   endDate.value = ''
   format.value = 'xlsx'
   selectedFields.value = props.fields.map(field => field.value)
+  oneParty.value = false
+  partyId.value = ''
+  userId.value = ''
 })
 
 function toggleField(value: string, checked: boolean | 'indeterminate') {
@@ -57,6 +80,8 @@ function submit() {
     scope: 'current_page',
     fieldCodes: [...selectedFields.value],
     format: format.value,
+    partyId: oneParty.value && partyId.value ? partyId.value : undefined,
+    userId: userId.value || undefined,
   })
 }
 </script>
@@ -93,6 +118,31 @@ function submit() {
           class="w-full"
         />
       </UFormField>
+
+      <div v-if="partyOptions.length || userOptions.length" class="grid gap-4 sm:grid-cols-2">
+        <div v-if="partyOptions.length" class="space-y-2">
+          <UCheckbox
+            v-model="oneParty"
+            :label="$t('core.exportDialog.oneParty', { party: partyLabel })"
+          />
+          <USelect
+            v-if="oneParty"
+            v-model="partyId"
+            :items="partyOptions"
+            value-key="value"
+            :placeholder="$t('core.exportDialog.selectParty', { party: partyLabel })"
+            class="w-full"
+          />
+        </div>
+        <UFormField v-if="userOptions.length" :label="userLabel">
+          <USelect
+            v-model="userId"
+            :items="userSelectItems"
+            value-key="value"
+            class="w-full"
+          />
+        </UFormField>
+      </div>
 
       <fieldset v-if="fields.length" class="rounded-sm border border-default p-3">
         <legend class="px-1 text-sm font-medium text-highlighted">

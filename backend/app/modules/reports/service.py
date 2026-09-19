@@ -411,6 +411,7 @@ class ReportsService:
         customer_id,
         status: str | None,
         currency: str | None = None,
+        user_id=None,
         start: date | None,
         end: date | None,
         page: int,
@@ -421,6 +422,7 @@ class ReportsService:
         The Date column/filter is the invoice (sale) date; every UNPAID,
         PARTIAL and PAID debt document is one row. `currency` is an optional
         document-currency filter — USD and KHR rows are never mixed.
+        `user_id` narrows to the cashier who created the source sale.
         """
         start_at, end_at = _range(start, end)
 
@@ -439,12 +441,15 @@ class ReportsService:
                 target = target.where(CustomerDebt.status == status)
             if currency:
                 target = target.where(CustomerDebt.currency == currency)
+            if user_id is not None:
+                target = target.where(Sale.cashier_id == user_id)
             return target
 
         base = (
-            select(CustomerDebt, Customer.name, Customer.code, Sale.sale_date)
+            select(CustomerDebt, Customer.name, Customer.code, Sale.sale_date, Sale.cashier_id, User.full_name)
             .join(Customer, Customer.id == CustomerDebt.customer_id)
             .join(Sale, Sale.id == CustomerDebt.sale_id)
+            .outerjoin(User, User.id == Sale.cashier_id)
         )
         count_base = (
             select(func.count())
@@ -474,9 +479,11 @@ class ReportsService:
                 "status": debt.status,
                 "currency": debt.currency,
                 "exchange_rate": debt.exchange_rate,
+                "user_id": cashier_id,
+                "user_name": user_name,
                 "created_at": debt.created_at,
             }
-            for debt, name, code, sale_date in rows.all()
+            for debt, name, code, sale_date, cashier_id, user_name in rows.all()
         ]
         return data, int(total)
 
@@ -487,6 +494,7 @@ class ReportsService:
         supplier_id,
         status: str | None,
         currency: str | None = None,
+        user_id=None,
         start: date | None,
         end: date | None,
         page: int,
@@ -497,6 +505,7 @@ class ReportsService:
         The Date column/filter is the stock-in / purchase date; every UNPAID,
         PARTIAL and PAID debt document is one row. `currency` is an optional
         document-currency filter — USD and KHR rows are never mixed.
+        `user_id` narrows to the user who created the source Stock In.
         """
         start_at, end_at = _range(start, end)
 
@@ -518,12 +527,22 @@ class ReportsService:
                 target = target.where(SupplierDebt.status == status)
             if currency:
                 target = target.where(SupplierDebt.currency == currency)
+            if user_id is not None:
+                target = target.where(StockTransaction.created_by == user_id)
             return target
 
         base = (
-            select(SupplierDebt, Supplier.name, Supplier.code, StockTransaction.transaction_date)
+            select(
+                SupplierDebt,
+                Supplier.name,
+                Supplier.code,
+                StockTransaction.transaction_date,
+                StockTransaction.created_by,
+                User.full_name,
+            )
             .join(Supplier, Supplier.id == SupplierDebt.supplier_id)
             .join(StockTransaction, StockTransaction.id == SupplierDebt.stock_transaction_id)
+            .outerjoin(User, User.id == StockTransaction.created_by)
         )
         count_base = (
             select(func.count())
@@ -557,9 +576,11 @@ class ReportsService:
                 "status": debt.status,
                 "currency": debt.currency,
                 "exchange_rate": debt.exchange_rate,
+                "user_id": created_by,
+                "user_name": user_name,
                 "created_at": debt.created_at,
             }
-            for debt, name, code, transaction_date in rows.all()
+            for debt, name, code, transaction_date, created_by, user_name in rows.all()
         ]
         return data, int(total)
 

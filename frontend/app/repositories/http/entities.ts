@@ -526,6 +526,9 @@ function adaptCustomerDebtOut(row: Record<string, unknown>): Record<string, unkn
     remainingAmount: row.remaining_amount ?? null,
     dueDate: row.due_date ?? null,
     status: String(row.status ?? ''),
+    // Staff (cashier) who created the source sale — export/report user filter.
+    userId: row.user_id != null ? String(row.user_id) : '',
+    user: String(row.user_name ?? row.user ?? ''),
     // Debt inherits the source sale currency + saved exchange rate; historical
     // debts must never be re-converted with the current rate.
     currency: String(row.currency ?? 'USD'),
@@ -549,6 +552,9 @@ function adaptSupplierDebtOut(row: Record<string, unknown>): Record<string, unkn
     remainingAmount: row.remaining_amount ?? null,
     dueDate: row.due_date ?? null,
     status: String(row.status ?? ''),
+    // Staff who created the source Stock In — export/report user filter.
+    userId: row.user_id != null ? String(row.user_id) : '',
+    user: String(row.user_name ?? row.user ?? ''),
     currency: String(row.currency ?? 'USD'),
     exchangeRate: Number(row.exchange_rate ?? 1),
     createdAt: row.created_at ?? null,
@@ -867,6 +873,15 @@ function statusEndpoint(collection: ApiCollection, id: string): string | null {
   return null
 }
 
+/** UI camelCase list filters → the backend's snake_case query parameter names. */
+const LIST_QUERY_PARAM_MAP: Record<string, string> = {
+  customerId: 'customer_id',
+  supplierId: 'supplier_id',
+  productId: 'product_id',
+  paymentMethod: 'payment_method',
+  userId: 'user_id',
+}
+
 export function createHttpEntityRepository(): EntityRepository {
   const api = useApi()
 
@@ -878,11 +893,17 @@ export function createHttpEntityRepository(): EntityRepository {
     const endpoint = CollectionEndpoints[collection as ApiCollection]
     if (!endpoint) return { items: [], meta: null }
     const key = collection as ApiCollection
+    // UI camelCase list filters → the backend's snake_case query names. The
+    // backend never accepts camelCase for these, so unmapped keys were silently
+    // ignored (debt party/user filters are applied server-side).
+    const params: Record<string, unknown> = {}
+    for (const [param, value] of Object.entries(query)) {
+      if (value === undefined || value === null || value === '') continue
+      params[LIST_QUERY_PARAM_MAP[param] ?? param] = value
+    }
+    params.limit = query.limit ?? (REPORT_COLLECTIONS.has(key) ? 500 : 100)
     const response = await api.get<unknown>(endpoint, {
-      query: {
-        ...query,
-        limit: query.limit ?? (REPORT_COLLECTIONS.has(key) ? 500 : 100),
-      },
+      query: params,
       requestKey: `entity-list:${collection}`,
     })
     const items = unwrap<Record<string, unknown>[]>(response)
@@ -1194,7 +1215,25 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     )) as AppRecord
   }
 
-  return { completeSale, updateSale, createPurchase, updatePurchase, createStockOperation, payCustomerDebt, paySupplierDebt, getSaleReceipt, getSale, returnSale, returnPurchase }
+  /** Scanner auto-add: exact barcode lookup, null when the API reports 404. */
+  async function getProductByBarcode(barcode: string): Promise<AppRecord | null> {
+    const code = String(barcode || '').trim()
+    if (!code) return null
+    try {
+      const response = await api.get<unknown>(ApiEndpoints.POS_PRODUCT_BARCODE(code), {
+        suppressErrorToast: true,
+        cancelPrevious: false,
+        requestKey: `pos-barcode:${code}`,
+      })
+      return adaptProductOut(unwrap<Record<string, unknown>>(response)) as AppRecord
+    }
+    catch {
+      // Unknown/inactive barcode (404) — the caller shows the "not found" toast.
+      return null
+    }
+  }
+
+  return { completeSale, updateSale, createPurchase, updatePurchase, createStockOperation, payCustomerDebt, paySupplierDebt, getSaleReceipt, getSale, getProductByBarcode, returnSale, returnPurchase }
 }
 
 /** Backend product-history row → UI camelCase (kind derived from type). */
