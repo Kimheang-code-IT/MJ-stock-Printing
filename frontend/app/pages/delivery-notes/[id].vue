@@ -28,7 +28,7 @@ const noteId = computed(() => String(route.params.id || ''))
 const loading = ref(false)
 
 const note = computed(() => store.get('deliveryNotes', noteId.value) as AppRecord | null)
-const shopName = ref('Yoeun Sokhon Pharmacy')
+const shopName = ref('MJ Printing')
 
 watch(note, (value) => {
   if (!value) return

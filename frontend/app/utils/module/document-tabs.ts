@@ -5,7 +5,7 @@ import type {
   DocumentTabSchema,
   FieldOption,
   FieldType,
-} from '~/types/stock-pos/common'
+} from '~/types/mj/common'
 import type {
   ModuleField,
   ModuleFieldType,
@@ -33,6 +33,12 @@ export const moduleDocumentRecordKey: InjectionKey<{
    *  Pricing tab base-row sale price → `salePrice`). */
   set?: (key: string, value: unknown) => void
 }> = Symbol('moduleDocumentRecord')
+
+/** Per-field validation messages, provided by the document page and read by
+ *  `AppDynamicFieldRenderer` to show errors inline on the field (not a toast). */
+export const moduleDocumentFieldErrorsKey: InjectionKey<{
+  get: (key: string) => string | undefined
+}> = Symbol('moduleDocumentFieldErrors')
 
 const TYPE_MAP: Record<ModuleFieldType, FieldType> = {
   text: 'text',
@@ -269,87 +275,38 @@ function partyTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): Do
 }
 
 /**
- * Product form tabs (spec §5.9): exactly **General** (identity fields) and
- * **Pricing** (editable UOM conversion + sale-price table bound to the
- * record's `uomConversions` and saved with the same Save as General, plus
- * sale-price version history). Batch tracking, expiry tracking and FIFO are
- * always on system-wide, so the Stock Costing toggles and the read-only
- * nearest Expire Date are not shown (lots live on the Batches tab).
+ * Product form tabs (spec §5.9): exactly **General** (identity fields + the
+ * single editable sale price). Batch/expiry tracking and pricing history are no
+ * longer part of the product document.
  *
- * Create mode keeps only the editable inputs: the Batches tab has no data
- * yet, so it appears only once the product exists (detail/edit).
+ * Create mode keeps only the editable General inputs.
  */
 function productTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
   const generalSections: DocumentSectionSchema[] = [
     ...fieldsToSections(module.fields, options.readOnlyKeys, options),
+    {
+      id: 'sale-price',
+      titleKey: 'app.modules.products.fields.salePrice',
+      fields: [
+        {
+          key: 'salePrice',
+          labelKey: 'app.modules.products.fields.salePrice',
+          type: 'number',
+          required: true,
+          helpKey: 'app.stock.salePriceHint',
+        },
+      ],
+    },
   ]
 
-  const tabs: DocumentTabSchema[] = [
+  return [
     {
       id: 'general',
       labelKey: 'app.stock.tabGeneral',
       label: 'General',
       sections: generalSections,
     },
-    {
-      id: 'pricing',
-      labelKey: 'app.stock.tabPricing',
-      label: 'Pricing',
-      sections: [{
-        id: 'pricing',
-        titleKey: 'app.stock.tabPricing',
-        fields: [
-          {
-            key: 'uomConversions',
-            labelKey: 'app.stock.tabPricing',
-            type: 'uom-conversions',
-            colSpan: 2,
-          },
-        ],
-      }],
-    },
   ]
-
-  if (!options.isCreate) {
-    tabs.push({
-      id: 'batches',
-      labelKey: 'app.stock.tabBatches',
-      label: 'Batches',
-      sections: [{
-        id: 'batches',
-        titleKey: 'app.stock.tabBatches',
-        fields: [
-          {
-            key: '__record',
-            labelKey: 'app.stock.tabBatches',
-            type: 'product-batches',
-            colSpan: 2,
-            helpKey: 'app.stock.batchManageHint',
-          },
-        ],
-      }],
-    })
-    tabs.push({
-      id: 'barcode',
-      labelKey: 'app.stock.tabBarcode',
-      label: 'Barcode',
-      sections: [{
-        id: 'barcode',
-        titleKey: 'app.stock.tabBarcode',
-        fields: [
-          {
-            key: '__record',
-            labelKey: 'app.stock.tabBarcode',
-            type: 'product-barcode',
-            colSpan: 2,
-            helpKey: 'app.stock.barcodeHint',
-          },
-        ],
-      }],
-    })
-  }
-
-  return tabs
 }
 
 function defaultTabs(module: ModuleConfig, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {

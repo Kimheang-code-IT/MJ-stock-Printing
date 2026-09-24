@@ -10,11 +10,14 @@ import {
 } from '~/utils/date-picker'
 import { formatDateParts } from '~/utils/format/format-service'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
+import { fieldControlClass } from '~/utils/fields'
 
 const props = withDefaults(defineProps<{
   modelValue?: string | null
   disabled?: boolean
   required?: boolean
+  /** Inline validation error; also drives the red ring on the control. */
+  error?: string | boolean
   granularity?: DatePickerGranularity
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
   class?: string
@@ -150,7 +153,8 @@ function commitPicker(value: DateValue | undefined | null) {
       :required="required"
       :size="size"
       :placeholder="placeholderText"
-      class="w-full min-w-0"
+      :aria-invalid="Boolean(error) || undefined"
+      :class="['min-w-0', fieldControlClass(Boolean(error))]"
       autocomplete="off"
       @update:model-value="commitText"
       @focus="onFocus"

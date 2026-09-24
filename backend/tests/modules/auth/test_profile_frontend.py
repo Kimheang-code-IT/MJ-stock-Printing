@@ -3,7 +3,11 @@ change-password, Telegram link codes and the reset handoff exchange."""
 
 import pytest
 
-from tests.modules.auth.test_reset import ADMIN_EMAIL, admin_with_chat_id, captured_deliveries
+from tests.modules.auth.test_reset import (  # noqa: F401
+    ADMIN_EMAIL,
+    admin_with_chat_id,
+    captured_deliveries,
+)
 from tests.utils import admin_headers, login
 
 
@@ -114,7 +118,7 @@ async def test_telegram_link_code_is_one_time(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_handoff_exchange_issues_single_use_reset_session(client, admin_with_chat_id, captured_deliveries):
+async def test_handoff_exchange_issues_single_use_reset_session(client, admin_with_chat_id, captured_deliveries):  # noqa: F811
     requested = await client.post("/api/v1/auth/forgot-password", json={"email": ADMIN_EMAIL})
     assert requested.status_code == 200
     assert captured_deliveries, "reset code queued"

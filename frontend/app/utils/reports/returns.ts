@@ -7,7 +7,6 @@ export type ReturnLineDraft = {
   lineId: string
   productId: string
   name: string
-  uom: string
   soldQty: number
   returnedQty: number
   returnableQty: number
@@ -24,8 +23,7 @@ export function lineUnitAmount(line: AppRecord): number {
     return roundMoney(Number(line.total) / qty)
   }
   const price = Number(line.price || line.unitCost || 0)
-  const discountPercent = Math.min(100, Math.max(0, Number(line.discountPercent || 0)))
-  return roundMoney(price * (1 - discountPercent / 100))
+  return roundMoney(price)
 }
 
 export function documentLines(doc: AppRecord | null | undefined): AppRecord[] {
@@ -42,7 +40,6 @@ export function buildReturnLines(doc: AppRecord | null | undefined, kind: Return
       lineId: String(line.id || ''),
       productId: String(line.productId || ''),
       name: String(line.name || ''),
-      uom: String(line.uom || ''),
       soldQty,
       returnedQty,
       returnableQty,
@@ -55,8 +52,8 @@ export function buildReturnLines(doc: AppRecord | null | undefined, kind: Return
 
 /**
  * Build Purchase Edit line drafts from an original purchase document: every
- * line with its original quantity, unit cost, batch/expiry and UOM so the
- * purchase can be edited and re-saved via PATCH.
+ * line with its original quantity and unit cost so the purchase can be edited
+ * and re-saved via PATCH.
  */
 export function buildPurchaseEditLines(
   doc: AppRecord | null | undefined,
@@ -70,13 +67,13 @@ export function buildPurchaseEditLines(
       lineId: String(line.id || ''),
       name: String(line.name || product?.name || ''),
       productId: String(line.productId || ''),
-      batchNo: String(line.batchNo || ''),
-      expiryDate: String(line.expiryDate || ''),
-      uomId: String(product?.uomId || ''),
       quantity: qty,
       unitAmount: cost,
       returnableQuantity: qty,
       amount: roundMoney(qty * cost),
+      height: line.height == null ? null : Number(line.height),
+      width: line.width == null ? null : Number(line.width),
+      areaM2: line.areaM2 == null ? null : Number(line.areaM2),
     }
   }).filter(line => line.lineId && line.productId)
 }
@@ -90,20 +87,21 @@ export type PurchaseReturnLineDraft = {
   lineId: string
   name: string
   productId: string
-  batchNo: string
-  expiryDate: string
-  uomId: string
   quantity: number
   unitAmount: number
   returnableQuantity: number
   amount: number
+  /** Sold-by-area purchase line dimensions (metres), when present. */
+  height?: number | null
+  width?: number | null
+  areaM2?: number | null
 }
 
 /**
  * Build Purchase Return line drafts from an original purchase document:
  * only lines that still have a returnable quantity, carrying the original
- * batch, expiry, UOM and unit cost. Quantity defaults to the full returnable
- * amount (the user may reduce it before submitting).
+ * unit cost. Quantity defaults to the full returnable amount (the user may
+ * reduce it before submitting).
  */
 export function buildPurchaseReturnLines(
   doc: AppRecord | null | undefined,
@@ -119,13 +117,13 @@ export function buildPurchaseReturnLines(
         lineId: String(line.id || ''),
         name: String(line.name || product?.name || ''),
         productId: String(line.productId || ''),
-        batchNo: String(line.batchNo || ''),
-        expiryDate: String(line.expiryDate || ''),
-        uomId: String(product?.uomId || ''),
         quantity: qty,
         unitAmount: cost,
         returnableQuantity: qty,
         amount: roundMoney(qty * cost),
+        height: line.height == null ? null : Number(line.height),
+        width: line.width == null ? null : Number(line.width),
+        areaM2: line.areaM2 == null ? null : Number(line.areaM2),
       }
     })
     .filter(line => line.lineId)

@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'stockpos:auth:password-reset'
+const STORAGE_KEY = 'mj:auth:password-reset'
 
 export interface PasswordResetSession {
   email: string

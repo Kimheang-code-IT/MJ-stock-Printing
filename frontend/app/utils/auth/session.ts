@@ -1,6 +1,6 @@
 import type { AuthUser } from '~/types/auth-user'
 
-export const AUTH_STORAGE_KEY = 'stockpos:auth:user'
+export const AUTH_STORAGE_KEY = 'mj:auth:user'
 
 /** Cookie-safe user: drop bulky permission lists that overflow the 4KB cookie limit. */
 export function compactAuthUser(user: AuthUser): AuthUser {

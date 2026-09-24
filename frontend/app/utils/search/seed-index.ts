@@ -1,4 +1,4 @@
-import type { IndexedDocument } from '~/types/stock-pos/search'
+import type { IndexedDocument } from '~/types/mj/search'
 import {
   isSearchIndexSeeded,
   markSearchIndexSeeded,

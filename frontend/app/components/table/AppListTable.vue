@@ -4,7 +4,14 @@ import type { PaginationState } from '@tanstack/vue-table'
 import { getPaginationRowModel } from '@tanstack/vue-table'
 import type { DatePickerGranularity } from '~/utils/date-picker'
 import { parsePageLimit, TABLE_PAGE_SIZES } from '~/utils/pagination'
-import { listTableSelectedIds, listTableVirtualize } from '~/utils/table/list-table'
+import {
+  applyListTableSort,
+  deriveListTableSortOptions,
+  listTableSelectedIds,
+  listTableVirtualize,
+  type ListTableSort,
+  type ListTableSortOption,
+} from '~/utils/table/list-table'
 import { appTableFillUi } from '~/utils/table/theme'
 
 export type ListTableEmptyAction = {
@@ -30,6 +37,9 @@ const props = withDefaults(defineProps<{
   showDateRange?: boolean
   dateLabel?: string
   dateGranularity?: DatePickerGranularity
+  /** Sortable fields shown in the toolbar sort menu. When omitted, options are
+   *  derived from the first date + document-number columns. */
+  sortOptions?: ListTableSortOption[]
   /** Lights the mobile filter button when any toolbar filter or date range is set. */
   filtersActive?: boolean
   emptyIcon?: string
@@ -43,6 +53,7 @@ const props = withDefaults(defineProps<{
   showDateRange: false,
   dateLabel: '',
   dateGranularity: 'day',
+  sortOptions: () => [],
   filtersActive: false,
   emptyIcon: 'i-lucide-inbox',
   emptyTitle: '',
@@ -58,13 +69,31 @@ const { t } = useI18n()
 
 const paginationOptions = { getPaginationRowModel: getPaginationRowModel() }
 const selectedIds = computed(() => listTableSelectedIds(rowSelection.value))
-const total = computed(() => props.data.length)
-const virtualize = computed(() => listTableVirtualize(total.value, pagination.value.pageSize))
 const searchPlaceholderText = computed(() => props.searchPlaceholder || t('app.ui.search'))
 const dateLabelText = computed(() => props.dateLabel || t('app.ui.date'))
 const emptyTitleText = computed(() => props.emptyTitle || t('app.ui.noRecords'))
 const emptyDescriptionText = computed(() => props.emptyDescription || t('app.ui.noRecordsHint'))
 const pageSizeItems = TABLE_PAGE_SIZES.map(value => ({ label: String(value), value: String(value) }))
+
+const sort = ref<ListTableSort | null>(null)
+const sortMenuOptions = computed<ListTableSortOption[]>(() => {
+  if (props.sortOptions?.length) return props.sortOptions
+  return deriveListTableSortOptions(props.columns).map(option => ({
+    ...option,
+    label: option.kind === 'date' ? dateLabelText.value : t('components.sortFieldNo'),
+  }))
+})
+const sortedData = computed(() => applyListTableSort(props.data, sort.value))
+const total = computed(() => sortedData.value.length)
+const virtualize = computed(() => listTableVirtualize(total.value, pagination.value.pageSize))
+
+// A new module/list may not have the previously sorted field — drop stale sorts.
+watch(sortMenuOptions, (options) => {
+  if (sort.value && !options.some(option => option.key === sort.value!.key)) sort.value = null
+})
+watch(sort, () => {
+  pagination.value = { ...pagination.value, pageIndex: 0 }
+})
 
 function rowId(row: T) {
   return props.getRowId(row)
@@ -108,6 +137,13 @@ function onSelect(event: Event, row: TableRow<T>) {
             </template>
           </CommonAppFilterMenu>
 
+          <CommonAppSortMenu
+            v-if="sortMenuOptions.length"
+            v-model="sort"
+            :options="sortMenuOptions"
+            class="shrink-0"
+          />
+
           <slot name="actions" :selected-ids="selectedIds" />
         </div>
       </div>
@@ -118,7 +154,7 @@ function onSelect(event: Event, row: TableRow<T>) {
           v-model:global-filter="search"
           v-model:row-selection="rowSelection"
           v-model:pagination="pagination"
-          :data="data"
+          :data="sortedData"
           :columns="columns"
           :loading="loading"
           :get-row-id="rowId"

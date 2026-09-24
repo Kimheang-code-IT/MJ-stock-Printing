@@ -18,6 +18,14 @@ from app.modules.auth.models import User
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+async def _latest_backup_job(db: AsyncSession) -> dict | None:
+    from app.modules.backup.repository import BackupRepository
+    from app.modules.backup.service import job_to_dict
+
+    job = await BackupRepository(db).latest_job()
+    return job_to_dict(job) if job else None
+
+
 def _telegram_status(result: dict) -> dict:
     if not result.get("enabled"):
         return {"status": "disabled", "message": "Telegram notifications are disabled."}
@@ -45,6 +53,7 @@ async def get_app_config(
             groups,
             environment=app_settings.environment,
             environment_token_configured=bool(app_settings.telegram_bot_token),
+            backup_job=await _latest_backup_job(db),
         )
     )
 
@@ -64,6 +73,7 @@ async def update_app_config(
             await service.get_settings(),
             environment=app_settings.environment,
             environment_token_configured=bool(app_settings.telegram_bot_token),
+            backup_job=await _latest_backup_job(db),
         )
     )
 

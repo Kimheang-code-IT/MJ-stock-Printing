@@ -4,7 +4,7 @@ import type { AppHeaderBadge } from '~/composables/layout/useAppHeader'
 import type { ModuleAction, ModuleField, ModuleConfig, ModuleRelated, ModuleTable, ModuleFieldType  } from '~/config/modules'
 import { getModule } from '~/config/modules'
 
-import { isMoneyKey, isDateFieldKey, isDateTimeFieldKey } from '~/utils/module/field-keys'
+import { isMoneyKey, isNumericKey, isDateFieldKey, isDateTimeFieldKey } from '~/utils/module/field-keys'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { formatDate, formatDateTime, formatMoney as formatMoneyValue, formatNumber as formatNumberValue } from '~/utils/format/format-service'
 import { codeTitle, labeledStatusOptions, shortDay } from '~/utils/module/format'
@@ -167,6 +167,9 @@ export function formatModuleCell(
   if (resolvedType === 'datetime') return formatDateTime(value)
   if (resolvedType === 'date') return formatDate(value)
 
+  // Quantity-like keys arrive as decimal strings ("0.0000"); show them as plain
+  // numbers (0, 240, 1.5) instead of the raw fixed-precision value.
+  if (isNumericKey(key)) return formatNumberValue(value, { maximumFractionDigits: 4 })
   if (typeof value === 'number') return formatNumberValue(value)
   if (Array.isArray(value)) return value.map(item => String(item ?? '').trim()).filter(Boolean).join(', ') || '—'
   const text = String(value).trim()

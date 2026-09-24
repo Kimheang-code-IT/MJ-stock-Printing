@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ConnectionStatus } from '~/types/stock-pos/settings'
+import type { ConnectionStatus } from '~/types/mj/settings'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const props = defineProps<{

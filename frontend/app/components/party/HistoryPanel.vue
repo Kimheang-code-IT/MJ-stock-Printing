@@ -5,9 +5,11 @@ import { UBadge } from '#components'
 import { h } from 'vue'
 import type { AppRecord } from '~/config/admin-seed'
 import { formatMoney } from '~/composables/module/useModule'
+import { useSaleInvoicePrint } from '~/composables/common/useSaleInvoicePrint'
 import { usePartyLedger } from '~/composables/party/usePartyLedger'
 import { apiErrorMessage } from '~/utils/api/errors'
-import { listTableRowMetaColumn } from '~/utils/table/list-columns'
+import { listTableRowMetaColumn, type TableRowMetaAction } from '~/utils/table/list-columns'
+import type { ListTableSortOption } from '~/utils/table/list-table'
 import { partyDay, type PartyHistory, type PartyKind } from '~/utils/party/ledger'
 
 /**
@@ -28,10 +30,20 @@ const { t } = useI18n()
 const auth = useAuthStore()
 const preferences = usePreferencesStore()
 const ledger = usePartyLedger()
+const {
+  open: salePrintOpen,
+  busy: salePrintBusy,
+  request: requestSalePrint,
+  confirm: confirmSalePrint,
+  cancel: cancelSalePrint,
+} = useSaleInvoicePrint()
 
 const canEdit = computed(() => props.kind === 'customer'
   ? auth.canAccessPage('pos.access')
   : auth.canAccessPage('stock.in'))
+
+/** Sale rows can reprint their invoice (needs POS access for the receipt). */
+const canPrintInvoice = computed(() => props.kind === 'customer' && auth.canAccessPage('pos.access'))
 
 const rows = ref<PartyHistory[]>([])
 const loading = ref(false)
@@ -149,28 +161,65 @@ const columns = computed<TableColumn<PartyHistory & Record<string, unknown>>[]>(
     enableSorting: false,
     cell: ({ row }) => h(UBadge, { color: 'neutral', variant: 'subtle', size: 'sm' }, () => row.original.status || '—') as never,
   })
-  if (canEdit.value) {
+  if (canEdit.value || canPrintInvoice.value) {
     base.push(listTableRowMetaColumn<PartyHistory & Record<string, unknown>>({
       summary: '',
       items: row => editMenu(row as PartyHistory),
+      actions: row => rowPrintActions(row as PartyHistory),
     }))
   }
   return base
 })
 
+/** Direct Print-invoice button on customer sale rows. */
+function rowPrintActions(row: PartyHistory): TableRowMetaAction[] {
+  if (!canPrintInvoice.value || !row.id) return []
+  return [{
+    icon: 'i-lucide-printer',
+    label: t('app.pos.printInvoice'),
+    onClick: () => requestSalePrint(row.id),
+  }]
+}
+
+const sortOptions = computed<ListTableSortOption[]>(() => [
+  { key: 'date', kind: 'date', label: t('app.fields.date') },
+  {
+    key: 'documentNo',
+    kind: 'number',
+    label: props.kind === 'supplier' ? t('app.reports.purchaseNo') : t('app.fields.invoiceNo'),
+  },
+])
+
 /** Edit reuses the original transaction screen (POS / Purchase) with the
- *  invoice loaded; saving reverse-applies the document. */
+ *  invoice loaded; saving reverse-applies the document. Return loads the same
+ *  screen in return mode, which reverse-applies stock via the backend. */
 function editMenu(row: PartyHistory): DropdownMenuItem[][] {
   if (!canEdit.value || !row.id) return []
-  const to = props.kind === 'customer'
-    ? `/pos?editSaleId=${encodeURIComponent(row.id)}`
-    : `/reports/purchases/new?editPurchaseId=${encodeURIComponent(row.id)}&purchaseNo=${encodeURIComponent(row.documentNo)}`
-  return [[{
+  const customer = props.kind === 'customer'
+  const documentNo = encodeURIComponent(row.documentNo)
+  const items: DropdownMenuItem[] = [{
     label: t('app.reports.edit'),
     icon: 'i-lucide-pencil',
     color: 'primary',
-    onSelect: () => { void navigateTo(to) },
-  }]]
+    onSelect: () => {
+      void navigateTo(customer
+        ? `/pos?editSaleId=${encodeURIComponent(row.id)}`
+        : `/reports/purchases/new?editPurchaseId=${encodeURIComponent(row.id)}&purchaseNo=${documentNo}`)
+    },
+  }]
+  if (row.returnable) {
+    items.push({
+      label: t('app.reports.returnAll'),
+      icon: 'i-lucide-undo-2',
+      color: 'warning',
+      onSelect: () => {
+        void navigateTo(customer
+          ? `/pos?returnSaleId=${encodeURIComponent(row.id)}`
+          : `/reports/purchases/new?returnPurchaseId=${encodeURIComponent(row.id)}&purchaseNo=${documentNo}`)
+      },
+    })
+  }
+  return [items]
 }
 </script>
 
@@ -189,6 +238,7 @@ function editMenu(row: PartyHistory): DropdownMenuItem[][] {
       :columns="columns"
       :loading="loading"
       show-date-range
+      :sort-options="sortOptions"
       :date-label="t('app.fields.date')"
       :filters-active="statusFilter !== 'All'"
       :empty-title="t('app.ui.noRecords')"
@@ -204,5 +254,12 @@ function editMenu(row: PartyHistory): DropdownMenuItem[][] {
         />
       </template>
     </TableAppListTable>
+
+    <PosPrintSizeDialog
+      v-model:open="salePrintOpen"
+      :busy="salePrintBusy"
+      @confirm="confirmSalePrint"
+      @cancel="cancelSalePrint"
+    />
   </div>
 </template>

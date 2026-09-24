@@ -5,12 +5,12 @@ the Compose files, the `.env` templates, the Windows launchers, and the helper
 scripts. The application code stays in `../backend` and `../frontend`; the
 Compose files build from those folders.
 
-- `docker-compose.yml` — the **single** stack (PostgreSQL, Redis, API, frontend, Telegram bot).
+- `docker-compose.yml` — the **single** stack (`mj-stock-management-db`, `mj-stock-management-redis`, `mj-stock-management-api`, `mj-stock-management-frontend`, `mj-stock-management-telegram-bot`).
 - `.env.local.example` — template for the local-only run (recommended).
-- `Start Stock POS.bat` / `Stop Stock POS.bat` — one-click daily use.
+- `Start MJ.bat` / `Stop MJ.bat` — one-click daily use.
 - `First Time Setup.bat` — first run (creates `.env`, builds, starts).
 - `scripts/` — PowerShell helpers (see the bottom of this file).
-- `nginx/` — optional host reverse-proxy configs.
+- `nginx/` — host reverse-proxy configs; `nginx/mj.conf` is a ready-to-use HTTPS (TLS) front for production.
 
 ## 1. Local-only deployment in one minute (Windows PC)
 
@@ -26,7 +26,7 @@ needed for the clone/upgrade step).
    - builds the API + frontend images from source (no GHCR account needed),
    - starts PostgreSQL, Redis, API and frontend,
    - prints the administrator email and password — **save them**.
-4. Double-click **`Start Stock POS.bat`** (or open <http://localhost>).
+4. Double-click **`Start MJ.bat`** (or open <http://localhost>).
 
 In the local-only mode the app binds to **`127.0.0.1:80`**, so it is reachable
 from this computer only. PostgreSQL, Redis and the API are **not** published to
@@ -36,14 +36,14 @@ the host at all — they stay on the internal Docker network.
 
 | Action | How |
 |---|---|
-| Start and open the app | double-click `Start Stock POS.bat` |
-| Stop safely | double-click `Stop Stock POS.bat` |
-| Restart | `scripts\stockpos\restart-system.bat` |
-| Start automatically at sign-in | `scripts\stockpos\install-autostart.bat` |
-| Desktop shortcut | `scripts\stockpos\install-desktop-shortcut.bat` |
-| Remove auto-start | `scripts\stockpos\remove-autostart.bat` |
+| Start and open the app | double-click `Start MJ.bat` |
+| Stop safely | double-click `Stop MJ.bat` |
+| Restart | `scripts\mj\restart-system.bat` |
+| Start automatically at sign-in | `scripts\mj\install-autostart.bat` |
+| Desktop shortcut | `scripts\mj\install-desktop-shortcut.bat` |
+| Remove auto-start | `scripts\mj\remove-autostart.bat` |
 
-`Start Stock POS.bat` waits for Docker Desktop and for `GET /health/ready`
+`Start MJ.bat` waits for Docker Desktop and for `GET /health/ready`
 (which checks PostgreSQL and Redis) before opening the browser, so it is safe
 to double-click right after logging in.
 
@@ -57,30 +57,30 @@ to double-click right after logging in.
 | `FRONTEND_BIND` | `127.0.0.1` = this PC only (default); set a LAN IP or `0.0.0.0` for LAN access. |
 | `TELEGRAM_BOT_TOKEN` | optional; leave empty to disable Telegram. |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | unused at startup; kept only for an explicit `python -m app.seed` run. |
-| `COMPOSE_PROJECT_NAME` | defaults to `stock_pos`; set to `stockmanagement` only to reuse very old volumes. |
+| `COMPOSE_PROJECT_NAME` | defaults to `mj-stock-management`; set to `stockmanagement` only to reuse very old volumes. |
 
 > Never commit `.env` — it contains secrets. It is already git-ignored.
 
 ### LAN access (optional)
 Set `FRONTEND_BIND=0.0.0.0` (or the PC's LAN IP) in `.env`, then
-`scripts\stockpos\restart-system.bat`. Add your frontend URL to `CORS_ORIGINS`
+`scripts\mj\restart-system.bat`. Add your frontend URL to `CORS_ORIGINS`
 if you keep `ENVIRONMENT=production`.
 
 ## 4. Data, backups and reset
 
 PostgreSQL data, Redis data and uploaded images live in Docker **named
-volumes** (`stock_pos_pgdata`, `stock_pos_redisdata`, `stock_pos_mediadata`) —
-they survive `Stop Stock POS.bat` and image rebuilds.
+volumes** (`mj-stock-management-pgdata`, `mj-stock-management-redisdata`, `mj-stock-management-mediadata`) —
+they survive `Stop MJ.bat` and image rebuilds.
 
 Back up the database:
 ```powershell
-docker compose exec -T db pg_dump -U stock_pos stock_pos > backup.sql
+docker compose exec -T mj-stock-management-db pg_dump -U mj mj > backup.sql
 ```
 Restore:
 ```powershell
-Get-Content backup.sql | docker compose exec -T db psql -U stock_pos stock_pos
+Get-Content backup.sql | docker compose exec -T mj-stock-management-db psql -U mj mj
 ```
-Uploaded images are in the `stock_pos_mediadata` volume. To erase everything and
+Uploaded images are in the `mj-stock-management-mediadata` volume. To erase everything and
 start over (destructive):
 ```powershell
 docker compose -f docker-compose.yml down -v
@@ -99,12 +99,12 @@ apply automatically and existing data is preserved.
 
 | Symptom | Fix |
 |---|---|
-| Browser shows a connection error | `Start Stock POS.bat`, wait ~1 minute, retry. |
+| Browser shows a connection error | `Start MJ.bat`, wait ~1 minute, retry. |
 | "Docker is not available yet" | Start **Docker Desktop** and enable *Start Docker Desktop when you sign in*. |
 | Port 80 already in use | set `FRONTEND_PORT=8080` in `.env`, then restart. |
 | Login fails after setup | the first administrator is created on the app's **Setup** page; no credentials are seeded. |
-| Need logs | `docker compose logs -f frontend api` (run from this folder). |
-| Wrong timezone/alerts | check `SCHEDULER_ENABLED` / `EXPIRY_ALERT_SCAN_HOUR` in the API settings. |
+| Need logs | `docker compose logs -f mj-stock-management-frontend mj-stock-management-api` (run from this folder). |
+| Wrong timezone/alerts | check `SCHEDULER_ENABLED` / `DAILY_SUMMARY_SCAN_HOUR` in the API settings. |
 
 ## 7. Scripts reference
 
@@ -115,18 +115,19 @@ apply automatically and existing data is preserved.
 | `scripts\deploy-from-registry.ps1` / `.sh` | Pull prebuilt GHCR images and start (remote prod). |
 | `scripts\start-docker.ps1` / `.sh` | Start the **development** stack (`docker compose up -d --build`). |
 | `scripts\prepare-production.ps1` | First-time local prep (creates `.env`, cleans caches). |
-| `scripts\stockpos\*` | Daily-use helpers behind the `.bat` files. |
+| `scripts\mj\*` | Daily-use helpers behind the `.bat` files. |
 
 Advanced Compose usage (run from this folder, where `.env` lives):
 ```powershell
 docker compose up -d --build        # build images and start
 docker compose up -d                # start (images already built)
 docker compose down                 # stop (volumes preserved)
-docker compose logs -f api frontend # follow logs
+docker compose logs -f mj-stock-management-api mj-stock-management-frontend # follow logs
 docker compose config --quiet       # validate config
 ```
 
-There is one Compose file — `docker-compose.yml`. It runs only `db`, `redis`,
-`api`, `frontend` and `telegram-bot` (no RabbitMQ, no Celery workers: scheduled
+There is one Compose file — `docker-compose.yml`. It runs only `mj-stock-management-db`,
+`mj-stock-management-redis`, `mj-stock-management-api`, `mj-stock-management-frontend`
+and `mj-stock-management-telegram-bot` (no RabbitMQ, no Celery workers: scheduled
 jobs run inside the API process). To use prebuilt registry images instead of a
 local build, set `IMAGE_REGISTRY`, `IMAGE_TAG` and `PULL_POLICY=always` in `.env`.

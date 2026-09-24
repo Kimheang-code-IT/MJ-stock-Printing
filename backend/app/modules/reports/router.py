@@ -318,13 +318,13 @@ async def sales_report_export(
         "sales-report.csv",
         [
             "Date", "Invoice No.", "Customer", "Product", "Quantity", "Selling Price",
-            "Discount", "Sales Amount", "Return Amount", "Cost", "Gross Profit",
+            "Sales Amount", "Return Amount", "Cost", "Gross Profit",
             "Cashier", "Payment Method",
         ],
         [
             [
                 str(row["sale_date"]), row["invoice_no"], row["customer_name"] or "", row["product_name"],
-                str(row["quantity"]), str(row["selling_price"]), str(row["discount_amount"]),
+                str(row["quantity"]), str(row["selling_price"]),
                 str(row["sales_amount"]), str(row["return_amount"]), str(row["cost"]),
                 str(row["gross_profit"]), row["cashier_name"] or "", row["payment_method"],
             ]

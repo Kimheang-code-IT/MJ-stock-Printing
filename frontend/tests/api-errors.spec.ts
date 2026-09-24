@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { apiErrorMessage, isApiErrorHandled, markApiErrorHandled, normalizeApiError } from '../app/utils/api/errors'
+import {
+  apiErrorMessage,
+  apiFieldErrors,
+  camelCaseFieldKey,
+  hasInlineFieldErrorConsumer,
+  isApiErrorHandled,
+  markApiErrorHandled,
+  normalizeApiError,
+  registerInlineFieldErrorConsumer,
+} from '../app/utils/api/errors'
 
 describe('normalizeApiError', () => {
   it('normalizes FastAPI nested detail payloads', () => {
@@ -88,6 +97,44 @@ describe('apiErrorMessage', () => {
 
   it('uses the fallback for unknown values', () => {
     expect(apiErrorMessage('boom', 'Could not save')).toBe('Could not save')
+  })
+})
+
+describe('apiFieldErrors', () => {
+  it('returns field errors from a thrown ofetch error', () => {
+    const fetchError = Object.assign(new Error('422'), {
+      statusCode: 422,
+      data: {
+        detail: {
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          field_errors: { items: 'Duplicate product' },
+        },
+      },
+    })
+    expect(apiFieldErrors(fetchError)).toEqual({ items: 'Duplicate product' })
+  })
+
+  it('is empty for errors without a payload', () => {
+    expect(apiFieldErrors(new Error('boom'))).toEqual({})
+    expect(apiFieldErrors('boom')).toEqual({})
+  })
+})
+
+describe('inline field error consumer registry', () => {
+  it('tracks mounted consumers until released', () => {
+    expect(hasInlineFieldErrorConsumer()).toBe(false)
+    const release = registerInlineFieldErrorConsumer()
+    expect(hasInlineFieldErrorConsumer()).toBe(true)
+    release()
+    release()
+    expect(hasInlineFieldErrorConsumer()).toBe(false)
+  })
+
+  it('maps backend snake_case keys to camelCase UI keys', () => {
+    expect(camelCaseFieldKey('current_password')).toBe('currentPassword')
+    expect(camelCaseFieldKey('exchange_rate')).toBe('exchangeRate')
+    expect(camelCaseFieldKey('items')).toBe('items')
   })
 })
 

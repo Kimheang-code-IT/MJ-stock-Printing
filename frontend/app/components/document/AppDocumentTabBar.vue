@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DocumentTabSchema } from '~/types/stock-pos/common'
+import type { DocumentTabSchema } from '~/types/mj/common'
 
 const props = defineProps<{
   tabs: DocumentTabSchema[]

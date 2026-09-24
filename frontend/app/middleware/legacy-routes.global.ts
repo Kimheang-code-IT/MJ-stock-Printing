@@ -5,7 +5,6 @@
  */
 const LEGACY_SETUP_PREFIXES = [
   '/categories',
-  '/uoms',
   '/brands',
   '/suppliers',
   '/customers',

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { systemSettingsTabs } from '../app/config/settings-schemas'
 import { MOCK_APP_CONFIG } from './support/repositories-mock/settings'
 import { applyAdminSettingsGroups, toAdminSettingsValues } from '../app/repositories/http/admin-settings'
-import type { AppConfig } from '../app/types/stock-pos/settings'
+import type { AppConfig } from '../app/types/mj/settings'
 
 describe('telegram notifications settings (Administration → Settings)', () => {
   const telegramTab = systemSettingsTabs.find(tab => tab.id === 'telegram')
@@ -14,7 +14,6 @@ describe('telegram notifications settings (Administration → Settings)', () => 
   it('exposes the Telegram Notifications section with every approved toggle', () => {
     const keys = notificationFields.map(field => field.key)
     expect(keys).toEqual([
-      'telegram.expiryAlertsEnabled',
       'telegram.saleNotificationsEnabled',
       'telegram.purchaseNotificationsEnabled',
       'telegram.dailySummaryEnabled',
@@ -23,7 +22,6 @@ describe('telegram notifications settings (Administration → Settings)', () => 
     ])
     const byKey = new Map(notificationFields.map(field => [field.key, field]))
     for (const key of [
-      'telegram.expiryAlertsEnabled',
       'telegram.saleNotificationsEnabled',
       'telegram.purchaseNotificationsEnabled',
       'telegram.dailySummaryEnabled',
@@ -75,10 +73,9 @@ describe('telegram notifications settings (Administration → Settings)', () => 
     expect(values.telegram?.daily_summary_time).toBeUndefined()
   })
 
-  it('applies backend groups back onto the form model (including expiry + language)', () => {
+  it('applies backend groups back onto the form model (including language)', () => {
     const next = applyAdminSettingsGroups(structuredClone(MOCK_APP_CONFIG) as AppConfig, {
       telegram: {
-        expiry_alerts_enabled: false,
         sale_enabled: true,
         purchase_enabled: true,
         daily_summary_enabled: true,
@@ -86,8 +83,6 @@ describe('telegram notifications settings (Administration → Settings)', () => 
         notification_language: 'km',
       },
     })
-    expect(next.telegram.expiryAlertsEnabled).toBe(false)
-    expect(next.stock.telegramExpiryAlertsEnabled).toBe(false)
     expect(next.telegram.saleNotificationsEnabled).toBe(true)
     expect(next.telegram.purchaseNotificationsEnabled).toBe(true)
     expect(next.telegram.dailySummaryEnabled).toBe(true)

@@ -11,7 +11,6 @@ import {
 
 export type DeliveryNotePrintLine = {
   product: string
-  uomSymbol: string
   qtyOrdered: number
   qtyToDeliver: number
 }
@@ -59,7 +58,6 @@ export function deliveryNotePrintInputFromRecord(
     note: String(note.note || '').trim(),
     lines: items.map(line => ({
       product: text(line.product),
-      uomSymbol: text(line.uomSymbol),
       qtyOrdered: Number(line.qtyOrdered || 0),
       qtyToDeliver: Number(line.qtyToDeliver || 0),
     })),
@@ -71,7 +69,6 @@ export function buildDeliveryNoteHtml(input: DeliveryNotePrintInput): string {
     <tr>
       <td class="num">${index + 1}</td>
       <td>${escapeHtml(line.product)}</td>
-      <td>${escapeHtml(line.uomSymbol)}</td>
       <td class="num">${escapeHtml(line.qtyOrdered)}</td>
       <td class="num">${escapeHtml(line.qtyToDeliver)}</td>
     </tr>`).join('')
@@ -94,11 +91,10 @@ export function buildDeliveryNoteHtml(input: DeliveryNotePrintInput): string {
   <p class="shop">${escapeHtml(input.shopName)}</p>
   ${printDocMeta(left, right)}
   <table>
-    ${printDocColgroup(['5%', '33%', '14%', '24%', '24%'])}
+    ${printDocColgroup(['6%', '44%', '25%', '25%'])}
     <thead>${printDocHeadRow([
       { label: 'ល.រ', sub: 'N°' },
       { label: 'មុខទំនិញ', sub: 'Product' },
-      { label: 'ឯកតា', sub: 'Unit' },
       { label: 'បញ្ជាក់', sub: 'Ordered', align: 'num' },
       { label: 'បញ្ជូន', sub: 'To Deliver', align: 'num' },
     ])}</thead>

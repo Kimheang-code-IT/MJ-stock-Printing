@@ -51,16 +51,9 @@ describe('stock movements table (read-only history)', () => {
       'date',
       'documentNo',
       'product',
-      'barcode',
-      // Batch traceability (spec: movements expose the lot the change hit).
-      'batchNo',
-      'expiryDate',
       'type',
-      'uomSymbol',
       'qtyIn',
       'qtyOut',
-      'balanceBefore',
-      'balanceAfter',
       'user',
     ])
   })

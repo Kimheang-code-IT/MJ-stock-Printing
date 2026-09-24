@@ -5,10 +5,11 @@ import type {
   CreateStorageProviderInput,
   StorageProvider,
   UpdateStorageProviderInput,
-} from '~/types/stock-pos/settings'
+} from '~/types/mj/settings'
 import type {
   AppConfigRepository,
   AppInfoRepository,
+  BackupRunResult,
   ClearTransactionsResult,
   ResetAllDataResult,
   StorageRepository,
@@ -19,20 +20,20 @@ import { createId, mockLatency, nowIso } from '../mocks/query'
 const status = (value: ConnectionStatus) => value
 
 export const MOCK_APP_INFO: AppInfo = {
-  applicationName: 'Yoeun Sokhon Pharmacy',
-  shortName: 'Yoeun Sokhon',
-  businessName: 'Yoeun Sokhon Pharmacy',
-  description: 'Yoeun Sokhon Pharmacy — stock, sales and point-of-sale management.',
-  supportEmail: 'support@stockpos.local',
+  applicationName: 'MJ Printing',
+  shortName: 'MJ Printing',
+  businessName: 'MJ Printing',
+  description: 'MJ Printing — stock, sales and point-of-sale management.',
+  supportEmail: 'support@mj.local',
   supportPhone: '012 000 111',
-  website: 'https://stockpos.local',
+  website: 'https://mj.local',
   address: 'Phnom Penh, Cambodia',
   branding: {
     primaryColor: '#057351',
     secondaryColor: '#1f2937',
   },
   footer: {
-    copyrightText: '© Yoeun Sokhon Pharmacy. All rights reserved.',
+    copyrightText: '© MJ Printing. All rights reserved.',
   },
   updatedAt: nowIso(),
 }
@@ -59,14 +60,14 @@ export const MOCK_APP_CONFIG: AppConfig = {
     username: '',
     password: '',
     encryption: 'tls',
-    fromName: 'Yoeun Sokhon Pharmacy',
-    fromEmail: 'no-reply@stockpos.local',
+    fromName: 'MJ Printing',
+    fromEmail: 'no-reply@mj.local',
     timeoutSeconds: 15,
     connectionStatus: status('not_tested'),
   },
   telegram: {
     enabled: false,
-    botDisplayName: 'Yoeun Sokhon Pharmacy',
+    botDisplayName: 'MJ Printing',
     // Env-only secret: the UI shows a masked, read-only status value.
     botToken: '********',
     chatId: '',
@@ -88,6 +89,16 @@ export const MOCK_APP_CONFIG: AppConfig = {
     expiryAlert1Days: 90,
     expiryAlert2Days: 7,
     telegramExpiryAlertsEnabled: true,
+  },
+  backup: {
+    enabled: false,
+    intervalHours: 24,
+    spreadsheetId: '',
+    serviceAccountJson: '',
+    configured: false,
+    lastRunAt: '',
+    lastStatus: '',
+    lastMessage: '',
   },
   notifications: {
     inAppEnabled: true,
@@ -174,6 +185,7 @@ export function createMockAppConfigRepository(): AppConfigRepository {
       if (input.email) next.email = mergeSection(next.email, input.email)
       if (input.telegram) next.telegram = mergeSection(next.telegram, input.telegram)
       if (input.stock) next.stock = mergeSection(next.stock, input.stock)
+      if (input.backup) next.backup = mergeSection(next.backup, input.backup)
       if (input.notifications) next.notifications = mergeSection(next.notifications, input.notifications)
       if (input.security) next.security = mergeSection(next.security, input.security)
       if (input.system) next.system = mergeSection(next.system, input.system)
@@ -189,8 +201,18 @@ export function createMockAppConfigRepository(): AppConfigRepository {
       cleared: true,
       message: 'Mock mode: transactions cleared (no-op).',
     }),
+    runBackupNow: async (): Promise<BackupRunResult> => mockLatency({
+      id: createId('backup'),
+      trigger: 'MANUAL',
+      status: 'SUCCESS',
+      tables_total: 0,
+      tables_succeeded: 0,
+      tables_failed: 0,
+      rows_backed_up: 0,
+      error_message: null,
+    }),
     testEmailConnection: () => connectionResult('Mock SMTP connection is healthy.'),
-    sendTestEmail: to => connectionResult(`Mock test email queued for ${to || 'demo@stockpos.local'}.`),
+    sendTestEmail: to => connectionResult(`Mock test email queued for ${to || 'demo@mj.local'}.`),
     testTelegramConnection: () => connectionResult('Mock Telegram bot is healthy.'),
     sendTestTelegramMessage: () => connectionResult('Mock Telegram message delivered.'),
   }

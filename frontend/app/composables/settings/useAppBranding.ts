@@ -1,4 +1,4 @@
-import type { AppBranding, AppInfo } from '~/types/stock-pos/settings'
+import type { AppBranding, AppInfo } from '~/types/mj/settings'
 
 const DEFAULT_PRIMARY = '#e8472a'
 

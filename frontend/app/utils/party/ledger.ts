@@ -14,6 +14,8 @@ export interface PartyHistory {
   paidAmount: number
   debtAmount: number
   status: string
+  /** Whether the document still has goods to return to stock / supplier. */
+  returnable: boolean
 }
 
 function asNumber(value: unknown): number {
@@ -34,6 +36,11 @@ export function normalizePartyHistory(
   kind: PartyKind,
   row: Record<string, unknown>,
 ): PartyHistory {
+  // A sale is returnable until fully returned; a Stock In until not confirmed.
+  const saleStatus = asText(row.sale_status).toUpperCase()
+  const returnable = kind === 'customer'
+    ? saleStatus === 'COMPLETED' || saleStatus === 'PARTIAL_RETURN'
+    : asText(row.status).toUpperCase() === 'CONFIRMED'
   return {
     id: asText(row.id),
     documentNo: asText(kind === 'customer' ? row.invoice_no : row.document_no),
@@ -42,5 +49,6 @@ export function normalizePartyHistory(
     paidAmount: asNumber(row.paid_amount),
     debtAmount: asNumber(row.debt_amount),
     status: asText(kind === 'customer' ? row.payment_status || row.sale_status : row.status),
+    returnable,
   }
 }

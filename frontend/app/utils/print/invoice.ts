@@ -1,11 +1,11 @@
 import { formatMoney, formatNumber, formatDate, formatDateTime } from '~/utils/format/format-service'
-import { cartTotal, lineGross, lineNet, type PosCartLine } from '~/utils/pos/cart'
+import { cartTotal, lineAreaM2, lineNet, roundMoney, type PosCartLine } from '~/utils/pos/cart'
 import { escapeHtml, PAPER_STYLES, printHtmlDocument, type PrintPaperSize } from '~/utils/print/html'
 import type { SaleReceipt } from '~/repositories/contracts/entities'
 
 export type SaleInvoicePrintLine = Pick<
   PosCartLine,
-  'name' | 'uom' | 'quantity' | 'unitPrice' | 'discountPercent'
+  'name' | 'quantity' | 'unitPrice' | 'height' | 'width' | 'areaM2'
 >
 
 export type SaleInvoicePrintInput = {
@@ -27,6 +27,16 @@ export type SaleInvoicePrintInput = {
   displayCurrency?: string
   /** Exchange rate as **1 USD = X KHR**; required when `displayCurrency` differs. */
   exchangeRate?: number
+  /** Letterhead (App Info branding): logo, business name, address, phone. */
+  logoUrl?: string
+  businessName?: string
+  businessAddress?: string
+  businessPhone?: string
+  /** Customer contact shown in the info block. */
+  customerAddress?: string
+  customerPhone?: string
+  /** Free-text amount in words (printed as an empty line when omitted). */
+  amountInWords?: string
 }
 
 /**
@@ -66,12 +76,8 @@ function formatPrintMoney(
 function asCartLine(line: SaleInvoicePrintLine): PosCartLine {
   return {
     productId: '',
-    barcode: '',
     imageUrl: null,
     availableStock: 0,
-    uomId: '',
-    factorToBase: 1,
-    uomOptions: [],
     ...line,
   }
 }
@@ -191,25 +197,37 @@ function emptyInvoiceRows(fillerRows: number, rowMm: number): string {
       <td></td>
       <td></td>
       <td></td>
+      <td></td>
     </tr>`
 }
 
-function summaryRow(label: string, amountHtml: string, strong = false): string {
-  const cls = strong ? ' class="strong"' : ''
-  return `
-      <tr${cls}>
-        <td class="spacer" colspan="4"></td>
-        <td class="label" colspan="2">${label}</td>
-        <td class="num">${amountHtml}</td>
-      </tr>`
+/** Absolute URL for a logo asset so it resolves inside the print iframe. */
+function absoluteAssetUrl(url?: string): string {
+  const raw = String(url || '').trim()
+  if (!raw) return ''
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw
+  if (typeof window !== 'undefined' && raw.startsWith('/')) return `${window.location.origin}${raw}`
+  return raw
+}
+
+/** Positive dimension/area value for the invoice grid, else blank. */
+function dimensionCell(value: unknown): string {
+  const amount = Number(value)
+  if (!Number.isFinite(amount) || amount <= 0) return ''
+  return escapeHtml(formatNumber(amount, { maximumFractionDigits: 4 }))
+}
+
+/** KHR amount (whole riel, symbol after) for the grand-total row. */
+function khrMoney(value: unknown): string {
+  return escapeHtml(formatPrintMoney(value, 'KHR', 'KHR', 0))
 }
 
 /**
  * Build invoice HTML. Product rows are assigned to explicit physical sheets;
- * every sheet retains the vertical grid and only the last carries totals and
- * signatures. This prevents a short invoice from creating a blank page 2 and
- * makes two/three-page invoices deterministic.
- * Totals label aligns with Price+Discount; amount aligns with Amount.
+ * every sheet repeats the letterhead, the customer/invoice info block and the
+ * table header, while only the last carries totals and signatures. This
+ * prevents a short invoice from creating a blank page 2 and makes two/three
+ * page invoices deterministic.
  */
 export function buildSaleInvoiceHtml(
   input: SaleInvoicePrintInput,
@@ -220,27 +238,76 @@ export function buildSaleInvoiceHtml(
   const converting = displayCurrency !== input.currency && exchangeRate > 0
   const money = (value: unknown) => escapeHtml(formatPrintMoney(value, input.currency, displayCurrency, exchangeRate))
   const lines = input.lines.map(asCartLine)
-  const total = cartTotal(lines)
+  const subtotal = cartTotal(lines)
+  // The checkout grand total includes delivery. Keep the printed invoice in
+  // lockstep with the amount saved by POS instead of showing item lines only.
+  const deliveryPrice = Math.max(0, Number(input.deliveryPrice || 0))
+  const total = roundMoney(subtotal + deliveryPrice)
   const layout = planInvoiceLayout(lines.length, paperSize)
-  const lineRows = (pageLines: PosCartLine[], offset: number) => pageLines.map((line, index) => `
+
+  const businessName = String(input.businessName || input.shopName || '').trim()
+  // MJ Printing's supplied logo is the invoice default. App Info can still
+  // override it, but an empty setting must never produce a blank letterhead
+  // (especially on historical reprints that only carry the shop name).
+  const logoUrl = absoluteAssetUrl(input.logoUrl || '/logo.png')
+  const businessAddress = String(input.businessAddress || '').trim()
+  const businessPhone = String(input.businessPhone || '').trim()
+  const customerAddress = String(input.customerAddress || '').trim()
+  const customerPhone = String(input.customerPhone || '').trim()
+  // The reference form shows a USD total plus the equivalent grand total in
+  // riel; that second line only exists when we know the USD→KHR rate.
+  const showKhr = displayCurrency !== 'KHR' && exchangeRate > 0
+
+  const letterhead = (logoUrl || businessName) ? `
+  <div class="inv-letterhead">
+    ${logoUrl ? `<div class="inv-logo"><img src="${escapeHtml(logoUrl)}" alt=""></div>` : ''}
+    <div class="inv-company">
+      ${businessName ? `<p class="inv-company-name">${escapeHtml(businessName)}</p>` : ''}
+      ${businessAddress ? `<p class="inv-company-line">${escapeHtml(businessAddress)}</p>` : ''}
+      ${businessPhone ? `<p class="inv-company-line">${escapeHtml(businessPhone)}</p>` : ''}
+    </div>
+  </div>` : ''
+
+  const infoBlock = `
+  <div class="inv-info">
+    <div class="inv-info-left">
+      <p><span class="inv-label">ឈ្មោះសហគ្រាស ឬអតិថិជន / Enterprise name/Customer</span> : <strong>${escapeHtml(input.customerName || '—')}</strong></p>
+      <p><span class="inv-label">អាសយដ្ឋាន / Address</span> : <strong>${escapeHtml(customerAddress || '—')}</strong></p>
+      <p><span class="inv-label">ទូរស័ព្ទលេខ / Telephone No</span> : <strong>${escapeHtml(customerPhone || '—')}</strong></p>
+    </div>
+    <div class="inv-info-right">
+      <p class="inv-title"><span>វិក្កយបត្រ</span><span>INVOICE</span></p>
+      <p><span class="inv-label">លេខវិក្កយបត្រ / Invoice No</span> : <strong class="inv-no">${escapeHtml(input.invoiceNo)}</strong></p>
+      <p><span class="inv-label">កាលបរិច្ឆេទ / Date</span> : <strong>${escapeHtml(input.dateLabel)}</strong></p>
+      <p><span class="inv-label">អ្នកលក់ / Seller</span> : <strong>${escapeHtml(input.cashier || '—')}</strong></p>
+      <p><span class="inv-label">លុយ ជាអក្សរ / Amount in words</span> : <strong>${escapeHtml(input.amountInWords || '')}</strong></p>${converting ? `\n      <p><span class="inv-label">អត្រាប្តូរប្រាក់ / Exchange rate</span> : <strong>1 USD = ${escapeHtml(formatNumber(Math.round(exchangeRate)))} KHR</strong></p>` : ''}
+    </div>
+  </div>`
+
+  const lineRows = (pageLines: PosCartLine[], offset: number) => pageLines.map((line, index) => {
+    const area = line.areaM2 ?? lineAreaM2(line)
+    return `
     <tr>
       <td class="num">${offset + index + 1}</td>
       <td class="product">${escapeHtml(line.name)}</td>
-      <td class="center">${escapeHtml(line.uom || '—')}</td>
+      <td class="num center">${dimensionCell(line.height)}</td>
+      <td class="num center">${dimensionCell(line.width)}</td>
+      <td class="num center">${area == null ? '' : dimensionCell(area)}</td>
       <td class="num center">${escapeHtml(line.quantity)}</td>
       <td class="num center">${money(line.unitPrice)}</td>
-      <td class="num center">${money(lineGross(line) * (Number(line.discountPercent || 0) / 100))}</td>
       <td class="num">${money(lineNet(line))}</td>
-    </tr>`).join('')
+    </tr>`
+  }).join('')
 
   const colgroup = `
     <colgroup>
       <col class="col-no">
       <col class="col-product">
-      <col class="col-unit">
+      <col class="col-height">
+      <col class="col-width">
+      <col class="col-area">
       <col class="col-qty">
       <col class="col-price">
-      <col class="col-discount">
       <col class="col-amount">
     </colgroup>`
 
@@ -255,52 +322,58 @@ export function buildSaleInvoiceHtml(
       : ''
     const footer = !isLast ? '' : `
   <div class="doc-footer">
-    <div class="totals">
-      <table class="summary">
-        ${colgroup}
-        ${summaryRow('ទឹកប្រាក់សរុប / Total Amount', money(total))}
-        ${summaryRow('ខ្វះមុន', money(input.previousDebtAmount))}
-        ${summaryRow('តម្លៃដឹកជញ្ជូន_____/_____/_____', money(input.deliveryPrice))}
-        ${summaryRow('បានទូទាត់_____/_____/_____', money(input.depositAmount))}
-        ${summaryRow('ខ្វះសរុប', money(input.outstandingAmount), true)}
+    <div class="inv-footer-row">
+      <div class="inv-thanks">
+        <p>សូមអរគុណចំពោះការគាំទ្រ!</p>
+        <p>Thank you for your business!</p>
+      </div>
+      <table class="inv-summary">
+        ${deliveryPrice > 0 ? `<tr><td class="label">សរុបរង / Subtotal</td><td class="num">${money(subtotal)}</td></tr>\n        <tr><td class="label">ថ្លៃដឹកជញ្ជូន / Delivery</td><td class="num">${money(deliveryPrice)}</td></tr>` : ''}
+        <tr><td class="label">សរុប / Total (${escapeHtml(displayCurrency)})</td><td class="num">${money(total)}</td></tr>
+        ${input.previousDebtAmount > 0 ? `<tr><td class="label">ខ្វះមុន / Previous debt</td><td class="num">${money(input.previousDebtAmount)}</td></tr>` : ''}
+        <tr><td class="label">ប្រាក់កក់ / Deposit</td><td class="num">${money(input.depositAmount)}</td></tr>
+        <tr><td class="label">សមតុល្យ / Balance</td><td class="num">${money(input.outstandingAmount)}</td></tr>
+        ${showKhr ? `<tr class="grand"><td class="label" colspan="2"><span>សរុបជារៀល / Total in KHR</span><strong>${khrMoney(total * exchangeRate)}</strong></td></tr>` : ''}
       </table>
     </div>
     <div class="signs">
       <div class="sign">
         <div class="line"></div>
-        <p>អ្នកទិញ / Buyer</p>
+        <p>ហត្ថលេខា និងឈ្មោះ:អតិថិជន / Customer&#39;s Signature &amp; Name</p>
       </div>
       <div class="sign">
         <div class="line"></div>
-        <p>អ្នកលក់ / Seller</p>
+        <p>ហត្ថលេខា និងឈ្មោះ:អ្នកលក់ / Seller&#39;s Signature &amp; Name</p>
       </div>
     </div>
   </div>`
     return `
 <section class="invoice-page${isLast ? ' last' : ''}">
   ${pageLabel}
-  <p class="title">វិក្កយបត្រ / INVOICE</p>
-  <div class="meta">
-    <div>
-      <p>លេខ Invoice : <strong>${escapeHtml(input.invoiceNo)}</strong></p>
-      <p>កាលបរិច្ឆេទ Date : <strong>${escapeHtml(input.dateLabel)}</strong></p>${converting ? `\n      <p>អត្រាប្តូរប្រាក់ Exchange rate : <strong>1 USD = ${escapeHtml(formatNumber(Math.round(exchangeRate)))} KHR</strong></p>` : ''}
-    </div>
-    <div class="right">
-      <p>អតិថិជន Customer : <strong>${escapeHtml(input.customerName)}</strong></p>
-      <p>បេឡា Cashier : <strong>${escapeHtml(input.cashier)}</strong></p>
-    </div>
-  </div>
+  ${letterhead}
+  ${infoBlock}
   <table class="lines">
     ${colgroup}
     <thead>
-      <tr>
-        <th class="center">ល.រ<span>N°</span></th>
-        <th>មុខទំនិញ<span>Product</span></th>
-        <th class="center">ឯកតា<span>Unit</span></th>
-        <th class="num center">ចំនួន<span>Qty</span></th>
-        <th class="num center">តម្លៃ<span>Price</span></th>
-        <th class="num center">បញ្ចុះតម្លៃ<span>Discount</span></th>
-        <th class="num">តម្លៃសរុប<span>Amount</span></th>
+      <tr class="head-km">
+        <th class="center">ល.រ</th>
+        <th>បរិយាយមុខទំនិញ ឬសេវាកម្ម</th>
+        <th class="num center">កម្ពស់</th>
+        <th class="num center">ទទឹង</th>
+        <th class="num center">ម៉ែត្រ</th>
+        <th class="num center">ចំនួន</th>
+        <th class="num center">តម្លៃ/m²</th>
+        <th class="num">ទឹកប្រាក់</th>
+      </tr>
+      <tr class="head-en">
+        <th class="center">No</th>
+        <th>Description of Goods or Services</th>
+        <th class="num center">Height</th>
+        <th class="num center">Width</th>
+        <th class="num center">m</th>
+        <th class="num center">Qty</th>
+        <th class="num center">Price/m²</th>
+        <th class="num">Amount</th>
       </tr>
     </thead>
     <tbody>${lineRows(pageLines, pageOffset)}${emptyInvoiceRows(layout.pageFillerRows[pageIndex] || 0, PAPER_STYLES[paperSize].rowMm)}</tbody>
@@ -347,10 +420,11 @@ export function saleInvoicePrintInputFromRecord(
     exchangeRate: Number(record.exchangeRate || 0) || undefined,
     lines: items.map(item => ({
       name: String(item.name ?? ''),
-      uom: String(item.uom ?? ''),
       quantity: Number(item.quantity || 0),
       unitPrice: Number(item.price ?? item.unitPrice ?? 0),
-      discountPercent: Number(item.discountPercent ?? item.discount ?? 0),
+      height: Number(item.height || 0) || undefined,
+      width: Number(item.width || 0) || undefined,
+      areaM2: Number(item.areaM2 ?? item.area_m2 ?? 0) || undefined,
     })),
     deliveryPrice: Number(record.deliveryPrice ?? 0),
     previousDebtAmount: Number(record.previousDebtAmount ?? 0),
@@ -378,10 +452,11 @@ export function saleReceiptPrintInput(
     exchangeRate: Number(receipt.exchangeRate || 0) || undefined,
     lines: receipt.items.map(item => ({
       name: item.name,
-      uom: item.uom,
       quantity: Number(item.quantity || 0),
       unitPrice: Number(item.unitPrice || 0),
-      discountPercent: Number(item.discount || 0),
+      height: Number(item.height || 0) || undefined,
+      width: Number(item.width || 0) || undefined,
+      areaM2: Number(item.areaM2 ?? 0) || undefined,
     })),
     deliveryPrice: Number(receipt.deliveryPrice || 0),
     previousDebtAmount: 0,

@@ -8,7 +8,6 @@ import {
   customers,
   deliveryNotes,
   expenses,
-  productSalePrices,
   products,
   purchaseReturns,
   saleReturns,
@@ -18,7 +17,6 @@ import {
   supplierDebtPayments,
   supplierDebts,
   suppliers,
-  uoms,
 } from './stock-seed'
 import {
   seedAuditLogs,
@@ -29,10 +27,8 @@ import {
 
 export interface MockCollections {
   categories: AppRecord[]
-  uoms: AppRecord[]
   brands: AppRecord[]
   products: AppRecord[]
-  productSalePrices: AppRecord[]
   suppliers: AppRecord[]
   customers: AppRecord[]
   sales: AppRecord[]
@@ -64,10 +60,8 @@ export function useMockDb(): MockDb {
     db = {
       collections: {
         categories: structuredClone(categories),
-        uoms: structuredClone(uoms),
         brands: structuredClone(brands),
         products: structuredClone(products),
-        productSalePrices: structuredClone(productSalePrices),
         suppliers: structuredClone(suppliers),
         customers: structuredClone(customers),
         sales: structuredClone(sales),

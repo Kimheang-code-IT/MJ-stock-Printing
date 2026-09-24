@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, deactivate_then_delete
+from tests.utils import admin_headers, deactivate_then_delete
 
 
 @pytest.mark.asyncio
@@ -25,7 +25,6 @@ async def test_product_stores_object_key_and_resolves_image_url(client, db_sessi
             "sku": f"IMG-{tag}",
             "name": f"Image Widget {tag}",
             "category_id": category["id"],
-            "uom_id": str(DEFAULT_UOM_ID),
             "selling_price": "3.00",
             "image_object_key": "images/products/2026/09/widget.webp",
         },

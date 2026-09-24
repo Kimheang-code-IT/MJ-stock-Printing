@@ -4,9 +4,9 @@ import type {
   CreateStorageProviderInput,
   StorageProvider,
   UpdateStorageProviderInput,
-} from '~/types/stock-pos/settings'
+} from '~/types/mj/settings'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
-import type { ApiResponse } from '~/types/stock-pos/common'
+import type { ApiResponse } from '~/types/mj/common'
 import { unwrapApiData } from './response'
 
 /**

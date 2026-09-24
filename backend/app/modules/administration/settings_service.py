@@ -21,12 +21,10 @@ from app.modules.pos.models import (
     Payment,
     Sale,
     SaleItem,
-    SaleItemBatch,
     SaleReturn,
     SaleReturnItem,
 )
 from app.modules.stock.models import (
-    BatchStockBalance,
     PurchaseReturn,
     PurchaseReturnItem,
     StockBalance,
@@ -38,7 +36,7 @@ from app.modules.suppliers.models import SupplierDebt
 from app.shared.audit.service import record_audit
 
 _MASK = "********"
-_DEFAULT_SHOP_NAME = "Yoeun Sokhon Pharmacy"
+_DEFAULT_SHOP_NAME = "MJ Printing"
 
 
 def _now() -> str:
@@ -129,7 +127,6 @@ async def clear_transactions(service: AdministrationService, *, actor: Any) -> d
     session = service.session
     # Children before parents so foreign keys never block the delete.
     for model in (
-        SaleItemBatch,
         SaleReturnItem,
         SaleReturn,
         SaleItem,
@@ -145,7 +142,6 @@ async def clear_transactions(service: AdministrationService, *, actor: Any) -> d
         StockMovement,
         StockTransactionItem,
         StockTransaction,
-        BatchStockBalance,
     ):
         await session.execute(delete(model))
     # Every movement is gone — reset the materialized balances to zero.
@@ -197,7 +193,6 @@ def _telegram(
         "passwordResetEnabled": _bool(telegram.get("enable_password_reset")),
         "paymentInvoiceNotifyEnabled": _bool(telegram.get("payment_invoice_notify_enabled")),
         "stockInquiryEnabled": _bool(telegram.get("stock_inquiry_enabled")),
-        "expiryAlertsEnabled": _bool(telegram.get("expiry_alerts_enabled")),
         "saleNotificationsEnabled": _bool(telegram.get("sale_enabled")),
         "purchaseNotificationsEnabled": _bool(telegram.get("purchase_enabled")),
         "dailySummaryEnabled": _bool(telegram.get("daily_summary_enabled")),
@@ -208,13 +203,28 @@ def _telegram(
 
 def _stock(groups: dict[str, dict[str, object]]) -> dict:
     stock = groups.get("stock", {})
-    telegram = groups.get("telegram", {})
     return {
         "lowStockLevel": _int(stock.get("low_stock_level"), 5),
-        "trackExpiry": _bool(stock.get("track_expiry")),
-        "expiryAlert1Days": _int(stock.get("expiry_alert_1_days"), 90),
-        "expiryAlert2Days": _int(stock.get("expiry_alert_2_days"), 7),
-        "telegramExpiryAlertsEnabled": _bool(telegram.get("expiry_alerts_enabled")),
+    }
+
+
+def _backup(groups: dict[str, dict[str, object]], latest_job: dict | None = None) -> dict:
+    backup = groups.get("backup", {})
+    interval = _int(backup.get("interval_hours"), 24)
+    if interval not in (1, 3, 6, 12, 24):
+        interval = 24
+    has_key = bool(_str(backup.get("service_account_json")))
+    spreadsheet_id = _str(backup.get("spreadsheet_id"))
+    job = latest_job or {}
+    return {
+        "enabled": _bool(backup.get("enabled")),
+        "intervalHours": interval,
+        "spreadsheetId": spreadsheet_id,
+        "serviceAccountJson": _MASK if has_key else "",
+        "configured": bool(has_key and spreadsheet_id),
+        "lastRunAt": _str(job.get("finished_at") or job.get("started_at")),
+        "lastStatus": _str(job.get("status")),
+        "lastMessage": _str(job.get("error_message")),
     }
 
 
@@ -244,6 +254,7 @@ def build_app_config(
     *,
     environment: str = "development",
     environment_token_configured: bool = False,
+    backup_job: dict | None = None,
 ) -> dict:
     shop = groups.get("shop", {})
     shop_name = _str(shop.get("shop_name"), _DEFAULT_SHOP_NAME) or _DEFAULT_SHOP_NAME
@@ -277,6 +288,7 @@ def build_app_config(
             environment_token_configured=environment_token_configured,
         ),
         "stock": _stock(groups),
+        "backup": _backup(groups, backup_job),
         "notifications": {
             "inAppEnabled": True,
             "emailEnabled": False,
@@ -309,18 +321,26 @@ def app_config_to_groups(payload: dict) -> dict[str, dict[str, object]]:
         group: dict[str, object] = {}
         if "lowStockLevel" in stock:
             group["low_stock_level"] = _int(stock.get("lowStockLevel"), 5)
-        if "trackExpiry" in stock:
-            group["track_expiry"] = _bool(stock.get("trackExpiry"))
-        if "expiryAlert1Days" in stock:
-            group["expiry_alert_1_days"] = _int(stock.get("expiryAlert1Days"), 90)
-        if "expiryAlert2Days" in stock:
-            group["expiry_alert_2_days"] = _int(stock.get("expiryAlert2Days"), 7)
-        if "telegramExpiryAlertsEnabled" in stock:
-            groups.setdefault("telegram", {})["expiry_alerts_enabled"] = _bool(
-                stock.get("telegramExpiryAlertsEnabled")
-            )
         if group:
             groups["stock"] = group
+
+    backup = payload.get("backup")
+    if isinstance(backup, dict):
+        group = {}
+        if "enabled" in backup:
+            group["enabled"] = _bool(backup.get("enabled"))
+        if "intervalHours" in backup:
+            interval = _int(backup.get("intervalHours"), 24)
+            if interval in (1, 3, 6, 12, 24):
+                group["interval_hours"] = interval
+        if "spreadsheetId" in backup:
+            group["spreadsheet_id"] = _str(backup.get("spreadsheetId")).strip()
+        if "serviceAccountJson" in backup:
+            key = _str(backup.get("serviceAccountJson")).strip()
+            if key != _MASK:
+                group["service_account_json"] = key
+        if group:
+            groups["backup"] = group
 
     telegram = payload.get("telegram")
     if isinstance(telegram, dict):
@@ -341,8 +361,6 @@ def app_config_to_groups(payload: dict) -> dict[str, dict[str, object]]:
             )
         if "stockInquiryEnabled" in telegram:
             group["stock_inquiry_enabled"] = _bool(telegram.get("stockInquiryEnabled"))
-        if "expiryAlertsEnabled" in telegram:
-            group["expiry_alerts_enabled"] = _bool(telegram.get("expiryAlertsEnabled"))
         if "saleNotificationsEnabled" in telegram:
             group["sale_enabled"] = _bool(telegram.get("saleNotificationsEnabled"))
         if "purchaseNotificationsEnabled" in telegram:

@@ -2,7 +2,7 @@ import type {
   AiSearchAnswer,
   SearchHit,
   SearchQueryOptions,
-} from '~/types/stock-pos/search'
+} from '~/types/mj/search'
 import { useSearchRepository } from '~/repositories/index'
 
 /** Map a backend `{ hits, total }` search response to the UI hit type. */

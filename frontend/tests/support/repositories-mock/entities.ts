@@ -9,10 +9,8 @@ import type {
   FinanceSummary,
   PosCommandRepository,
   PosCompleteSaleInput,
-  ProductBatchRow,
   ProductCostHistoryRow,
   ProductHistoryRow,
-  ProductSalePriceRow,
   ProductScopedQuery,
   SaleDetail,
   SaleReceipt,
@@ -23,19 +21,7 @@ import type {
 } from '~/repositories/contracts/entities'
 import { applyListQuery, createId, mockLatency, nowIso, paginateMeta } from '../mocks/query'
 import { mockInsert, mockRecords, mockRemove, mockUpdate, useMockDb } from '../mocks/db'
-import { convertToBase, divideDecimalSafe, multiplyDecimalSafe, roundQty } from '~/utils/stock/uom-conversions'
-
-/** Spec: a new product starts with sale-price version 1 (POS-active). */
-function insertFirstSalePrice(product: AppRecord): void {
-  mockInsert('productSalePrices', {
-    productId: String(product.id),
-    product: String(product.name ?? ''),
-    salePrice: Number(product.salePrice || 0),
-    date: String(product.createdAt || nowIso()).slice(0, 10),
-    isActive: true,
-    version: 1,
-  })
-}
+import { divideDecimalSafe, multiplyDecimalSafe, roundQty } from '~/utils/stock/numbers'
 
 /** Keep Setup location in sync with address used by delivery notes. */
 function withPartyLocation(collection: string, input: Record<string, unknown>): Record<string, unknown> {
@@ -66,7 +52,6 @@ export function createMockEntityRepository(): EntityRepository {
       if (collection === 'customers') payload.debtBalance = 0
       if (collection === 'suppliers') payload.totalDebt = 0
       const created = mockInsert(collection, payload)
-      if (collection === 'products') insertFirstSalePrice(created)
       return mockLatency(created)
     },
 
@@ -153,7 +138,6 @@ export function createMockStockQueryRepository(): StockQueryRepository {
       items: items.map(item => ({
         name: String(item.name ?? ''),
         quantity: Number(item.quantity ?? 0),
-        uom: String(item.uom ?? ''),
         unitPrice: Number(item.price ?? 0),
         discount: Number(item.discount ?? 0),
         total: Number(item.total ?? 0),
@@ -166,39 +150,6 @@ export function createMockStockQueryRepository(): StockQueryRepository {
       paidAmount: Number(sale.paidAmount ?? 0),
       remaining: Number(sale.remaining ?? 0),
     }
-  }
-
-  function productSalePriceRows(productId: string): ProductSalePriceRow[] {
-    return mockRecords('productSalePrices')
-      .filter(row => String(row.productId ?? '') === String(productId))
-      .map(row => ({
-        id: String(row.id),
-        productId: String(row.productId),
-        product: String(row.product ?? ''),
-        salePrice: Number(row.salePrice ?? 0),
-        date: String(row.date ?? '').slice(0, 10),
-        isActive: row.isActive === true || row.isActive === 'Yes',
-        version: Number(row.version ?? 0),
-        batchNo: row.batchNo != null ? String(row.batchNo) : null,
-        purchaseDate: row.purchaseDate != null ? String(row.purchaseDate).slice(0, 10) : null,
-        expiryDate: row.expiryDate != null ? String(row.expiryDate).slice(0, 10) : null,
-        purchaseCost: row.purchaseCost != null ? Number(row.purchaseCost) : null,
-        uomPrices: Array.isArray(row.uomPrices)
-          ? (row.uomPrices as Record<string, unknown>[]).map(uomRow => ({
-              uomId: String(uomRow.uomId ?? ''),
-              uomSymbol: uomRow.uomSymbol != null ? String(uomRow.uomSymbol) : null,
-              factorToBase: Number(uomRow.factorToBase ?? 1),
-              salePrice: Number(uomRow.salePrice ?? 0),
-              isDefaultSale: uomRow.isDefaultSale === true,
-            }))
-          : [],
-      }))
-      .sort((a, b) => b.version - a.version || b.date.localeCompare(a.date))
-  }
-
-  function copyActivePriceOntoProduct(productId: string, salePrice: number): void {
-    const product = mockRecords('products').find(row => String(row.id) === String(productId))
-    if (product) product.salePrice = round2(salePrice)
   }
 
   return {
@@ -227,7 +178,6 @@ export function createMockStockQueryRepository(): StockQueryRepository {
             type,
             quantity: signedQty,
             product: String(row.product ?? ''),
-            unit: String(row.unit ?? row.uomSymbol ?? ''),
             unitPrice,
             reference: String(row.reference ?? ''),
             referenceType: isSale ? 'sale' : 'stock_transaction',
@@ -242,106 +192,6 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         })
         .sort((a, b) => b.date.localeCompare(a.date))
       return mockLatency(paginateScopedRows(rows, query, ['type', 'reference', 'user', 'note']))
-    },
-
-    /**
-     * Batch lots of one product derived from the mock movement ledger
-     * (same rule as the HTTP repository: identity = product + batch_no,
-     * remaining = inbound − outbound, expiry = latest stamped on the lot).
-     */
-    async listProductBatches(productId, query = {}): Promise<EntityListResult<ProductBatchRow>> {
-      const today = new Date().toISOString().slice(0, 10)
-      const lots = new Map<string, {
-        batchNo: string
-        expiryDates: string[]
-        received: number
-        remaining: number
-        unitCost: number | null
-        supplier: string
-        purchaseNo: string
-        createdDate: string
-      }>()
-      for (const row of mockRecords('stockMovements')) {
-        if (String(row.productId ?? '') !== String(productId)) continue
-        const batchNo = String(row.batchNo ?? '').trim()
-        if (!batchNo) continue
-        const qty = Number(row.quantity ?? 0)
-        const date = String(row.date ?? row.createdAt ?? '').slice(0, 10)
-        const key = `${String(productId)}:${batchNo}`
-        let lot = lots.get(key)
-        if (!lot) {
-          lot = { batchNo, expiryDates: [], received: 0, remaining: 0, unitCost: null, supplier: '', purchaseNo: '', createdDate: date }
-          lots.set(key, lot)
-        }
-        if (qty > 0) {
-          lot.received += qty
-          lot.remaining += qty
-          if (row.expiryDate) lot.expiryDates.push(String(row.expiryDate))
-          if (row.unitCost != null && Number(row.unitCost) > 0) lot.unitCost = Number(row.unitCost)
-          if (!lot.purchaseNo) lot.purchaseNo = String(row.documentNo ?? '')
-        }
-        else {
-          lot.remaining += qty
-        }
-        if (date && date > lot.createdDate) lot.createdDate = date
-      }
-      const product = mockRecords('products').find(row => String(row.id) === String(productId))
-      const prices = productSalePriceRows(productId)
-      const rows: ProductBatchRow[] = []
-      for (const [key, lot] of lots) {
-        const remaining = roundQty(lot.remaining)
-        const expiry = lot.expiryDates.sort()[0] ?? null
-        // Supplier snapshot: the purchase document that first received the lot.
-        const sourcePurchase = lot.purchaseNo
-          ? mockRecords('stockIns').find(row => String(row.purchaseNo ?? '') === lot.purchaseNo)
-          : undefined
-        const activePrice = prices.find(row => row.isActive && String(row.batchNo ?? '') === lot.batchNo)
-        const latestPrice = activePrice
-          || prices.find(row => String(row.batchNo ?? '') === lot.batchNo)
-        const generalPrice = prices.find(row => row.isActive && !row.batchNo)
-        rows.push({
-          id: key,
-          productId: String(productId),
-          batchNo: lot.batchNo,
-          expiryDate: expiry,
-          remainingQty: remaining,
-          receivedQty: roundQty(lot.received),
-          unitCost: lot.unitCost ?? 0,
-          supplier: String(sourcePurchase?.supplier ?? lot.supplier ?? ''),
-          purchaseNo: lot.purchaseNo,
-          createdDate: lot.createdDate,
-          status: remaining <= 0
-            ? 'Depleted'
-            : (lot.expiryDates.length && (lot.expiryDates.sort()[0] ?? '') < today)
-              ? 'Expired'
-              : 'Active',
-          purchaseDate: String(sourcePurchase?.date ?? lot.createdDate ?? '').slice(0, 10) || null,
-          purchaseUom: String(product?.uomSymbol || product?.uom || 'pcs'),
-          currency: String(sourcePurchase?.currency ?? 'USD'),
-          salePrice: latestPrice != null
-            ? Number(latestPrice.salePrice)
-            : Number(generalPrice?.salePrice ?? product?.salePrice ?? 0),
-          salePriceId: latestPrice?.id ? String(latestPrice.id) : null,
-          pricingActive: activePrice != null,
-        })
-      }
-      const filtered = rows
-        .filter((row) => {
-          const status = String(query.status || '').toUpperCase()
-          if (!status || status === 'ALL') return true
-          return row.status.toUpperCase() === status
-        })
-        .sort((a, b) => {
-          const depleted = Number(a.remainingQty <= 0) - Number(b.remainingQty <= 0)
-          if (depleted !== 0) return depleted
-          const expiry = String(a.expiryDate ?? '9999-12-31').localeCompare(String(b.expiryDate ?? '9999-12-31'))
-          if (expiry !== 0) return expiry
-          return a.batchNo.localeCompare(b.batchNo)
-        })
-      return mockLatency({
-        items: filtered,
-        meta: { page: Number(query.page || 1), limit: Number(query.limit || 500), total: filtered.length },
-      })
     },
 
     async listProductCostHistory(productId, query = {}): Promise<EntityListResult<ProductCostHistoryRow>> {
@@ -370,14 +220,6 @@ export function createMockStockQueryRepository(): StockQueryRepository {
       return mockLatency(paginateScopedRows(lots, query, ['product', 'documentNo']))
     },
 
-    async listSalePrices(productId, query = {}): Promise<EntityListResult<ProductSalePriceRow>> {
-      return mockLatency(paginateScopedRows(
-        productSalePriceRows(productId),
-        query,
-        ['product'],
-      ))
-    },
-
     async getMovementInvoice(movementId): Promise<SaleReceipt | null> {
       const movement = mockRecords('stockMovements').find(row => String(row.id) === String(movementId))
       if (!movement || String(movement.type ?? '') !== 'Sale') return null
@@ -386,84 +228,6 @@ export function createMockStockQueryRepository(): StockQueryRepository {
         String(row.saleNo ?? '') === reference || String(row.invoiceNo ?? '') === reference)
       if (!sale) return null
       return mockLatency(saleReceipt(String(sale.id)))
-    },
-
-    async addSalePrice(productId, input): Promise<ProductSalePriceRow> {
-      const salePrice = Number(input.salePrice)
-      if (!Number.isFinite(salePrice) || salePrice <= 0) throw new Error('Sale price must be greater than zero')
-      if (!String(input.date || '').trim()) throw new Error('Date is required')
-      const product = mockRecords('products').find(row => String(row.id) === String(productId))
-      if (!product) throw new Error(`Unknown product: ${productId}`)
-      const existing = productSalePriceRows(productId)
-      const batchNo = String(input.batchNo ?? '').trim() || null
-      // Spec: exactly one POS-active version per product + batch scope —
-      // retire the current active version of the SAME scope only.
-      for (const row of mockRecords('productSalePrices')) {
-        if (String(row.productId) !== String(productId) || !row.isActive) continue
-        if (String(row.batchNo ?? '') === String(batchNo ?? '')) row.isActive = false
-      }
-      // UOM price rows inside the version (fall back to one base row).
-      const uomPrices = (input.uomPrices?.length ? input.uomPrices : [{
-        uomId: String(product.uomId ?? ''),
-        uomSymbol: String(product.uom ?? ''),
-        factorToBase: 1,
-        salePrice,
-        isDefaultSale: true,
-      }]).map(row => ({
-        uomId: String(row.uomId),
-        uomSymbol: row.uomSymbol ?? null,
-        factorToBase: Number(row.factorToBase) || 1,
-        salePrice: round2(Number(row.salePrice)),
-        isDefaultSale: row.isDefaultSale === true,
-      }))
-      const defaultPrice = uomPrices.find(row => row.isDefaultSale)?.salePrice ?? round2(salePrice)
-      const nextVersion = existing.reduce((max, row) => Math.max(max, row.version), 0) + 1
-      const created = mockInsert('productSalePrices', {
-        productId: String(productId),
-        product: String(product.name ?? ''),
-        salePrice: defaultPrice,
-        date: String(input.date).slice(0, 10),
-        isActive: true,
-        version: nextVersion,
-        batchNo,
-        purchaseDate: input.purchaseDate ? String(input.purchaseDate).slice(0, 10) : null,
-        expiryDate: input.expiryDate ? String(input.expiryDate).slice(0, 10) : null,
-        uomPrices,
-      })
-      // General scope mirrors onto products.salePrice; batch-scoped prices do not.
-      if (!batchNo) {
-        copyActivePriceOntoProduct(productId, defaultPrice)
-      }
-      return mockLatency(productSalePriceRows(productId).find(row => String(row.id) === String(created.id))!)
-    },
-
-    async activateSalePrice(productId, priceId): Promise<ProductSalePriceRow> {
-      const rows = mockRecords('productSalePrices')
-      const target = rows.find(row => String(row.id) === String(priceId)
-        && String(row.productId ?? '') === String(productId))
-      if (!target) throw new Error(`Sale price ${priceId} not found for product ${productId}`)
-      for (const row of rows) {
-        if (String(row.productId ?? '') !== String(productId)) continue
-        // Only the same batch scope switches (batch-first resolution rule).
-        if (String(row.batchNo ?? '') !== String(target.batchNo ?? '')) continue
-        row.isActive = String(row.id) === String(priceId)
-      }
-      target.isActive = true
-      if (!String(target.batchNo ?? '').trim()) {
-        copyActivePriceOntoProduct(productId, Number(target.salePrice ?? 0))
-      }
-      return mockLatency(productSalePriceRows(productId).find(row => String(row.id) === String(priceId))!)
-    },
-
-    async setSalePriceActive(priceId, isActive): Promise<ProductSalePriceRow> {
-      const rows = mockRecords('productSalePrices')
-      const target = rows.find(row => String(row.id) === String(priceId))
-      if (!target) throw new Error(`Sale price ${priceId} not found`)
-      if (isActive) {
-        return this.activateSalePrice(String(target.productId), priceId)
-      }
-      target.isActive = false
-      return mockLatency(productSalePriceRows(String(target.productId)).find(row => String(row.id) === String(priceId))!)
     },
   }
 }
@@ -714,7 +478,7 @@ export function createMockSearchRepository(): SearchRepository {
       const match = (value: unknown) => String(value ?? '').toLowerCase().includes(needle)
 
       for (const product of db.collections.products) {
-        if (match(product.name) || match(product.code) || match(product.barcode)) {
+        if (match(product.name) || match(product.code)) {
           push('products', 'product', String(product.name), `${product.code} · Qty ${product.quantity}`, `/stock/${product.id}`)
         }
       }
@@ -779,30 +543,25 @@ export function createMockPosRepository(): PosCommandRepository {
     quantity: number,
     reference: string,
     note: string,
-    extra: { uom?: string, unitCost?: number, batchNo?: string, expiryDate?: string, documentNo?: string } = {},
+    extra: { unitCost?: number, batchNo?: string, expiryDate?: string, documentNo?: string } = {},
   ) {
     const db = useMockDb()
-    // Running balance display columns (ledger math stays in the base UOM).
+    // Running balance display columns.
     const balanceBefore = roundQty(db.collections.stockMovements
       .filter(row => String(row.productId ?? '') === String(productId))
       .reduce((sum, row) => sum + Number(row.quantity ?? 0), 0))
-    const product = db.collections.products.find(row => String(row.id) === String(productId))
     db.collections.stockMovements.unshift({
       id: createId('mv'),
       createdAt: nowIso(),
       date: nowIso().slice(0, 10),
       productId,
       product: productName,
-      barcode: String(product?.barcode ?? ''),
       type,
       quantity,
       reference,
       documentNo: extra.documentNo ?? reference,
       user: 'Sokha Chan',
       note,
-      unit: extra.uom ?? String(product?.uomSymbol ?? ''),
-      uomSymbol: extra.uom ?? String(product?.uomSymbol ?? ''),
-      uom: extra.uom ?? String(product?.uomSymbol ?? ''),
       qtyIn: quantity > 0 ? quantity : 0,
       qtyOut: quantity < 0 ? Math.abs(quantity) : 0,
       balanceBefore,
@@ -830,7 +589,6 @@ export function createMockPosRepository(): PosCommandRepository {
       items: items.map(item => ({
         name: String(item.name ?? ''),
         quantity: Number(item.quantity ?? 0),
-        uom: String(item.uom ?? ''),
         unitPrice: Number(item.price ?? 0),
         discount: Number(item.discount ?? 0),
         total: Number(item.total ?? 0),
@@ -853,30 +611,20 @@ export function createMockPosRepository(): PosCommandRepository {
         if (!product) throw new Error(`Unknown product: ${item.productId}`)
         const quantity = Number(item.quantity)
         if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Quantity must be greater than zero')
-        // Stock is always mutated in the product's base UOM (spec: Convert UOM).
-        const factor = Number(item.factorToBase ?? 1)
-        if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
-        const baseQty = convertToBase(quantity, factor)
         const available = Number(product.quantity || 0)
-        if (baseQty > available) throw new Error(`Insufficient stock for ${product.name}`)
+        if (quantity > available) throw new Error(`Insufficient stock for ${product.name}`)
         const price = item.unitPrice == null ? Number(product.salePrice) : Number(item.unitPrice)
         if (!Number.isFinite(price) || price < 0) throw new Error('Unit price must be zero or greater')
         const discountPercent = Math.min(100, Math.max(0, Number(item.discountPercent || 0)))
         const gross = round2(price * quantity)
         const lineDiscount = round2(gross * (discountPercent / 100))
         const lineTotal = round2(gross - lineDiscount)
-        const uomRecord = db.collections.uoms.find(row => String(row.id) === String(product.uomId || ''))
         return {
           // Sale line id — delivery-note lines reference it (sale_item_id).
           id: createId('line'),
           productId: product.id,
           name: product.name,
-          // Snapshot of the selected line UOM (base or a Convert-UOM row).
-          uom: String(item.uomSymbol || product.uomSymbol || uomRecord?.symbol || product.uom || uomRecord?.name || ''),
-          uomId: item.uomId ? String(item.uomId) : String(product.uomId || ''),
-          factorToBase: factor,
           quantity,
-          baseQuantity: baseQty,
           // Batch allocation traceability (spec 12, internal only - FEFO
           // handled invisibly by the backend; snapshot for Sale detail).
           batchNo: 'FEFO',
@@ -960,10 +708,9 @@ export function createMockPosRepository(): PosCommandRepository {
 
       for (const item of items) {
         const product = db.collections.products.find(row => String(row.id) === String(item.productId))!
-        // Stock-out in the base UOM: quantity × factorToBase.
-        product.quantity = roundQty(Number(product.quantity) - Number(item.baseQuantity))
+        product.quantity = roundQty(Number(product.quantity) - Number(item.quantity))
         // Movement reference is the invoice number (matches the backend SALE movement).
-        applyMovement(String(product.id), String(product.name), 'Sale', -Number(item.baseQuantity), String(sale.invoiceNo || sale.saleNo), 'POS sale', { uom: String(item.uom || '') })
+        applyMovement(String(product.id), String(product.name), 'Sale', -Number(item.quantity), String(sale.invoiceNo || sale.saleNo), 'POS sale')
       }
       if (customer && remaining > 0) {
         customer.debtBalance = round2(Number(customer.debtBalance || 0) + remaining)
@@ -999,10 +746,10 @@ export function createMockPosRepository(): PosCommandRepository {
       const previousItems = (Array.isArray(sale.items) ? sale.items : []) as AppRecord[]
       for (const item of previousItems) {
         const product = db.collections.products.find(row => String(row.id) === String(item.productId))
-        const baseQuantity = Number(item.baseQuantity ?? item.quantity ?? 0)
+        const baseQuantity = Number(item.quantity ?? 0)
         if (product && baseQuantity > 0) {
           product.quantity = roundQty(Number(product.quantity) + baseQuantity)
-          applyMovement(String(product.id), String(product.name), 'Sale Return', baseQuantity, String(sale.invoiceNo || sale.saleNo), 'Sale edit reversal', { uom: String(item.uom || '') })
+          applyMovement(String(product.id), String(product.name), 'Sale Return', baseQuantity, String(sale.invoiceNo || sale.saleNo), 'Sale edit reversal')
         }
       }
       const customer = sale.customerId
@@ -1024,9 +771,6 @@ export function createMockPosRepository(): PosCommandRepository {
         if (!product) throw new Error(`Unknown product: ${item.productId}`)
         const quantity = Number(item.quantity)
         if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Quantity must be greater than zero')
-        const factor = Number(item.factorToBase ?? 1)
-        if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
-        const baseQty = convertToBase(quantity, factor)
         const price = item.unitPrice == null ? Number(product.salePrice) : Number(item.unitPrice)
         const discountPercent = Math.min(100, Math.max(0, Number(item.discountPercent || 0)))
         const gross = round2(price * quantity)
@@ -1035,11 +779,7 @@ export function createMockPosRepository(): PosCommandRepository {
           id: createId('line'),
           productId: product.id,
           name: product.name,
-          uom: String(item.uomSymbol || product.uomSymbol || product.uom || ''),
-          uomId: item.uomId ? String(item.uomId) : String(product.uomId || ''),
-          factorToBase: factor,
           quantity,
-          baseQuantity: baseQty,
           batchNo: 'FEFO',
           expiryDate: null,
           price,
@@ -1058,8 +798,8 @@ export function createMockPosRepository(): PosCommandRepository {
 
       for (const item of items) {
         const product = db.collections.products.find(row => String(row.id) === String(item.productId))!
-        product.quantity = roundQty(Number(product.quantity) - Number(item.baseQuantity))
-        applyMovement(String(product.id), String(product.name), 'Sale', -Number(item.baseQuantity), String(sale.invoiceNo || sale.saleNo), 'POS sale (edited)', { uom: String(item.uom || '') })
+        product.quantity = roundQty(Number(product.quantity) - Number(item.quantity))
+        applyMovement(String(product.id), String(product.name), 'Sale', -Number(item.quantity), String(sale.invoiceNo || sale.saleNo), 'POS sale (edited)')
       }
 
       Object.assign(sale, {
@@ -1137,9 +877,6 @@ export function createMockPosRepository(): PosCommandRepository {
             id: String(item.id || ''),
             productId: String(item.productId || ''),
             name: String(item.name || ''),
-            uom: String(item.uom || item.uomSymbol || ''),
-            uomId: item.uomId ? String(item.uomId) : undefined,
-            factorToBase: Number(item.factorToBase ?? 1) || 1,
             quantity,
             returnedQuantity: Number(item.returnedQuantity || 0),
             unitPrice,
@@ -1151,36 +888,15 @@ export function createMockPosRepository(): PosCommandRepository {
       } as SaleDetail)
     },
 
-    async getProductByBarcode(barcode: string): Promise<AppRecord | null> {
-      const db = useMockDb()
-      const code = String(barcode || '').trim()
-      if (!code) return null
-      const product = db.collections.products.find(row =>
-        String(row.barcode || '').trim() === code
-        && String(row.status || 'Active') !== 'Inactive',
-      )
-      return mockLatency(product ? ({ ...product } as AppRecord) : null)
-    },
-
     async createStockOperation(input): Promise<AppRecord> {
       const db = useMockDb()
       const product = db.collections.products.find(row => String(row.id) === String(input.productId))
       if (!product) throw new Error(`Unknown product: ${input.productId}`)
       const quantity = Number(input.quantity)
       if (!Number.isFinite(quantity) || quantity === 0) throw new Error('Quantity is required')
-      // Received qty is converted to the product base/stock UOM before the
-      // mutation (spec: Stock In line UOM). Non stock-in ops stay in base UOM.
-      const factor = input.type === 'stock_in'
-        ? Number(input.factorToBase ?? 1)
-        : 1
-      if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
-      const baseQty = roundQty(convertToBase(quantity, factor))
-      const uomRecord = db.collections.uoms.find(row => String(row.id) === String(product.uomId || ''))
-      const baseUomSymbol = String(product.uomSymbol || uomRecord?.symbol || uomRecord?.name || '')
-      const lineUomSymbol = input.type === 'stock_in' ? String(input.uomSymbol || baseUomSymbol) : baseUomSymbol
-      // Unit cost is per the selected line UOM; snapshot per base UOM.
-      const lineUnitCost = input.unitCost != null ? Number(input.unitCost) : null
-      const baseUnitCost = lineUnitCost != null ? divideDecimalSafe(lineUnitCost, factor) : null
+      const baseQty = roundQty(quantity)
+      // Unit cost is per unit.
+      const baseUnitCost = input.unitCost != null ? Number(input.unitCost) : null
       const typeByOp: Record<string, { label: string, sign: number, docType: string, prefix: string }> = {
         stock_in: { label: 'Stock In', sign: 1, docType: 'STOCK_IN', prefix: 'PIN' },
         adjustment: { label: 'Adjustment', sign: Math.sign(quantity) || 1, docType: 'ADJUSTMENT', prefix: 'ADJ' },
@@ -1199,7 +915,6 @@ export function createMockPosRepository(): PosCommandRepository {
       if (Number(product.quantity) <= 10) product.status = 'Low Stock'
       else if (String(product.status) === 'Low Stock') product.status = 'Active'
       applyMovement(String(product.id), String(product.name), movementLabel, signed, reference, input.note ?? '', {
-        uom: lineUomSymbol,
         ...(baseUnitCost != null ? { unitCost: baseUnitCost } : {}),
         // Batch traceability: stock-in receives into the named lot; damage /
         // expiry drain that same lot (identity = product + batch_no).
@@ -1215,8 +930,6 @@ export function createMockPosRepository(): PosCommandRepository {
         product: String(product.name),
         type: movementLabel,
         quantity: signed,
-        uom: lineUomSymbol,
-        factorToBase: factor,
         note: input.note ?? null,
         createdAt: nowIso(),
       } as AppRecord)
@@ -1237,19 +950,13 @@ export function createMockPosRepository(): PosCommandRepository {
         if (!product) throw new Error(`Unknown product: ${line.productId}`)
         const quantity = Number(line.quantity)
         if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Quantity is required for ${String(product.name)}`)
-        const factor = Number(line.factorToBase ?? 1)
-        if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
-        const baseQty = roundQty(convertToBase(quantity, factor))
-        const uomRecord = db.collections.uoms.find(row => String(row.id) === String(product.uomId || ''))
-        const baseUomSymbol = String(product.uomSymbol || uomRecord?.symbol || uomRecord?.name || '')
-        const lineUomSymbol = String(line.uomSymbol || baseUomSymbol)
+        const baseQty = roundQty(quantity)
         const lineUnitCost = line.unitCost != null ? Number(line.unitCost) : null
-        const baseUnitCost = lineUnitCost != null ? divideDecimalSafe(lineUnitCost, factor) : null
+        const baseUnitCost = lineUnitCost
         product.quantity = roundQty(Number(product.quantity) + baseQty)
         if (Number(product.quantity) <= 10) product.status = 'Low Stock'
         else if (String(product.status) === 'Low Stock') product.status = 'Active'
         applyMovement(String(product.id), String(product.name), 'Stock In', baseQty, reference, input.note ?? '', {
-          uom: lineUomSymbol,
           ...(baseUnitCost != null ? { unitCost: baseUnitCost } : {}),
           // Batch traceability: the line receives into its named lot.
           ...(line.batchNo ? { batchNo: String(line.batchNo) } : {}),
@@ -1301,7 +1008,6 @@ export function createMockPosRepository(): PosCommandRepository {
           name: productNames[i] ?? '',
           batchNo: line.batchNo ?? null,
           expiryDate: line.expiryDate ?? null,
-          uom: '',
           quantity: Number(line.quantity || 0),
           price: Number(line.unitCost ?? 0),
           total: round2(Number(line.quantity || 0) * Number(line.unitCost ?? 0)),
@@ -1326,10 +1032,10 @@ export function createMockPosRepository(): PosCommandRepository {
       const previousItems = (Array.isArray(purchase.items) ? purchase.items : []) as AppRecord[]
       for (const item of previousItems) {
         const product = db.collections.products.find(row => String(row.id) === String(item.productId))
-        const qty = Number(item.baseQuantity ?? item.quantity ?? 0)
+        const qty = Number(item.quantity ?? 0)
         if (product && qty > 0) {
           product.quantity = roundQty(Number(product.quantity) - qty)
-          applyMovement(String(product.id), String(product.name), 'Purchase Return', -qty, String(purchase.purchaseNo || ''), 'Purchase edit reversal', { uom: String(item.uom || '') })
+          applyMovement(String(product.id), String(product.name), 'Purchase Return', -qty, String(purchase.purchaseNo || ''), 'Purchase edit reversal')
         }
       }
       const previousRemaining = round2(Number(purchase.remaining || 0))
@@ -1352,14 +1058,11 @@ export function createMockPosRepository(): PosCommandRepository {
         if (!product) throw new Error(`Unknown product: ${line.productId}`)
         const quantity = Number(line.quantity)
         if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`Quantity is required for ${String(product.name)}`)
-        const factor = Number(line.factorToBase ?? 1)
-        if (!Number.isFinite(factor) || factor <= 0) throw new Error('UOM factor must be greater than zero')
-        const baseQty = roundQty(convertToBase(quantity, factor))
+        const baseQty = roundQty(quantity)
         const unitCost = line.unitCost != null ? Number(line.unitCost) : 0
         product.quantity = roundQty(Number(product.quantity) + baseQty)
         applyMovement(String(product.id), String(product.name), 'Stock In', baseQty, String(purchase.purchaseNo || ''), input.note ?? '', {
-          uom: String(line.uomSymbol || ''),
-          ...(line.unitCost != null ? { unitCost: divideDecimalSafe(unitCost, factor) } : {}),
+          ...(line.unitCost != null ? { unitCost } : {}),
           ...(line.batchNo ? { batchNo: String(line.batchNo) } : {}),
           ...(line.expiryDate ? { expiryDate: String(line.expiryDate) } : {}),
         })
@@ -1370,9 +1073,7 @@ export function createMockPosRepository(): PosCommandRepository {
           name: String(product.name),
           batchNo: line.batchNo ?? null,
           expiryDate: line.expiryDate ?? null,
-          uom: String(line.uomSymbol || ''),
           quantity,
-          baseQuantity: baseQty,
           price: unitCost,
           total: round2(quantity * unitCost),
         }
@@ -1574,8 +1275,7 @@ export function createMockPosRepository(): PosCommandRepository {
         const lineRefund = round2(unit * qty)
         refund = round2(refund + lineRefund)
         item.returnedQuantity = roundQty(already + qty)
-        const factor = Number(item.factorToBase ?? 1) || 1
-        const baseQty = roundQty(convertToBase(qty, factor))
+        const baseQty = roundQty(qty)
         if (lineIn.restock) {
           const product = db.collections.products.find(row => String(row.id) === String(item.productId))
           if (product) {
@@ -1589,7 +1289,6 @@ export function createMockPosRepository(): PosCommandRepository {
             baseQty,
             String(sale.saleNo || sale.id),
             reason,
-            { uom: String(item.uom || '') },
           )
         }
         returnItems.push({
@@ -1698,7 +1397,7 @@ export function createMockPosRepository(): PosCommandRepository {
           -Math.abs(qty),
           String(purchase.purchaseNo || purchase.id),
           reason,
-          { uom: String(item.uom || ''), unitCost: unit },
+          { unitCost: unit },
         )
         returnItems.push({
           id: createId('prit'),

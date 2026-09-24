@@ -74,15 +74,5 @@ class SupplierRepository:
         )
         return int(result.scalar_one())
 
-    async def count_batches(self, supplier_id) -> int:
-        from app.modules.stock.models import BatchStockBalance
-
-        result = await self.session.execute(
-            select(func.count())
-            .select_from(BatchStockBalance)
-            .where(BatchStockBalance.supplier_id == supplier_id)
-        )
-        return int(result.scalar_one())
-
     async def flush(self) -> None:
         await self.session.flush()

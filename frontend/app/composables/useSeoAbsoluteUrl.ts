@@ -3,7 +3,7 @@
  * Relative paths (e.g. `/logo.png`) are ignored by Telegram, WhatsApp, Facebook, etc.
  *
  * Important: call `useRequestURL()` during setup (not lazily inside a computed
- * callback), or Nitro/Vercel SSR loses the request origin and og:image stays relative.
+ * callback), or Nitro loses the request origin and og:image stays relative.
  */
 export function useSeoAbsoluteUrl() {
   const config = useRuntimeConfig()

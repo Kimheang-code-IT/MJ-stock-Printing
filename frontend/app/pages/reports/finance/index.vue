@@ -7,9 +7,11 @@ import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { formatMoney } from '~/composables/module/useModule'
+import { formatDate } from '~/utils/format/format-service'
+import type { ListTableSortOption } from '~/utils/table/list-table'
 import { PAYMENT_METHODS } from '~/config/pos-options'
 import { downloadTableExport, type ExportTableColumn } from '~/utils/export/table'
-import type { ExportRequest } from '~/types/stock-pos/export'
+import type { ExportRequest } from '~/types/mj/export'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { useFinanceRepository } from '~/repositories/index'
 import type { FinanceEntry, FinanceEntryType } from '~/repositories/contracts/entities'
@@ -144,12 +146,18 @@ const typeBadge = (type: FinanceEntryType) => ({
   expense: { color: 'warning' as const, label: t('app.finance.typeExpense') },
 })[type]
 
+const sortOptions = computed<ListTableSortOption[]>(() => [
+  { key: 'date', kind: 'date', label: t('app.fields.date') },
+  { key: 'reference', kind: 'number', label: t('app.finance.referenceCategory') },
+])
+
 const columns = computed<TableColumn<FinanceRow>[]>(() => [
   {
     accessorKey: 'date',
     header: t('app.fields.date'),
     enableSorting: false,
     meta: { class: { td: 'whitespace-nowrap', th: '' } },
+    cell: ({ row }) => h('span', { class: 'whitespace-nowrap text-default' }, formatDate(row.original.date)),
   },
   {
     accessorKey: 'type',
@@ -383,6 +391,7 @@ async function submitExpense() {
       :columns="columns"
       :loading="loading"
       :show-date-range="true"
+      :sort-options="sortOptions"
       :date-label="t('app.ui.date')"
       :filters-active="filtersActive"
       :search-placeholder="t('app.finance.searchPlaceholder')"

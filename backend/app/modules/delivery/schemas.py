@@ -198,6 +198,9 @@ class DeliveryNoteSaleOut(BaseModel):
 
     sale_id: UUID
     invoice_no: str
+    # Linked invoice's sale date (shown as the Delivery list Invoice Date).
+    sale_date: datetime | None = None
+    saleDate: datetime | None = None
     # Derived from delivered quantities across all non-cancelled notes —
     # NOT_DELIVERED | PARTIALLY_DELIVERED | FULLY_DELIVERED.
     delivery_status: str = "NOT_DELIVERED"
@@ -212,12 +215,10 @@ class DeliveryNoteItemOut(BaseModel):
     sale_item_id: UUID
     product_id: UUID
     product_name: str
-    uom_symbol: str | None
     qty_ordered: Decimal
     qty_to_deliver: Decimal
     qty_delivered: Decimal
     note: str | None = None
-
 
 class DeliveryNoteOut(BaseModel):
     id: UUID
@@ -261,9 +262,8 @@ class DeliverableItemOut(BaseModel):
     sale_item_id: UUID
     product_id: UUID
     product_name: str
-    # Legacy internal code: nullable since 0021 (barcode is operational).
+    # Legacy internal code: optional.
     sku: str | None = None
-    uom_symbol: str | None
     qty_ordered: Decimal
     qty_returned: Decimal
     qty_allocated: Decimal

@@ -47,10 +47,9 @@ export const deliveryModules: ModuleConfig[] = [
       col('deliveryPhone', 'Phone'),
       col('deliveryLocation', 'Location'),
       col('deliveryFee', 'Delivery Price'),
-      col('createdAt', 'Date', { type: 'date' }),
-      col('status', 'Status'),
-      col('note', 'Note'),
-      col('itemCount', 'Items', { type: 'number' }),
+      // Invoice Date replaces the old Status / Note / Items columns: the
+      // linked invoice's sale date (earliest when a note covers many).
+      col('invoiceDate', 'Invoice Date', { type: 'date' }),
     ],
     // Metadata only — delivery data comes from POS sales; there is no
     // contact/driver/schedule form (spec §5.13: table + Delivery OK status).

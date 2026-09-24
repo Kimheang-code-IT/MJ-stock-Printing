@@ -1,7 +1,7 @@
 import type { DropdownMenuItem } from '@nuxt/ui'
 import { usePreferencesStore } from '~/stores/preferences'
 import type { AppLocale } from '~/stores/preferences'
-import type { AppFontSize } from '~/types/stock-pos/settings'
+import type { AppFontSize } from '~/types/mj/settings'
 import { resolveUserAvatar } from '~/utils/auth/user-avatar'
 
 const FONT_SIZE_OPTIONS: Array<{ value: AppFontSize, labelKey: string, icon: string }> = [

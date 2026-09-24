@@ -9,7 +9,6 @@ the inquiry access gate).
 import asyncio
 import os
 import uuid
-from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -34,7 +33,7 @@ from app.shared.telegram.inquiry import (
     run_tool,
 )
 from tests.modules.pos.helpers import make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import admin_headers
 
 
 async def set_setting(db_session, group: str, key: str, value) -> None:
@@ -49,10 +48,8 @@ def cleanup_telegram_users():
     """Remove inquiry-created Telegram users after each test.
 
     Tests share one database with no per-test rollback; verified Telegram
-    users left behind would otherwise become expiry-alert recipients in
-    tests/modules/telegram (which assert only their own users receive
-    messages). Runs on its own event loop/engine so it works for sync and
-    async tests alike.
+    users left behind would otherwise leak into unrelated suites. Runs on its
+    own event loop/engine so it works for sync and async tests alike.
     """
     yield
     from sqlalchemy import delete
@@ -95,38 +92,6 @@ async def make_telegram_user(db_session, tag: str, *, verified: bool = True) -> 
     return user
 
 
-async def make_expiry_lot(client, headers, *, tag: str, sku: str, expiry_date: str, qty: str = "5") -> dict:
-    category = (
-        await client.post(
-            "/api/v1/categories", json={"code": f"TI-{tag}", "name": f"Inquiry Cat {tag}"}, headers=headers
-        )
-    ).json()["data"]
-    product = (
-        await client.post(
-            "/api/v1/products",
-            json={
-                "sku": sku,
-                "name": f"Inquiry Widget {tag}",
-                "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
-                "selling_price": "2.00",
-                "expiry_tracking": True,
-            },
-            headers=headers,
-        )
-    ).json()["data"]
-    stock_in = await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": str(int(qty)),  # unit_cost 1.00
-            "items": [{"product_id": product["id"], "quantity": qty, "unit_cost": "1.00", "expiry_date": expiry_date}],
-        },
-        headers=headers,
-    )
-    assert stock_in.status_code == 201, stock_in.text
-    return product
-
-
 # ------------------------------------------------------------ callback routing
 
 
@@ -145,7 +110,6 @@ def test_write_shaped_callbacks_are_refused():
         "stock:adjust",
         "stock_in:create",
         "stock:damage",
-        "stock:expire",
         "sale:create",
         "payment:record",
         "debt_payment:create",
@@ -194,8 +158,8 @@ async def test_unverified_chat_id_is_refused(client, db_session):
     tag = uuid.uuid4().hex[:8]
     user = await make_telegram_user(db_session, tag, verified=False)
     resolved, error = await resolve_access(db_session, user.telegram_chat_id)
-    # A chat id stored but not verified is treated as unlinked (same gate the
-    # expiry alert recipients use) — instruction only, no business data.
+    # A chat id stored but not verified is treated as unlinked — instruction
+    # only, no business data.
     assert resolved is None
     assert error == UNLINKED_REPLY.format(chat_id=user.telegram_chat_id)
 
@@ -245,7 +209,6 @@ async def test_low_stock_lists_products_at_or_below_minimum(client, db_session):
                 "sku": f"LOW-{tag}",
                 "name": f"Low Widget {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "2.00",
                 "minimum_stock": "10",
             },
@@ -265,36 +228,6 @@ async def test_low_stock_lists_products_at_or_below_minimum(client, db_session):
     text, _ = await run_tool(db_session, InquiryAction(tool="low_stock"))
     assert f"Low Widget {tag}" in text
     assert "LOW" in text
-
-
-@pytest.mark.asyncio
-async def test_expiring_uses_settings_alert_windows(client, db_session):
-    tag = uuid.uuid4().hex[:8]
-    headers = await admin_headers(client)
-    await set_setting(db_session, "stock", "expiry_alert_1_days", 90)
-    await set_setting(db_session, "stock", "expiry_alert_2_days", 7)
-    today = date.today()
-    # Inside Alert 2 window (<= 7 days) and inside Alert 1 window.
-    soon = await make_expiry_lot(
-        client, headers, tag=f"a{tag}", sku=f"EXP2-{tag}", expiry_date=(today + timedelta(days=5)).isoformat()
-    )
-    # Inside Alert 1 but outside Alert 2 (45 days out).
-    mid = await make_expiry_lot(
-        client, headers, tag=f"b{tag}", sku=f"EXP1-{tag}", expiry_date=(today + timedelta(days=45)).isoformat()
-    )
-    # Outside both windows (200 days out).
-    await make_expiry_lot(
-        client, headers, tag=f"c{tag}", sku=f"EXP0-{tag}", expiry_date=(today + timedelta(days=200)).isoformat()
-    )
-
-    text, _ = await run_tool(db_session, InquiryAction(tool="expiring"))
-    assert f"EXP2-{tag}" in text
-    assert "ALERT 2" in text
-    assert f"EXP1-{tag}" in text
-    assert "ALERT 1" in text
-    assert f"EXP0-{tag}" not in text  # outside the configured windows
-    assert "Alert 1 = 90d" in text and "Alert 2 = 7d" in text
-    assert soon["sku"] and mid["sku"]
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-import type { DocumentTabSchema } from '~/types/stock-pos/common'
+import type { DocumentTabSchema } from '~/types/mj/common'
 import { adminModules } from './admin-modules'
 import { deliveryModules } from './delivery-modules'
 import { stockModules } from './stock-modules'
@@ -42,7 +42,7 @@ export type ModuleLineColumn = {
   labelKm?: string
   type?: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'date' | 'datetime'
   options?: readonly string[] | string[]
-  /** Static items, or a per-row resolver (e.g. UOM options of the row's product). */
+  /** Static items, or a per-row resolver (e.g. options derived from the row's product). */
   optionItems?: ModuleLineOptionItem[] | ((row: Record<string, unknown>) => ModuleLineOptionItem[])
   /** Cell/input width override (e.g. 'w-80 min-w-64'); defaults per key. */
   width?: string

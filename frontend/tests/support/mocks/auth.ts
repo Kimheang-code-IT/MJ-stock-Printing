@@ -5,7 +5,7 @@ import type { AuthUser } from '~/types/auth-user'
  * app is explorable without a backend. Tokens are opaque placeholders stored
  * through the normal bearer token utils, keeping the auth gate identical.
  */
-export const MOCK_DEMO_EMAIL = 'admin@stockpos.local'
+export const MOCK_DEMO_EMAIL = 'admin@mj.local'
 export const MOCK_DEMO_PASSWORD = 'admin123'
 
 export const MOCK_AUTH_USER: AuthUser = {

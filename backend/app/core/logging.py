@@ -20,4 +20,4 @@ def setup_logging() -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-logger = logging.getLogger("stock_pos")
+logger = logging.getLogger("mj")

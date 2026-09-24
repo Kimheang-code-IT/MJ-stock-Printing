@@ -393,10 +393,9 @@ def test_sale_formatter_renders_fields_in_app_timezone():
             "exchange_rate": "1",
             "item_count": 3,
             "subtotal": "30.00",
-            "discount": "1.00",
             "delivery_price": "0.00",
-            "total": "29.00",
-            "paid": "29.00",
+            "total": "30.00",
+            "paid": "30.00",
             "payment_method": "CASH",
             "debt": "0.00",
             "cashier": "Sok",
@@ -407,8 +406,8 @@ def test_sale_formatter_renders_fields_in_app_timezone():
     assert "Invoice ID: INV-000001" in text
     assert "Date: 2026-09-04 19:00:00" in text  # UTC+07 conversion
     assert "Customer: Dara" in text
-    assert "<b>Total: $29.00</b>" in text
-    assert "Paid: $29.00" in text
+    assert "<b>Total: $30.00</b>" in text
+    assert "Paid: $30.00" in text
     assert "Payment: Cash" in text
     assert "By: Sok" in text
 
@@ -425,10 +424,9 @@ def test_purchase_formatter_renders_fields():
             "exchange_rate": "4100",
             "item_count": 4,
             "subtotal": "410000.00",
-            "discount": "10000.00",
             "tax": "0.00",
-            "total": "400000.00",
-            "paid": "400000.00",
+            "total": "410000.00",
+            "paid": "410000.00",
             "debt": "0.00",
             "user": "Sok",
         },
@@ -437,7 +435,7 @@ def test_purchase_formatter_renders_fields():
     assert "Stock In Received" in text
     assert "Document: STI-000001" in text
     assert "Supplier: Angkor Wholesale" in text
-    assert "<b>Total: \u17db400000.00</b>" in text
+    assert "<b>Total: \u17db410000.00</b>" in text
     assert "By: Sok" in text
 
 
@@ -452,7 +450,6 @@ def test_formatters_render_khmer_labels_and_products():
             "customer": None,
             "currency": "USD",
             "subtotal": "10.00",
-            "discount": "0.00",
             "delivery_price": "0.00",
             "total": "10.00",
             "paid": "10.00",
@@ -460,7 +457,7 @@ def test_formatters_render_khmer_labels_and_products():
             "debt": "0.00",
             "cashier": "Sok",
             "items": [
-                {"name": "Paracetamol", "quantity": "2.0000", "uom": "pcs", "unit_price": "5.00", "line_total": "10.00"}
+                {"name": "Paracetamol", "quantity": "2.0000", "unit_price": "5.00", "line_total": "10.00"}
             ],
         },
         lang="km",
@@ -470,4 +467,4 @@ def test_formatters_render_khmer_labels_and_products():
     assert "\u17a2\u178f\u17b7\u1790\u17b7\u1787\u1793\u1791\u17bc\u1791\u17c5" in text
     assert "\u1791\u17c6\u1793\u17b7\u1789:" in text
     # Decimals are trimmed in product rows.
-    assert "Paracetamol 2 pcs @ $5.00 = $10.00" in text
+    assert "Paracetamol 2 @ $5.00 = $10.00" in text

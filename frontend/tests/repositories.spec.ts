@@ -62,13 +62,10 @@ describe('collection → endpoint mapping', () => {
     expect(ApiEndpoints.STOCK_ADJUST).toBe('/api/v1/stock/adjust')
     expect(ApiEndpoints.STOCK_DAMAGE).toBe('/api/v1/stock/damage')
     expect(ApiEndpoints.STOCK_EXPIRE).toBe('/api/v1/stock/expire')
-    expect(ApiEndpoints.PRODUCT_SALE_PRICES('prd1')).toBe('/api/v1/products/prd1/sale-prices')
-    expect(ApiEndpoints.PRODUCT_SALE_PRICE_ACTIVATE('prd1', 'psp1')).toBe('/api/v1/products/prd1/sale-prices/psp1/activate')
     expect(ApiEndpoints.PRODUCT_HISTORY('prd1')).toBe('/api/v1/stock/products/prd1/history')
     expect(ApiEndpoints.PRODUCT_COST_HISTORY('prd1')).toBe('/api/v1/stock/products/prd1/cost-history')
     expect(ApiEndpoints.POS_RECEIPT('sale1')).toBe('/api/v1/pos/sales/sale1/receipt')
     expect(ApiEndpoints.POS_PRODUCT_SEARCH).toBe('/api/v1/pos/products/search')
-    expect(ApiEndpoints.POS_PRODUCT_BARCODE('8801001234501')).toBe('/api/v1/pos/products/barcode/8801001234501')
     expect(ApiEndpoints.CUSTOMER_DEBT_PAYMENTS('cus1', 'cdebt1')).toBe('/api/v1/customers/cus1/debts/cdebt1/payments')
     expect(ApiEndpoints.SUPPLIER_DEBT_PAYMENTS('sup1', 'sdebt1')).toBe('/api/v1/suppliers/sup1/debts/sdebt1/payments')
     expect(ApiEndpoints.FINANCE).toBe('/api/v1/reports/finance')
@@ -177,9 +174,9 @@ describe('http entity repository', () => {
   it('suppresses the generic API toast on delete so callers show the reason', async () => {
     const captured = withFakeApi(() => ({ data: { message: 'deleted' } }))
     const repository = createHttpEntityRepository()
-    await repository.remove('uoms', 'uom-1')
+    await repository.remove('categories', 'cat-1')
     expect(captured[0]?.method).toBe('DELETE')
-    expect(captured[0]?.url).toBe('/api/v1/uoms/uom-1')
+    expect(captured[0]?.url).toBe('/api/v1/categories/cat-1')
     expect(captured[0]?.options).toMatchObject({ suppressErrorToast: true })
   })
 })
@@ -194,14 +191,9 @@ describe('http POS/stock command endpoints (spec §7)', () => {
       items: [{
         productId: 'prd-1',
         quantity: 2,
-        discountPercent: 10,
-        uomId: 'uom-2',
-        uomSymbol: 'box',
-        factorToBase: 12,
       }],
       paymentMethod: 'Cash',
       paidAmount: 20,
-      discount: 1,
       note: 'leave at desk',
       includedDebtIds: ['debt-9'],
       deliveryPrice: 2.5,
@@ -215,7 +207,6 @@ describe('http POS/stock command endpoints (spec §7)', () => {
       customer_id: 'cus-1',
       payment_method: 'CASH',
       amount_received: 20,
-      discount: 1,
       note: 'leave at desk',
       included_debt_ids: ['debt-9'],
       delivery_price: 2.5,
@@ -225,10 +216,6 @@ describe('http POS/stock command endpoints (spec §7)', () => {
       items: [{
         product_id: 'prd-1',
         quantity: 2,
-        discount_percent: 10,
-        uom_id: 'uom-2',
-        uom_symbol: 'box',
-        factor_to_base: 12,
       }],
     })
   })
@@ -236,18 +223,16 @@ describe('http POS/stock command endpoints (spec §7)', () => {
   it('posts each stock operation to its own /stock path', async () => {
     const captured = withFakeApi(() => ({ data: { id: 'op-1' } }))
     const commands = createHttpPosCommandRepository()
-    await commands.createStockOperation({ type: 'stock_in', productId: 'prd-1', quantity: 2, uomId: 'uom-2', uomSymbol: 'box', factorToBase: 12, unitCost: 6, supplierId: 'sup-1', paidAmount: 12 })
+    await commands.createStockOperation({ type: 'stock_in', productId: 'prd-1', quantity: 2, unitCost: 6, supplierId: 'sup-1', paidAmount: 12 })
     await commands.createStockOperation({ type: 'adjustment', productId: 'prd-1', quantity: 3 })
     await commands.createStockOperation({ type: 'damage', productId: 'prd-1', quantity: 1 })
-    await commands.createStockOperation({ type: 'expiry', productId: 'prd-1', quantity: 2 })
     expect(captured.map(request => request.url)).toEqual([
       '/api/v1/stock/in',
       '/api/v1/stock/operations',
       '/api/v1/stock/damage',
-      '/api/v1/stock/expire',
     ])
     // Stock In = purchase: POST /stock/in takes a StockInRequest (items[],
-    // supplier, paid amount) with line UOM conversion metadata.
+    // supplier, paid amount).
     expect(captured[0]?.body).toMatchObject({
       supplier_id: 'sup-1',
       paid_amount: 12,
@@ -255,17 +240,13 @@ describe('http POS/stock command endpoints (spec §7)', () => {
       items: [{
         product_id: 'prd-1',
         quantity: 2,
-        uom_id: 'uom-2',
-        uom_symbol: 'box',
-        factor_to_base: 12,
         unit_cost: 6,
       }],
     })
     // Adjustment is a signed delta handled by the quick-operation endpoint.
     expect(captured[1]?.body).toMatchObject({ type: 'adjustment', product_id: 'prd-1', quantity: 3 })
-    // Damage/Expiry are absolute quantities inside an items[] envelope.
+    // Damage is an absolute quantity inside an items[] envelope.
     expect(captured[2]?.body).toMatchObject({ items: [{ product_id: 'prd-1', quantity: 1 }] })
-    expect(captured[3]?.body).toMatchObject({ items: [{ product_id: 'prd-1', quantity: 2 }] })
   })
 
   it('pays debts through the nested spec paths when the debt id is known', async () => {
@@ -303,34 +284,15 @@ describe('http stock query endpoints (spec §7 product-scoped)', () => {
     expect(result.meta?.total).toBe(1)
   })
 
-  it('adapts cost history and sale-price rows to camelCase', async () => {
-    const captured = withFakeApi(handler => handler.url.includes('cost-history')
-      ? { data: [{ id: 'lot-1', date: '2026-01-05', product: 'Coca-Cola', unit_cost: 0.5, quantity: 24, amount: 12, version: 1, document_no: 'PIN-00080' }] }
-      : handler.method === 'POST' && handler.url.endsWith('/sale-prices/psp-2/activate')
-        ? { data: { id: 'psp-2', product_id: 'prd-1', product: 'Coca-Cola', sale_price: 0.9, date: '2026-02-01', is_active: true, version: 2 } }
-        : handler.method === 'POST' && handler.url.endsWith('/sale-prices')
-        ? { data: { id: 'psp-3', product_id: 'prd-1', product: 'Coca-Cola', sale_price: 1.1, date: '2026-03-01', is_active: true, version: 3 } }
-        : { data: [{ id: 'psp-2', product_id: 'prd-1', product: 'Coca-Cola', sale_price: 0.9, date: '2026-02-01', is_active: true, version: 2 }] })
+  it('adapts cost history rows to camelCase', async () => {
+    const captured = withFakeApi(() => ({
+      data: [{ id: 'lot-1', date: '2026-01-05', product: 'Coca-Cola', unit_cost: 0.5, quantity: 24, amount: 12, version: 1, document_no: 'PIN-00080' }],
+    }))
     const queries = createHttpStockQueryRepository()
 
     const costs = await queries.listProductCostHistory('prd-1')
     expect(captured[0]?.url).toBe('/api/v1/stock/products/prd-1/cost-history')
     expect(costs.items[0]).toMatchObject({ unitCost: 0.5, quantity: 24, amount: 12, version: 1, documentNo: 'PIN-00080' })
-
-    const prices = await queries.listSalePrices('prd-1')
-    expect(captured[1]?.url).toBe('/api/v1/products/prd-1/sale-prices')
-    expect(prices.items[0]).toMatchObject({ productId: 'prd-1', salePrice: 0.9, isActive: true, version: 2 })
-
-    const added = await queries.addSalePrice('prd-1', { date: '2026-03-01', salePrice: 1.1 })
-    expect(captured[2]?.method).toBe('POST')
-    expect(captured[2]?.url).toBe('/api/v1/products/prd-1/sale-prices')
-    expect(captured[2]?.body).toMatchObject({ date: '2026-03-01', sale_price: 1.1 })
-    expect(added.salePrice).toBe(1.1) // adapted response body
-
-    const activated = await queries.activateSalePrice('prd-1', 'psp-2')
-    expect(captured[3]?.method).toBe('POST')
-    expect(captured[3]?.url).toBe('/api/v1/products/prd-1/sale-prices/psp-2/activate')
-    expect(activated.isActive).toBe(true)
   })
 })
 
@@ -385,7 +347,7 @@ describe('complete purchase (Stock In) commands', () => {
     const commands = createHttpPosCommandRepository()
     const record = await commands.createPurchase({
       lines: [
-        { productId: 'prd-1', quantity: 2, uomId: 'uom-2', uomSymbol: 'box', factorToBase: 12, unitCost: 6 },
+        { productId: 'prd-1', quantity: 2, unitCost: 6 },
         { productId: 'prd-2', quantity: 5, unitCost: 1.5 },
       ],
       supplierId: 'sup-1',
@@ -401,7 +363,7 @@ describe('complete purchase (Stock In) commands', () => {
       payment_method: 'BANK_QR',
       note: 'weekly order',
       items: [
-        { product_id: 'prd-1', quantity: 2, uom_id: 'uom-2', uom_symbol: 'box', factor_to_base: 12, unit_cost: 6 },
+        { product_id: 'prd-1', quantity: 2, unit_cost: 6 },
         { product_id: 'prd-2', quantity: 5, unit_cost: 1.5 },
       ],
     })
@@ -419,18 +381,16 @@ describe('complete purchase (Stock In) commands', () => {
     expect(captured[0]?.body).toMatchObject({ currency: 'KHR', exchange_rate: 41000 })
   })
 
-  it('sends document-level discount and tax with the purchase', async () => {
+  it('sends document-level tax with the purchase', async () => {
     const captured = withFakeApi(() => ({ data: { id: 'sti-3' } }))
     const commands = createHttpPosCommandRepository()
     await commands.createPurchase({
       lines: [{ productId: 'prd-1', quantity: 10, unitCost: 2 }],
       supplierId: 'sup-1',
       paidAmount: 9,
-      discountAmount: 5,
       taxAmount: 4,
     })
     expect(captured[0]?.body).toMatchObject({
-      discount_amount: 5,
       tax_amount: 4,
       paid_amount: 9,
     })
@@ -444,26 +404,8 @@ describe('complete purchase (Stock In) commands', () => {
     })
     const body = captured[0]?.body as Record<string, unknown>
     expect('supplier_id' in body).toBe(false)
-    expect('uom_id' in (body.items as Array<Record<string, unknown>>)[0]!).toBe(false)
+    expect('factor_to_base' in (body.items as Array<Record<string, unknown>>)[0]!).toBe(false)
     expect('unit_cost' in (body.items as Array<Record<string, unknown>>)[0]!).toBe(false)
   })
 
-  it('looks a product up by exact barcode and normalizes the response', async () => {
-    const captured = withFakeApi(() => ({
-      data: { id: 'prd-9', barcode: '8801001234501', name: 'Glove', selling_price: 3.15 },
-    }))
-    const commands = createHttpPosCommandRepository()
-    const product = await commands.getProductByBarcode('8801001234501')
-    expect(captured[0]?.method).toBe('GET')
-    expect(captured[0]?.url).toBe('/api/v1/pos/products/barcode/8801001234501')
-    expect(product).toMatchObject({ id: 'prd-9', barcode: '8801001234501', salePrice: 3.15 })
-  })
-
-  it('returns null when no active product matches the scanned barcode (404)', async () => {
-    withFakeApi(() => {
-      throw new Error('API Error: 404')
-    })
-    const commands = createHttpPosCommandRepository()
-    await expect(commands.getProductByBarcode('nope')).resolves.toBeNull()
-  })
 })

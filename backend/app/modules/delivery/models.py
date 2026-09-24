@@ -125,7 +125,6 @@ class DeliveryNoteItem(Base):
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    uom_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
     qty_ordered: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     qty_to_deliver: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     qty_delivered: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))

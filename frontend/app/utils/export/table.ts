@@ -1,4 +1,4 @@
-import type { ExportFormat } from '~/types/stock-pos/export'
+import type { ExportFormat } from '~/types/mj/export'
 import { resolveApiBase } from '~/utils/api/base-url'
 import { getAccessToken } from '~/utils/auth/tokens'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'

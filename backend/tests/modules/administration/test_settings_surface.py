@@ -16,7 +16,7 @@ async def test_app_config_exposes_full_document(client):
     for section in ("general", "localization", "email", "telegram", "stock", "notifications", "security", "system"):
         assert section in config, f"missing App Config section {section}"
     assert config["telegram"]["botToken"] == ""
-    assert set(config["stock"]) >= {"lowStockLevel", "expiryAlert1Days", "expiryAlert2Days"}
+    assert set(config["stock"]) >= {"lowStockLevel"}
 
 
 async def test_app_info_round_trip_and_reset(client):
@@ -37,7 +37,7 @@ async def test_app_info_round_trip_and_reset(client):
 
     reset = await client.post("/api/v1/settings/app-info/reset", headers=headers)
     assert reset.status_code == 200, reset.text
-    assert reset.json()["data"]["businessName"] == "Yoeun Sokhon Pharmacy"
+    assert reset.json()["data"]["businessName"] == "MJ Printing"
 
 
 async def test_app_config_write_accepts_payment_invoice_toggle(client):

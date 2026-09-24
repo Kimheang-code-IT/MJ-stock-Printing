@@ -4,7 +4,7 @@ Inbound (long polling), view-only (spec sections 3.6 / 3.6.1):
 - /start replies with the chat's Telegram Chat ID so administrators can copy
   it into Administration > Users.
 - linked users get the view-only inquiry keyboard: Current Stock, Low Stock,
-  Expiring Soon, Sales Summary (period select), Help. Every tool calls the
+  Sales Summary (period select), Help. Every tool calls the
   read-only adapters in `app.shared.telegram.inquiry`; the bot never writes
   to the database. Any unknown/write-shaped callback is refused ("View only").
 
@@ -27,12 +27,11 @@ from app.shared.telegram.inquiry import (
     run_tool,
 )
 
-logger = logging.getLogger("stock_pos.telegram_bot")
+logger = logging.getLogger("mj.telegram_bot")
 
 TOOL_LABELS = {
     "current_stock": "Current Stock",
     "low_stock": "Low Stock",
-    "expiring": "Expiring Soon",
     "sales": "Sales Summary",
 }
 PERIOD_LABELS = {"today": "Today", "7d": "Last 7 days", "month": "This month"}
@@ -60,7 +59,6 @@ def _menu_keyboard():
                 InlineKeyboardButton(TOOL_LABELS["low_stock"], callback_data="tool:low_stock"),
             ],
             [
-                InlineKeyboardButton(TOOL_LABELS["expiring"], callback_data="tool:expiring"),
                 InlineKeyboardButton(TOOL_LABELS["sales"], callback_data="tool:sales"),
             ],
             [InlineKeyboardButton("Help", callback_data="help")],
@@ -243,8 +241,6 @@ def _import_all_models() -> None:
     import app.modules.reports.models  # noqa: F401
     import app.modules.stock.models  # noqa: F401
     import app.modules.suppliers.models  # noqa: F401
-    import app.modules.telegram.models  # noqa: F401
-    import app.modules.uoms.models  # noqa: F401
     import app.shared.audit.models  # noqa: F401
     import app.shared.documents.models  # noqa: F401
 

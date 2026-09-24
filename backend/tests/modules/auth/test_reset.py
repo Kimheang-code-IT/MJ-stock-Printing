@@ -138,7 +138,7 @@ async def test_forgot_password_without_telegram_chat(client, monkeypatch, captur
     from app.core.security import hash_password
 
     async with SessionFactory() as session:
-        role = Role(name=f"NoChatRole", is_system=False, status="ACTIVE")
+        role = Role(name="NoChatRole", is_system=False, status="ACTIVE")
         session.add(role)
         await session.flush()
         session.add(

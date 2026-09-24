@@ -1,11 +1,11 @@
 /**
  * Phase 2 search index — localStorage-backed document corpus for Cmd+K.
  */
-import type { IndexedDocument } from '~/types/stock-pos/search'
+import type { IndexedDocument } from '~/types/mj/search'
 import { localStore } from '~/utils/storage/local'
 
-const INDEX_KEY = 'stockpos:search:index:v1'
-const SEEDED_KEY = 'stockpos:search:index:seeded:v1'
+const INDEX_KEY = 'mj:search:index:v1'
+const SEEDED_KEY = 'mj:search:index:seeded:v1'
 
 function readAll(): IndexedDocument[] {
   return localStore.get<IndexedDocument[]>(INDEX_KEY) || []

@@ -5,7 +5,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-logger = logging.getLogger("stock_pos.db")
+logger = logging.getLogger("mj.db")
 
 
 class Base(DeclarativeBase):

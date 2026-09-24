@@ -5,6 +5,7 @@ import { UCheckbox } from '#components'
 import { h } from 'vue'
 import { formatMoney } from '~/composables/module/useModule'
 import { appTableCheckboxMeta } from '~/utils/table/theme'
+import type { ListTableSortOption } from '~/utils/table/list-table'
 import type { CheckoutDebtRow } from '~/utils/pos/checkout'
 
 /**
@@ -28,6 +29,11 @@ const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
 const noEmptyDescription = ' '
 
 const selectedSet = computed(() => new Set(selectedIds.value))
+
+const sortOptions = computed<ListTableSortOption[]>(() => [
+  { key: 'date', kind: 'date', label: t('app.fields.date') },
+  { key: 'invoiceNo', kind: 'number', label: t('app.fields.invoiceNo') },
+])
 
 function toggleIncluded(id: string, checked: boolean) {
   const next = new Set(selectedIds.value)
@@ -106,6 +112,7 @@ const columns = computed<TableColumn<CheckoutDebtRow>[]>(() => [
         v-model:pagination="pagination"
         :data="debts"
         :columns="columns"
+        :sort-options="sortOptions"
         :get-row-id="(row) => String(row.id)"
         :empty-title="t('app.pos.emptyDebts')"
         :empty-description="noEmptyDescription"

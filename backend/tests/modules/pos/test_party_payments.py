@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from tests.modules.pos.helpers import make_customer, make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, login
 
 
 async def _two_customer_debts(client, headers, tag: str):
@@ -123,7 +123,6 @@ async def _supplier_with_two_debts(client, headers, tag: str):
                 "sku": f"SPAY-P-{tag}",
                 "name": f"Pay Product {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "10.00",
             },
             headers=headers,

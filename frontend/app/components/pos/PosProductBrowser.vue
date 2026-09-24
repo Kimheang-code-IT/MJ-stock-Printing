@@ -14,7 +14,6 @@ const emit = defineEmits<{
   'update:search': [value: string]
   'update:categoryId': [value: string]
   add: [product: Record<string, unknown>]
-  searchEnter: []
 }>()
 
 const { t } = useI18n()
@@ -25,13 +24,12 @@ const { t } = useI18n()
     <div class="flex flex-col gap-2 sm:flex-row">
       <UInput
         :model-value="search"
-        icon="i-lucide-scan-barcode"
+        icon="i-lucide-search"
         size="lg"
         class="min-w-0 flex-1"
         :placeholder="t('app.pos.searchPlaceholder')"
         autofocus
         @update:model-value="emit('update:search', String($event ?? ''))"
-        @keydown.enter.prevent="emit('searchEnter')"
       />
     </div>
 

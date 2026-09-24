@@ -5,6 +5,14 @@ import { appTableCheckboxMeta } from '~/utils/table/theme'
 
 type Translate = (key: string) => string
 
+/** Inline icon button rendered in the row-actions cell (e.g. Print). */
+export type TableRowMetaAction = {
+  icon: string
+  label: string
+  onClick: () => void
+  disabled?: boolean
+}
+
 /** Leading checkbox column for list tables (header + row). */
 export function listTableSelectColumn<T extends Record<string, unknown>>(
   t: Translate,
@@ -35,6 +43,8 @@ export function listTableSelectColumn<T extends Record<string, unknown>>(
 export function listTableRowMetaColumn<T extends Record<string, unknown>>(options: {
   summary: string
   items: (row: T) => DropdownMenuItem[][]
+  /** Optional leading icon buttons rendered before the row menu (e.g. Print). */
+  actions?: (row: T) => TableRowMetaAction[]
   loadingId?: string
 }): TableColumn<T> {
   return {
@@ -47,6 +57,7 @@ export function listTableRowMetaColumn<T extends Record<string, unknown>>(option
     meta: { class: { td: 'w-12 text-end whitespace-nowrap', th: 'w-20' } },
     cell: ({ row }) => h(TableAppTableRowMeta, {
       items: options.items(row.original),
+      actions: options.actions?.(row.original) ?? [],
       loading: options.loadingId === String(row.original.id || ''),
     }),
   }

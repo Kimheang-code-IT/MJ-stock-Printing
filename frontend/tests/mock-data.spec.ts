@@ -3,7 +3,6 @@ import {
   deliveryNotes,
   productById,
   products,
-  productSalePrices,
   saleReturns,
   sales,
   stockIns,
@@ -26,21 +25,15 @@ const APPROVED_MOVEMENT_TYPES = [
  * list/column of the current features renders meaningful, internally
  * consistent rows in mock mode.
  */
-describe('mock seed: sale items carry UOM + price snapshots', () => {
-  it('every sale line has uom, factor and a consistent total', () => {
+describe('mock seed: sale items carry price snapshots', () => {
+  it('every sale line has a quantity, price and a consistent total', () => {
     for (const sale of sales) {
       for (const item of (sale.items as Array<Record<string, unknown>>)) {
-        expect(String(item.uom || item.uomSymbol || ''), `${sale.saleNo}`).not.toBe('')
-        expect(Number(item.factorToBase ?? 0)).toBeGreaterThan(0)
+        expect(Number(item.quantity), `${sale.saleNo}`).toBeGreaterThan(0)
+        expect(Number(item.price), `${sale.saleNo}`).toBeGreaterThan(0)
         expect(Number(item.total)).toBeCloseTo(Number(item.price) * Number(item.quantity), 2)
       }
     }
-  })
-
-  it('some lines sell in a pack UOM (multi-UOM POS data)', () => {
-    const packLines = sales.flatMap(sale => (sale.items as Array<Record<string, unknown>>))
-      .filter(item => Number(item.factorToBase) > 1)
-    expect(packLines.length).toBeGreaterThan(0)
   })
 })
 
@@ -49,8 +42,6 @@ describe('mock seed: purchases carry batch traceability', () => {
     for (const purchase of stockIns) {
       for (const item of (purchase.items as Array<Record<string, unknown>>)) {
         const product = productById(String(item.productId))
-        expect(String(item.uomSymbol || '')).toBe(String(product?.uomSymbol ?? ''))
-        expect(Number(item.factorToBase)).toBe(1)
         if (product?.trackBatch === true) {
           expect(String(item.batchNo ?? '')).toMatch(/^B-/)
           expect(String(item.expiryDate ?? '')).not.toBe('')
@@ -69,11 +60,10 @@ describe('mock seed: movement ledger is complete and consistent', () => {
     for (const type of types) expect(APPROVED_MOVEMENT_TYPES, type).toContain(type)
   })
 
-  it('every row has document/product/barcode/uom display fields', () => {
+  it('every row has document/product/user display fields', () => {
     for (const row of stockMovements) {
       expect(String(row.documentNo || row.reference || '')).not.toBe('')
-      expect(String(row.barcode ?? '')).not.toBe('')
-      expect(String(row.uomSymbol ?? row.unit ?? '')).not.toBe('')
+      expect(String(row.product ?? '')).not.toBe('')
       expect(String(row.user ?? '')).not.toBe('')
     }
   })
@@ -125,23 +115,6 @@ describe('mock seed: movement ledger is complete and consistent', () => {
 })
 
 describe('mock seed: master data coherence', () => {
-  it('every product has exactly one active sale-price version equal to its price', () => {
-    for (const product of products) {
-      const versions = productSalePrices.filter(row => String(row.productId) === String(product.id))
-      const active = versions.filter(row => row.isActive === true)
-      expect(active.length, String(product.id)).toBe(1)
-      expect(Number(active[0]!.salePrice)).toBe(Number(product.salePrice))
-    }
-  })
-
-  it('multi-UOM products keep exactly one default-sale row (the base UOM)', () => {
-    for (const product of products) {
-      const rows = (Array.isArray(product.uomConversions) ? product.uomConversions : []) as Array<Record<string, unknown>>
-      const defaults = rows.filter(row => row.isDefaultSale === true)
-      expect(defaults.length, String(product.id)).toBeLessThanOrEqual(1)
-    }
-  })
-
   it('delivery notes never deliver more than the sold quantity', () => {
     for (const note of deliveryNotes) {
       for (const line of (note.items as Array<Record<string, unknown>>)) {

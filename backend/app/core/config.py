@@ -19,14 +19,14 @@ class Settings(BaseSettings):
     debug: bool = True
     environment: str = "development"
 
-    database_url: str = "postgresql+asyncpg://stock:stock@localhost:5432/stock_pos"
+    database_url: str = "postgresql+asyncpg://mj:mj@localhost:5432/mj"
     db_echo: bool = False
     db_pool_size: int = 10
     db_max_overflow: int = 20
 
     redis_url: str = "redis://localhost:6379/0"
 
-    celery_broker_url: str = "amqp://stock_pos:stock_pos@localhost:5672/stock_pos"
+    celery_broker_url: str = "amqp://mj:mj@localhost:5672/mj"
     celery_result_backend: str = "redis://localhost:6379/2"
 
     jwt_secret_key: str = _DEV_JWT_SECRET
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     service_token_expire_minutes: int = 10
 
-    telegram_bot_client_id: str = "stock-pos-telegram"
+    telegram_bot_client_id: str = "mj-telegram-bot"
     telegram_bot_client_secret: str = _DEV_TELEGRAM_SECRET
     telegram_bot_token: str = ""
     telegram_bot_mode: str = "polling"
@@ -47,8 +47,8 @@ class Settings(BaseSettings):
     telegram_link_code_expire_minutes: int = 10
     # Public SPA origin, used to build the Telegram reset-password deep link.
     frontend_base_url: str = ""
-    # Hour (UTC) for the daily expiry alert sweep. Runs in this API process.
-    expiry_alert_scan_hour: int = 7
+    # Hour (UTC) for the daily Telegram summary. Runs in this API process.
+    daily_summary_scan_hour: int = 7
     scheduler_enabled: bool = True
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"

@@ -4,15 +4,15 @@ const token = process.env.DEBUG_TOKEN || ''
 
 test('debug detail image preview', async ({ page }) => {
   await page.addInitScript((tok: string) => {
-    sessionStorage.setItem('stockpos:auth:access-token', tok)
-    sessionStorage.setItem('stockpos:auth:refresh-token', tok)
+    sessionStorage.setItem('mj:auth:access-token', tok)
+    sessionStorage.setItem('mj:auth:refresh-token', tok)
     const user = {
       id: '78e2688f-2bf2-4dc1-b87c-9846d52c9857',
       email: 'admin@gmail.com',
       fullName: 'System Administrator',
       effectivePermissions: ['ALL_PAGES'],
     }
-    localStorage.setItem('stockpos:auth:user', JSON.stringify(user))
+    localStorage.setItem('mj:auth:user', JSON.stringify(user))
     document.cookie = `auth_user=${encodeURIComponent(JSON.stringify(user))}; path=/`
   }, token)
   await page.goto('/stock/products/5d14d4f9-185f-4d65-95d8-feddaf218bfb')

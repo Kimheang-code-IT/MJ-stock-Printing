@@ -1,4 +1,4 @@
-import type { PersonSummary } from '~/types/stock-pos/common'
+import type { PersonSummary } from '~/types/mj/common'
 import type { AppRecord } from '~/config/admin-seed'
 import type { ModuleConfig } from '~/config/modules'
 

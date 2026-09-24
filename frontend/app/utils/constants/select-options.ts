@@ -1,4 +1,4 @@
-import type { FieldOption } from '~/types/stock-pos/common'
+import type { FieldOption } from '~/types/mj/common'
 
 /** Shared select options for settings / forms with fixed choice lists. */
 

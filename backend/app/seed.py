@@ -26,13 +26,13 @@ async def seed() -> None:
     # configure all mappers (relationships resolve by class name).
     import app.modules.administration.models  # noqa: F401
     import app.modules.auth.models  # noqa: F401
+    import app.modules.backup.models  # noqa: F401
     import app.modules.brands.models  # noqa: F401
     import app.modules.categories.models  # noqa: F401
     import app.modules.customers.models  # noqa: F401
     import app.modules.pos.models  # noqa: F401
     import app.modules.stock.models  # noqa: F401
     import app.modules.suppliers.models  # noqa: F401
-    import app.modules.uoms.models  # noqa: F401
     import app.shared.audit.models  # noqa: F401
     import app.shared.documents.models  # noqa: F401
 
@@ -65,11 +65,6 @@ async def seed() -> None:
 
         # Default document sequences (INV, STI, STA, DMG, EXP, DN, CUS, SUP, CDP, SDP).
         await ensure_default_sequences(session)
-
-        # Default units of measure (spec section 2.1.3): PCS/BOX/CAN/BTL/KG/PACK.
-        from app.modules.uoms.service import ensure_default_uoms
-
-        await ensure_default_uoms(session)
 
         if not settings.is_production:
             await _seed_sample_master_data(session)
@@ -147,7 +142,6 @@ async def _seed_sample_master_data(session) -> None:
                 sale_item_id=item.id,
                 product_id=item.product_id,
                 product_name=item.product_name,
-                uom_symbol=item.uom_symbol,
                 qty_ordered=item.quantity,
                 qty_to_deliver=item.quantity - item.returned_quantity,
                 qty_delivered=0,

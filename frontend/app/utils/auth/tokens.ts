@@ -9,8 +9,8 @@
  * cookie/localStorage *profile* — only these dedicated keys.
  */
 
-const ACCESS_KEY = 'stockpos:auth:access-token'
-const REFRESH_KEY = 'stockpos:auth:refresh-token'
+const ACCESS_KEY = 'mj:auth:access-token'
+const REFRESH_KEY = 'mj:auth:refresh-token'
 
 let memoryAccess: string | null = null
 let memoryRefresh: string | null = null

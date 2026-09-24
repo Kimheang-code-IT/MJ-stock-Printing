@@ -153,6 +153,19 @@
     color: var(--ui-error);
   }
 
+  /* Number fields: drop the native up/down steppers for cleaner POS inputs. */
+  .app-no-spinner input[type="number"]::-webkit-outer-spin-button,
+  .app-no-spinner input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+  }
+
+  .app-no-spinner input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
   /* Live search: hide native browser clear — AppLiveSearch renders its own X. */
   .app-live-search [data-slot="base"]::-ms-clear,
   .app-live-search [data-slot="base"]::-ms-reveal {

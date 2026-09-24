@@ -1,4 +1,4 @@
-import type { ApiResponse } from '~/types/stock-pos/common'
+import type { ApiResponse } from '~/types/mj/common'
 
 export function unwrapApiData<T>(response: T | ApiResponse<T>): T {
   if (

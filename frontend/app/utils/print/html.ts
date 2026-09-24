@@ -56,10 +56,10 @@ export const PAPER_STYLES: Record<PrintPaperSize, {
     scalePx: 1,
     printableMm: 281,
     rowMm: 8.5,
-    tableHeadMm: 12,
-    headerMm: 35,
-    footerMm: 56,
-    safetyMm: 6,
+    tableHeadMm: 14,
+    headerMm: 90,
+    footerMm: 82,
+    safetyMm: 5,
   },
   // A5: 210mm page − 2 × 6mm margins. Independent budget from A4.
   A5: {
@@ -68,10 +68,10 @@ export const PAPER_STYLES: Record<PrintPaperSize, {
     scalePx: 0.8,
     printableMm: 198,
     rowMm: 6.8,
-    tableHeadMm: 10,
-    headerMm: 28,
-    footerMm: 44,
-    safetyMm: 5,
+    tableHeadMm: 11,
+    headerMm: 63,
+    footerMm: 58,
+    safetyMm: 4,
   },
 }
 
@@ -89,7 +89,7 @@ const BASE_PX = {
 /**
  * Page CSS for a paper size. Shop-form invoice: underlined title, larger
  * meta, gray header, empty filler rows sized to the page-1 budget left after
- * the fixed blocks, totals aligned to Price+Discount | Amount (no top border
+ * the fixed blocks, totals aligned to Price | Amount (no top border
  * on summary cells).
  */
 export function printPageCss(size: PrintPaperSize): string {
@@ -130,6 +130,79 @@ html, body {
   right: 0;
   font-size: ${px(BASE_PX.font - 2)};
   font-weight: 400;
+}
+/* Letterhead: equal side columns keep the company block truly centred even
+   when a logo is present only on the left, like the supplied invoice form.
+   A thin rule closes the header before the customer / invoice info block. */
+.inv-letterhead {
+  display: grid;
+  grid-template-columns: 24% 52% 24%;
+  align-items: center;
+  height: ${px(108)};
+  margin: ${px(8)} 0 ${px(12)};
+  padding-bottom: ${px(8)};
+  border-bottom: 1px solid #000;
+}
+.inv-logo {
+  width: 100%;
+  padding-right: ${px(10)};
+}
+.inv-logo img {
+  display: block;
+  width: 100%;
+  max-height: ${px(108)};
+  object-fit: contain;
+  object-position: left center;
+}
+.inv-company {
+  grid-column: 2;
+  text-align: center;
+}
+.inv-company-name {
+  font-size: ${px(BASE_PX.title + 6)};
+  font-weight: 700;
+  line-height: 1.25;
+}
+.inv-company-line {
+  font-size: ${px(BASE_PX.font - 1)};
+  line-height: 1.35;
+}
+/* Customer block (left) + invoice meta (right). */
+.inv-info {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 ${px(2)} ${px(14)};
+}
+.inv-info-left {
+  flex: 1 1 57%;
+  font-size: ${px(BASE_PX.font)};
+  line-height: 1.5;
+}
+.inv-info-right {
+  flex: 0 1 41%;
+  text-align: left;
+  font-size: ${px(BASE_PX.font)};
+  line-height: 1.5;
+}
+.inv-info p { margin: 0 0 2px; }
+/* Field names read as the underlined captions on the supplied invoice form. */
+.inv-label { font-weight: 400; text-decoration: underline; text-underline-offset: 2px; }
+.inv-info strong { font-weight: 700; }
+/* Invoice number is the one highlighted value on the form (red). */
+.inv-no { color: #d81e26; }
+.inv-title {
+  font-size: ${px(BASE_PX.title - 1)};
+  font-weight: 700;
+  margin: 0 0 ${px(7)} !important;
+  text-align: center;
+}
+.inv-title span { display: block; }
+.inv-title span:last-child {
+  margin-top: ${px(1)};
+  font-size: ${px(BASE_PX.title - 3)};
+  font-weight: 400;
+  letter-spacing: 0.02em;
 }
 .title {
   text-align: center;
@@ -181,34 +254,45 @@ th {
   text-align: center;
   line-height: 1.2;
 }
-th span {
-  display: block;
-  font-weight: 700;
-  font-size: 0.92em;
-}
 th.num { text-align: center; }
 td.num { text-align: right; }
-/* Unit / Qty / Price / Discount read centred on the product lines. */
+/* Unit / Qty / Price read centred on the product lines. */
 td.center, th.center { text-align: center; }
-td.product { text-align: left; word-wrap: break-word; overflow-wrap: anywhere; }
+td.product { text-align: center; font-weight: 600; word-wrap: break-word; overflow-wrap: anywhere; }
 /* Product lines: slightly taller + bigger for easier reading, still compact
    enough that the page-1 budget holds many rows. */
 table.lines th, table.lines td {
   padding: ${px(BASE_PX.padY + 3)} ${px(BASE_PX.padX)};
   font-size: ${px(BASE_PX.font + 1)};
 }
+table.lines thead th {
+  padding: ${px(2)} ${px(BASE_PX.padX)};
+  line-height: 1.15;
+}
+table.lines thead .head-en th {
+  font-size: ${px(BASE_PX.font - 2)};
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+}
+table.lines tbody td {
+  border-top: 0;
+  border-bottom: 0;
+  vertical-align: top;
+}
+table.lines tbody tr:first-child td { padding-top: ${px(5)}; }
 tr.empty.stretch td {
   padding: 0;
   vertical-align: top;
 }
 .num { white-space: nowrap; }
-.col-no { width: 5%; }
-.col-product { width: 28%; }
-.col-unit { width: 9%; }
-.col-qty { width: 7%; }
-.col-price { width: 15%; }
-.col-discount { width: 18%; }
-.col-amount { width: 18%; }
+.col-no { width: 4.5%; }
+.col-product { width: 46.5%; }
+.col-height { width: 6.5%; }
+.col-width { width: 6.5%; }
+.col-area { width: 6.5%; }
+.col-qty { width: 6.5%; }
+.col-price { width: 8%; }
+.col-amount { width: 15%; }
 /* Totals + signatures are one atomic block: never split, never orphaned
    onto an extra page. Short sales keep them on page 1 (filler rows reserve
    the space); long sales push the whole block to the last page. */
@@ -217,48 +301,47 @@ tr.empty.stretch td {
   page-break-inside: avoid;
 }
 .totals { margin: 0; width: 100%; }
-table.summary {
-  width: 100%;
+/* Reference totals box: right-aligned label/amount grid under the lines. */
+table.inv-summary {
+  width: 25%;
   table-layout: fixed;
   border-collapse: collapse;
-  border: none;
-  margin-top: 0;
 }
-table.summary td {
+.inv-footer-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0;
+}
+.inv-thanks {
+  flex: 1;
+  padding: ${px(18)} ${px(26)} 0;
+  font-size: ${px(BASE_PX.font)};
+  line-height: 1.55;
+}
+.inv-thanks p:first-child { font-weight: 700; }
+table.inv-summary td {
   padding: ${pad};
   vertical-align: middle;
-  border: none;
+  border: 0.5px solid #000;
 }
-table.summary td.spacer {
-  border: none;
-  padding: 0;
+table.inv-summary td.label { text-align: left; font-weight: 400; }
+table.inv-summary td.num { text-align: right; white-space: nowrap; }
+table.inv-summary tr.grand td.label {
+  font-weight: 700;
+  border-top: 0.5px solid #000;
 }
-table.summary td.label {
-  text-align: left;
-  font-weight: 400;
-  border-top: none;
-  border-left: 0.5px solid #000;
-  border-right: 0.5px solid #000;
-  border-bottom: 0.5px solid #000;
-}
-table.summary td.num {
-  text-align: right;
-  white-space: nowrap;
-  border-top: none;
-  border-left: 0.5px solid #000;
-  border-right: 0.5px solid #000;
-  border-bottom: 0.5px solid #000;
-}
-table.summary tr.strong td.label,
-table.summary tr.strong td.num { font-weight: 700; }
+table.inv-summary tr.grand td.label span { margin-right: 8px; }
+table.inv-summary tr.grand td.label strong { float: right; }
 .signs {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: ${px(BASE_PX.signsGap)};
-  margin-top: ${px(BASE_PX.signsTop)};
+  width: 55%;
+  margin-top: ${px(BASE_PX.signsTop + 66)};
   text-align: center;
 }
-.signs .sign { flex: 1; max-width: 42%; }
+.signs .sign { min-width: 0; }
 .signs .line {
   border-top: 0.5px solid #000;
   margin: 28px auto 6px;

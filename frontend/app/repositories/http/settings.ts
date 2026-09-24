@@ -1,6 +1,6 @@
-import type { AppConfigRepository, AppInfoRepository, ClearTransactionsResult, ResetAllDataResult } from '~/repositories/contracts/settings'
-import type { ApiResponse } from '~/types/stock-pos/common'
-import type { AppConfig, AppInfo, ConnectionStatus } from '~/types/stock-pos/settings'
+import type { AppConfigRepository, AppInfoRepository, BackupRunResult, ClearTransactionsResult, ResetAllDataResult } from '~/repositories/contracts/settings'
+import type { ApiResponse } from '~/types/mj/common'
+import type { AppConfig, AppInfo, ConnectionStatus } from '~/types/mj/settings'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 import { applyAdminSettingsGroups, toAdminSettingsValues } from './admin-settings'
 import { unwrapApiData } from './response'
@@ -60,6 +60,9 @@ export function createHttpAppConfigRepository(): AppConfigRepository {
     ),
     clearTransactions: async () => unwrapApiData(
       await api.post<ClearTransactionsResult | ApiResponse<ClearTransactionsResult>>(ApiEndpoints.CLEAR_TRANSACTIONS, {}),
+    ),
+    runBackupNow: async () => unwrapApiData(
+      await api.post<BackupRunResult | ApiResponse<BackupRunResult>>(ApiEndpoints.BACKUP_RUN, {}),
     ),
     testEmailConnection: () => postResult(ApiEndpoints.APP_CONFIG_TEST_EMAIL),
     sendTestEmail: to => postResult(ApiEndpoints.APP_CONFIG_SEND_TEST_EMAIL, { to }),

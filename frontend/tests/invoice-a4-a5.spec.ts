@@ -43,7 +43,7 @@ describe('invoice A4/A5 sizes (one component, two paper variants)', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 3.15 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -51,25 +51,46 @@ describe('invoice A4/A5 sizes (one component, two paper variants)', () => {
     }
     for (const size of ['A4', 'A5'] as const) {
       const html = buildSaleInvoiceHtml(input, size)
-      expect(html).toContain('វិក្កយបត្រ / INVOICE')
-      expect(html).toContain('លេខ Invoice')
-      expect(html).toContain('កាលបរិច្ឆេទ Date')
-      expect(html).toContain('អតិថិជន Customer')
-      expect(html).toContain('បេឡា Cashier')
-      expect(html).toContain('<span>N°</span>')
-      expect(html).toContain('<span>Product</span>')
-      expect(html).toContain('<span>Unit</span>')
-      expect(html).toContain('<span>Qty</span>')
-      expect(html).toContain('<span>Price</span>')
-      expect(html).toContain('<span>Discount</span>')
-      expect(html).toContain('<span>Amount</span>')
-      expect(html).toContain('ទឹកប្រាក់សរុប / Total Amount')
-      expect(html).toContain('ខ្វះសរុប')
-      expect(html).toContain('អ្នកទិញ / Buyer')
+      expect(html).toContain('<img src="/logo.png"')
+      expect(html).toContain('<span>វិក្កយបត្រ</span><span>INVOICE</span>')
+      expect(html).toContain('លេខវិក្កយបត្រ / Invoice No')
+      expect(html).toContain('កាលបរិច្ឆេទ / Date')
       expect(html).toContain('អ្នកលក់ / Seller')
+      expect(html).toContain('<strong>admin</strong>')
+      expect(html).toContain('ឈ្មោះសហគ្រាស ឬអតិថិជន / Enterprise name/Customer')
+      expect(html).toContain('លុយ ជាអក្សរ / Amount in words')
+      expect(html).toContain('<tr class="head-en">')
+      expect(html).toContain('<th class="center">No</th>')
+      expect(html).toContain('<th>Description of Goods or Services</th>')
+      expect(html).toContain('<th class="num center">Qty</th>')
+      expect(html).toContain('<th class="num center">Price/m²</th>')
+      expect(html).toContain('<th class="num">Amount</th>')
+      expect(html).toContain('សរុប / Total (USD)')
+      expect(html).toContain('សមតុល្យ / Balance')
+      expect(html).toContain("Customer&#39;s Signature &amp; Name")
+      expect(html).toContain("Seller&#39;s Signature &amp; Name")
       // A5 shrinks spacing/metrics — not the layout structure.
       expect((html.match(/<tr class="empty stretch"/g) || []).length).toBeGreaterThan(0)
     }
+  })
+
+  it('uses a configured logo in place of the MJ Printing default', () => {
+    const html = buildSaleInvoiceHtml({
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-LOGO',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{ name: 'Banner', quantity: 1, unitPrice: 10 }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 10,
+      outstandingAmount: 0,
+      logoUrl: 'https://cdn.example.com/custom-logo.png',
+    })
+    expect(html).toContain('<img src="https://cdn.example.com/custom-logo.png"')
+    expect(html).not.toContain('<img src="/logo.png"')
   })
 
   it('keeps A5 fillers below A4 so signatures stay on page 1', () => {
@@ -80,7 +101,7 @@ describe('invoice A4/A5 sizes (one component, two paper variants)', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 3.15 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -114,13 +135,33 @@ describe('USD/KHR invoice printing (stored currency + rate)', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 254.75, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 254.75 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
       outstandingAmount: 254.75,
     }))
     expect(html).toContain('$254.75')
+  })
+
+  it('includes delivery in the printed grand total and shows prior debt', () => {
+    const html = normalize(buildSaleInvoiceHtml({
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000012A',
+      dateLabel: '10/09/26 10:00',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{ name: 'Banner', quantity: 2, unitPrice: 10 }],
+      deliveryPrice: 1.5,
+      previousDebtAmount: 5,
+      depositAmount: 10,
+      outstandingAmount: 16.5,
+    }))
+    expect(html).toContain('សរុបរង / Subtotal')
+    expect(html).toContain('ថ្លៃដឹកជញ្ជូន / Delivery')
+    expect(html).toContain('សរុប / Total (USD)</td><td class="num">$21.50</td>')
+    expect(html).toContain('ខ្វះមុន / Previous debt')
   })
 
   it('prints KHR amounts as 1,019,000៛ (whole riel, symbol after)', () => {
@@ -131,7 +172,7 @@ describe('USD/KHR invoice printing (stored currency + rate)', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'KHR',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 1019000, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 1019000 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -148,7 +189,7 @@ describe('USD/KHR invoice printing (stored currency + rate)', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 6.3, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 6.3 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -168,7 +209,7 @@ describe('USD/KHR invoice printing (stored currency + rate)', () => {
       cashier: 'Sokha',
       currency: 'KHR',
       exchangeRate: 4000,
-      items: [{ name: 'Glove', uom: 'PCS', quantity: 2, price: 8200, discountPercent: 0 }],
+      items: [{ name: 'Glove', quantity: 2, price: 8200 }],
       paidAmount: 8200,
       remaining: 8200,
     }, 'Demo Shop')
@@ -193,9 +234,8 @@ describe('USD/KHR invoice printing (stored currency + rate)', () => {
       note: '',
       currency: 'KHR',
       exchangeRate: 4100,
-      items: [{ name: 'Glove', quantity: 1, uom: 'PCS', unitPrice: 4100, discount: 0, total: 4100 }],
+      items: [{ name: 'Glove', quantity: 1, unitPrice: 4100, total: 4100 }],
       subtotal: 4100,
-      discount: 0,
       deliveryPrice: 0,
       deposit: 4100,
       total: 4100,
@@ -224,10 +264,8 @@ describe('smart one-page invoice layout (A4/A5)', () => {
     currency: 'USD',
     lines: Array.from({ length: count }, (_, index) => ({
       name: `Product ${index + 1}`,
-      uom: 'PCS',
       quantity: 1,
       unitPrice: 3.15,
-      discountPercent: 0,
     })),
     deliveryPrice: 0,
     previousDebtAmount: 0,
@@ -254,8 +292,10 @@ describe('smart one-page invoice layout (A4/A5)', () => {
   })
 
   it('moderate counts are decided per paper size (A4 fits, A5 overflows)', () => {
-    expect(planInvoiceLayout(18, 'A4').pages).toBe(1)
-    expect(planInvoiceLayout(18, 'A5').multipage).toBe(true)
+    const a4Capacity = planInvoiceLayout(0, 'A4').firstPageCapacity
+    const a5Capacity = planInvoiceLayout(0, 'A5').firstPageCapacity
+    expect(planInvoiceLayout(a4Capacity, 'A4').pages).toBe(1)
+    expect(planInvoiceLayout(a5Capacity + 1, 'A5').multipage).toBe(true)
     expect(planInvoiceLayout(1, 'A5').pages).toBe(1)
     // Capacity is paper-specific — never one shared filler count.
     expect(planInvoiceLayout(0, 'A4').firstPageCapacity)
@@ -265,16 +305,16 @@ describe('smart one-page invoice layout (A4/A5)', () => {
   it('many products → explicit two/three-page sheets with every item preserved', () => {
     const a4 = planInvoiceLayout(60, 'A4')
     expect(a4.multipage).toBe(true)
-    expect(a4.pages).toBe(3)
+    expect(a4.pages).toBeGreaterThanOrEqual(3)
     expect(a4.fillerRows).toBe(0)
     expect(a4.pageRows.reduce((sum, count) => sum + count, 0)).toBe(60)
     expect(a4.pageRows.every((count, index) => count <= (
       index === a4.pages - 1 ? a4.firstPageCapacity : a4.continuationPageCapacity
     ))).toBe(true)
     const a4Html = buildSaleInvoiceHtml(invoiceInput(60), 'A4')
-    expect((a4Html.match(/class="invoice-page/g) || []).length).toBe(3)
-    expect((a4Html.match(/វិក្កយបត្រ \/ INVOICE/g) || []).length).toBe(3)
-    expect(a4Html).toContain('Page 3 / 3')
+    expect((a4Html.match(/class="invoice-page/g) || []).length).toBe(a4.pages)
+    expect((a4Html.match(/<p class="inv-title">/g) || []).length).toBe(a4.pages)
+    expect(a4Html).toContain(`Page ${a4.pages} / ${a4.pages}`)
     expect(a4Html).toContain('Product 60')
     expect((a4Html.match(/class="doc-footer"/g) || []).length).toBe(1)
 
@@ -308,10 +348,10 @@ describe('smart one-page invoice layout (A4/A5)', () => {
     const footerStart = html.indexOf('<div class="doc-footer">')
     expect(footerStart).toBeGreaterThan(html.lastIndexOf('Product 3'))
     const footer = html.slice(footerStart)
-    expect(footer).toContain('ទឹកប្រាក់សរុប / Total Amount')
-    expect(footer).toContain('ខ្វះសរុប')
-    expect(footer).toContain('អ្នកទិញ / Buyer')
-    expect(footer).toContain('អ្នកលក់ / Seller')
+    expect(footer).toContain('សរុប / Total (USD)')
+    expect(footer).toContain('សមតុល្យ / Balance')
+    expect(footer).toContain("Customer&#39;s Signature &amp; Name")
+    expect(footer).toContain("Seller&#39;s Signature &amp; Name")
   })
 
   it('footer block cannot split across pages and rows stay vertically centered', () => {

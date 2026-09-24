@@ -2,12 +2,10 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-import pytest
-
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import admin_headers
 
 
-async def _make_product(client, headers, *, sku: str, name: str, expiry_tracking: bool = False, fifo: bool = False):
+async def _make_product(client, headers, *, sku: str, name: str):
     category = (
         await client.post(
             "/api/v1/categories", json={"code": f"C-{sku}", "name": f"Cat {sku}"}, headers=headers
@@ -20,10 +18,7 @@ async def _make_product(client, headers, *, sku: str, name: str, expiry_tracking
                 "sku": sku,
                 "name": name,
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "10.00",
-                "expiry_tracking": expiry_tracking,
-                "fifo": fifo,
             },
             headers=headers,
         )
@@ -134,8 +129,8 @@ async def test_stock_in_supplier_debt_partial_and_full(client):
     assert full.json()["data"]["debt_created"] is False
 
 
-async def test_stock_in_tax_discount_total_and_debt(client):
-    """Purchase footer adjustments: total = subtotal − discount + tax; the
+async def test_stock_in_tax_total_and_debt(client):
+    """Purchase footer adjustment: total = subtotal + tax; the
     supplier debt (and payment cap) use the adjusted total."""
     headers = await admin_headers(client)
     supplier = (
@@ -143,44 +138,29 @@ async def test_stock_in_tax_discount_total_and_debt(client):
     ).json()["data"]
     product = await _make_product(client, headers, sku="SI-TAX", name="Tax Widget")
 
-    # Subtotal 10 × 2.00 = 20.00 → − 5.00 discount + 4.00 tax = 19.00 total.
+    # Subtotal 10 × 2.00 = 20.00 → + 4.00 tax = 24.00 total.
     response = await client.post(
         "/api/v1/stock/in",
         json={
             "supplier_id": supplier["id"],
-            "discount_amount": "5.00",
             "tax_amount": "4.00",
-            "paid_amount": "9.00",
+            "paid_amount": "14.00",
             "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
         },
         headers=headers,
     )
     assert response.status_code == 201, response.text
     data = response.json()["data"]
-    assert data["discount_amount"] == "5.00"
     assert data["tax_amount"] == "4.00"
-    assert data["total_amount"] == "19.00"
-    assert data["paid_amount"] == "9.00"
+    assert data["total_amount"] == "24.00"
+    assert data["paid_amount"] == "14.00"
     assert data["debt_created"] is True
 
     debts = await client.get(f"/api/v1/suppliers/{supplier['id']}/debts", headers=headers)
     assert debts.status_code == 200
     debt = debts.json()["data"][0]
-    assert debt["original_amount"] == "19.00"
+    assert debt["original_amount"] == "24.00"
     assert debt["remaining_amount"] == "10.00"
-
-    # Discount above the subtotal is rejected.
-    over = await client.post(
-        "/api/v1/stock/in",
-        json={
-            "discount_amount": "21.00",
-            "paid_amount": "0",
-            "items": [{"product_id": product["id"], "quantity": "1", "unit_cost": "2.00"}],
-        },
-        headers=headers,
-    )
-    assert over.status_code == 422
-    assert over.json()["detail"]["code"] == "VALIDATION_ERROR"
 
     # Negative amounts are rejected by the schema.
     negative = await client.post(
@@ -279,23 +259,19 @@ async def test_adjustment_in_out_and_audit(client, db_session):
     assert missing_reason.status_code == 422
 
 
-async def test_damage_and_expire_rules(client, db_session):
+async def test_damage_rules(client, db_session):
     from sqlalchemy import select
 
     from app.shared.audit.models import AuditLog
 
     headers = await admin_headers(client)
     product = await _make_product(client, headers, sku="DMG-1", name="Damage Widget")
-    tracked = await _make_product(client, headers, sku="EXP-1", name="Expiry Widget", expiry_tracking=True)
 
     await client.post(
         "/api/v1/stock/in",
         json={
-            "paid_amount": "26.00",
-            "items": [
-                {"product_id": product["id"], "quantity": "10", "unit_cost": "1.00"},
-                {"product_id": tracked["id"], "quantity": "8", "unit_cost": "2.00", "batch_no": "B1"},
-            ],
+            "paid_amount": "10.00",
+            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "1.00"}],
         },
         headers=headers,
     )
@@ -321,39 +297,6 @@ async def test_damage_and_expire_rules(client, db_session):
         select(AuditLog).where(AuditLog.action == "stock_damage").order_by(AuditLog.created_at.desc())
     )
     assert audit is not None
-
-    expired = await client.post(
-        "/api/v1/stock/expire",
-        json={
-            "items": [
-                {
-                    "product_id": tracked["id"],
-                    "quantity": "3",
-                    "batch_no": "B1",
-                    "expiry_date": "2026-01-01",
-                    "note": "Expired batch",
-                }
-            ]
-        },
-        headers=headers,
-    )
-    assert expired.status_code == 201, expired.text
-    assert expired.json()["data"]["document_no"].startswith("EXP-")
-    balance = await _balance(client, headers, tracked["id"])
-    assert balance["quantity"] == Decimal("5.0000")
-
-    audit = await db_session.scalar(
-        select(AuditLog).where(AuditLog.action == "stock_expire").order_by(AuditLog.created_at.desc())
-    )
-    assert audit is not None
-
-    # Expiry on a product without expiry tracking is rejected.
-    no_track = await client.post(
-        "/api/v1/stock/expire",
-        json={"items": [{"product_id": product["id"], "quantity": "1"}]},
-        headers=headers,
-    )
-    assert no_track.status_code == 422
 
     # Damage without a reason is rejected.
     no_reason = await client.post(
@@ -383,7 +326,7 @@ async def test_oversell_rejected_unless_setting_allows(client):
     assert "Insufficient stock" in rejected.json()["detail"]["message"]
 
     # Enable allow_negative_stock and retry.
-    settings = await client.get("/api/v1/admin/settings", headers=headers)
+    await client.get("/api/v1/admin/settings", headers=headers)
     patched = await client.patch(
         "/api/v1/admin/settings",
         json={"values": {"pos": {"allow_negative_stock": True}}},
@@ -499,213 +442,42 @@ async def test_stock_in_khr_currency_debt_and_out(client):
     assert Decimal(debt["remaining_amount"]) == Decimal("590000.00")
 
 
-async def _fifo_cost_of_last_outbound(client, headers, product_id, movement_type: str) -> Decimal:
-    movements = await client.get(
-        f"/api/v1/stock/movements?product_id={product_id}&movement_type={movement_type}",
-        headers=headers,
-    )
-    assert movements.status_code == 200
-    data = movements.json()["data"]
-    assert data, "expected at least one outbound movement"
-    return Decimal(data[0]["unit_cost"])
-
-
-@pytest.mark.asyncio
-async def test_fifo_costing_uses_oldest_lots_when_enabled(client):
-    """product.fifo=True → outbound movements cost FIFO; unchecked → average."""
+async def test_stock_in_sold_by_area_uses_height_times_width(client):
+    """Height × Width (m) becomes the received m² quantity and is persisted."""
     headers = await admin_headers(client)
-    fifo_product = await _make_product(client, headers, sku="FIFO-1", name="FIFO Widget", fifo=True)
-    avg_product = await _make_product(client, headers, sku="FIFO-2", name="Average Widget")
-    assert fifo_product["fifo"] is True
-    assert avg_product["fifo"] is False
-
-    for product in (fifo_product, avg_product):
-        await client.post(
-            "/api/v1/stock/in",
-            json={
-                "paid_amount": "20.00",
-                "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
-            },
-            headers=headers,
-        )
-        await client.post(
-            "/api/v1/stock/in",
-            json={
-                "paid_amount": "40.00",
-                "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "4.00"}],
-            },
-            headers=headers,
-        )
-
-    # Both products now hold 20 units at a 3.00 weighted average cost.
-    balance = await _balance(client, headers, fifo_product["id"])
-    assert balance["average_cost"] == Decimal("3.00")
-
-    # Damage 6 units from each product.
-    for product in (fifo_product, avg_product):
-        damaged = await client.post(
-            "/api/v1/stock/damage",
-            json={"items": [{"product_id": product["id"], "quantity": "6", "reason": "Test"}]},
-            headers=headers,
-        )
-        assert damaged.status_code == 201, damaged.text
-
-    # FIFO product: 6 units costed from the oldest lot @ 2.00.
-    fifo_cost = await _fifo_cost_of_last_outbound(client, headers, fifo_product["id"], "DAMAGE")
-    assert fifo_cost == Decimal("2.00")
-
-    # Unchecked (normal) product: weighted average cost 3.00.
-    avg_cost = await _fifo_cost_of_last_outbound(client, headers, avg_product["id"], "DAMAGE")
-    assert avg_cost == Decimal("3.00")
-
-    # Second FIFO outbound spans two lots: 4 @ 2.00 + 2 @ 4.00 → blended 2.67.
-    damaged = await client.post(
-        "/api/v1/stock/damage",
-        json={"items": [{"product_id": fifo_product["id"], "quantity": "6", "reason": "Test 2"}]},
-        headers=headers,
-    )
-    assert damaged.status_code == 201, damaged.text
-    blended = await _fifo_cost_of_last_outbound(client, headers, fifo_product["id"], "DAMAGE")
-    assert blended == Decimal("2.67")
-
-    # FIFO only changes the outbound cost — the average cost is untouched.
-    balance = await _balance(client, headers, fifo_product["id"])
-    assert balance["average_cost"] == Decimal("3.00")
-
-
-@pytest.mark.asyncio
-async def test_fifo_costing_on_pos_sale(client):
-    headers = await admin_headers(client)
-    product = await _make_product(client, headers, sku="FIFO-3", name="FIFO Sale Widget", fifo=True)
-    await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": "20.00",
-            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00"}],
-        },
-        headers=headers,
-    )
-    await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": "40.00",
-            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "4.00"}],
-        },
-        headers=headers,
-    )
-
-    sale = await client.post(
-        "/api/v1/pos/sales",
-        json={
-            "payment_method": "CASH",
-            "amount_received": "1000.00",
-            "items": [{"product_id": product["id"], "quantity": "5"}],
-        },
-        headers=headers,
-    )
-    assert sale.status_code == 201, sale.text
-    sale_data = sale.json()["data"]
-    assert Decimal(sale_data["items"][0]["unit_cost"]) == Decimal("2.00"), (
-        "FIFO product sale must be costed from the oldest lot"
-    )
-
-
-async def test_stock_in_existing_batch_restocks_same_lot(client, db_session):
-    """Restocking a batch_no the product already has must NOT create a second
-    lot: quantity/cost accumulate into the SAME batch (identity preserved)."""
-    from sqlalchemy import select, func
-
-    from app.modules.stock.models import BatchStockBalance, StockMovement
-
-    headers = await admin_headers(client)
-    product = await _make_product(client, headers, sku="BRE-1", name="Restock Widget", expiry_tracking=True)
-
-    first = await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": "20.00",
-            "items": [{"product_id": product["id"], "quantity": "10", "unit_cost": "2.00",
-                        "batch_no": "LOT-9", "expiry_date": "2030-06-30"}],
-        },
-        headers=headers,
-    )
-    assert first.status_code == 201, first.text
-
-    second = await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": "15.00",
-            "items": [{"product_id": product["id"], "quantity": "5", "unit_cost": "3.00",
-                        "batch_no": "LOT-9", "expiry_date": "2030-06-30"}],
-        },
-        headers=headers,
-    )
-    assert second.status_code == 201, second.text
-
-    lots = (await db_session.execute(
-        select(BatchStockBalance).where(BatchStockBalance.product_id == product["id"])
-    )).scalars().all()
-    assert len(lots) == 1  # no duplicate batch row for the same product+batch_no
-    lot = lots[0]
-    assert lot.batch_no == "LOT-9"
-    assert lot.received_quantity == Decimal("15.0000")
-    assert lot.remaining_quantity == Decimal("15.0000")
-    assert lot.unit_cost == Decimal("3.000000")  # latest purchase cost
-    assert str(lot.expiry_date) == "2030-06-30"
-
-    movements = (await db_session.execute(
-        select(StockMovement)
-        .where(StockMovement.product_id == product["id"], StockMovement.batch_no == "LOT-9")
-    )).scalars().all()
-    assert len(movements) == 2  # both stock movements reference the batch
-    assert all(m.quantity_delta > 0 for m in movements)
-    total_batches = (await db_session.execute(
-        select(func.count()).select_from(BatchStockBalance)
-        .where(BatchStockBalance.product_id == product["id"])
-    )).scalar_one()
-    assert total_batches == 1
-
-
-async def test_stock_in_new_batch_created_only_at_confirmation(client, db_session):
-    """A fresh batch_no lot is created BY the confirmed Stock In (never
-    before), with its expiry date stamped and the movement linked to it."""
-    from sqlalchemy import select
-
-    from app.modules.stock.models import BatchStockBalance, StockMovement
-
-    headers = await admin_headers(client)
-    product = await _make_product(client, headers, sku="BNEW-1", name="New Lot Widget", expiry_tracking=True)
-
-    # No batch exists before the purchase is submitted.
-    before = (await db_session.execute(
-        select(BatchStockBalance).where(BatchStockBalance.product_id == product["id"])
-    )).scalars().all()
-    assert len(before) == 0
+    product = await _make_product(client, headers, sku="SI-AREA", name="Area Widget")
 
     response = await client.post(
         "/api/v1/stock/in",
         json={
-            "paid_amount": "30.00",
-            "items": [{"product_id": product["id"], "quantity": "12", "unit_cost": "2.50",
-                        "batch_no": "NEW-LOT-1", "expiry_date": "2031-01-15"}],
+            "paid_amount": "60.00",
+            "items": [{"product_id": product["id"], "quantity": "1", "unit_cost": "10.00", "height": "2", "width": "3"}],
         },
         headers=headers,
     )
     assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    item = data["items"][0]
+    # quantity was overridden by the area: 2 × 3 = 6 m² × $10.00 = $60.00.
+    assert Decimal(item["quantity"]) == Decimal("6.0000")
+    assert Decimal(item["height"]) == Decimal("2.0000")
+    assert Decimal(item["width"]) == Decimal("3.0000")
+    assert Decimal(item["area_m2"]) == Decimal("6.0000")
+    assert Decimal(data["total_amount"]) == Decimal("60.00")
 
-    lots = (await db_session.execute(
-        select(BatchStockBalance).where(BatchStockBalance.product_id == product["id"])
-    )).scalars().all()
-    assert len(lots) == 1
-    lot = lots[0]
-    assert lot.batch_no == "NEW-LOT-1"
-    assert lot.received_quantity == Decimal("12.0000")
-    assert lot.remaining_quantity == Decimal("12.0000")
-    assert str(lot.expiry_date) == "2031-01-15"
-    assert lot.status == "ACTIVE"
+    balance = await _balance(client, headers, product["id"])
+    assert balance["quantity"] == Decimal("6.0000")
 
-    movement = (await db_session.execute(
-        select(StockMovement).where(StockMovement.product_id == product["id"])
-    )).scalars().one()
-    assert movement.batch_no == "NEW-LOT-1"
-    assert movement.batch_id == lot.id
+    # Height without width is rejected.
+    invalid = await client.post(
+        "/api/v1/stock/in",
+        json={
+            "paid_amount": "10.00",
+            "items": [{"product_id": product["id"], "quantity": "1", "unit_cost": "10.00", "height": "2"}],
+        },
+        headers=headers,
+    )
+    assert invalid.status_code == 422
+
+
+

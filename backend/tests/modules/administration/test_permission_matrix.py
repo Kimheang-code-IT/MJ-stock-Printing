@@ -20,7 +20,6 @@ STOCK_STAFF_PERMISSIONS = [
     "stock.in",
     "stock.adjust",
     "stock.damage",
-    "stock.expire",
     "report.purchase",
 ]
 ACCOUNTANT_PERMISSIONS = [
@@ -71,7 +70,7 @@ async def test_role_create_edit_remove_and_unknown(client):
     modules = {entry["module"] for entry in catalog.json()["data"]}
     # The page-oriented matrix maps onto exactly these backend modules.
     assert {
-        "dashboard", "stock", "product", "pos", "delivery", "category", "uom",
+        "dashboard", "stock", "product", "pos", "delivery", "category",
         "brand", "supplier", "customer", "report", "expense", "user", "role",
         "sequence", "audit", "settings",
     } <= modules

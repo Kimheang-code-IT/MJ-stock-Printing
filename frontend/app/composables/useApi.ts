@@ -2,7 +2,7 @@ import { useAuthStore } from '~/stores/auth'
 import { ref } from 'vue'
 import type { TableQueryParams } from '~/types/api'
 import { compactQuery } from '~/utils/api/query'
-import { markApiErrorHandled, normalizeApiError, isRequestAborted } from '~/utils/api/errors'
+import { hasInlineFieldErrorConsumer, markApiErrorHandled, normalizeApiError, isRequestAborted } from '~/utils/api/errors'
 import { getAccessToken, getRefreshToken, setAccessToken, setRefreshToken } from '~/utils/auth/tokens'
 import { createAuthRefresher } from '~/utils/api/auth-refresher'
 import { isAutoApiBase, isSameOriginApiBase, resolveApiBase } from '~/utils/api/base-url'
@@ -199,11 +199,16 @@ export function useApi() {
 
             if (!options.suppressErrorToast) {
               const normalized = normalizeApiError(response._data, response.status)
-              toast.add({
-                title: t('api.errorTitle', { status: response.status }),
-                description: normalized.message || t('api.somethingWentWrong'),
-                color: 'error'
-              })
+              // Validation errors carry per-field details; when an inline-error
+              // form is mounted it shows them on the offending fields, so skip
+              // the generic toast. Unwired flows keep the toast.
+              if (Object.keys(normalized.fieldErrors).length === 0 || !hasInlineFieldErrorConsumer()) {
+                toast.add({
+                  title: t('api.errorTitle', { status: response.status }),
+                  description: normalized.message || t('api.somethingWentWrong'),
+                  color: 'error'
+                })
+              }
             }
           }
         })

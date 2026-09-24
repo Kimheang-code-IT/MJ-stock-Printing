@@ -3,18 +3,12 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-
-if TYPE_CHECKING:
-    # Resolves the string relation below for type checkers/linters; SQLAlchemy
-    # resolves it through the declarative class registry at runtime.
-    from app.modules.stock.models import BatchStockBalance
 
 
 class Sale(Base):
@@ -31,7 +25,6 @@ class Sale(Base):
     )
     sale_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    discount_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
     grand_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     # Delivery fee included in grand_total (no second stock-out, spec 2.1.2).
     delivery_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
@@ -69,20 +62,16 @@ class SaleItem(Base):
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    # Barcode snapshot (operational identifier); sku is legacy-optional.
+    # Optional internal product code snapshot.
     sku: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    barcode: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    # UOM snapshot at transaction time (display on POS/invoice; spec section 2.1.3).
-    uom_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    uom_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    uom_symbol: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    # Stock is always mutated in the base UOM: base_qty = quantity × factor_to_base.
-    factor_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("1"))
-    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("0"))
+    # Optional sold-by-area dimensions (metres): area_m2 = height × width.
+    # Count-based lines leave all three NULL.
+    height: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    width: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    area_m2: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    discount_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))
     line_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     returned_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(
@@ -91,42 +80,6 @@ class SaleItem(Base):
 
     sale_ref: Mapped[Sale] = relationship(back_populates="items")
     product_ref: Mapped["object"] = relationship("Product", lazy="selectin")
-    batch_allocations: Mapped[list["SaleItemBatch"]] = relationship(
-        back_populates="sale_item_ref", cascade="all, delete-orphan", lazy="selectin"
-    )
-
-
-class SaleItemBatch(Base):
-    """Batch allocation behind one sold line (spec: sale_item_batches).
-
-    Invariant: SUM(quantity_base) == sale_item.quantity × factor_to_base.
-    One customer-visible sale line may draw from many FEFO batches; the
-    cost_per_base snapshot lets reporting compute the blended cost without
-    changing the customer price.
-    """
-
-    __tablename__ = "sale_item_batches"
-    __table_args__ = (
-        Index("ix_sale_item_batches_sale_item_id", "sale_item_id"),
-        Index("ix_sale_item_batches_batch_id", "batch_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    sale_item_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sale_items.id", ondelete="CASCADE"), nullable=False
-    )
-    batch_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("batch_stock_balances.id", ondelete="RESTRICT"), nullable=False
-    )
-    quantity_base: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
-    # Cost-per-BASE-unit snapshot (6dp to match batch_stock_balances.unit_cost).
-    cost_per_base: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0.000000"))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    sale_item_ref: Mapped[SaleItem] = relationship(back_populates="batch_allocations")
-    batch_ref: Mapped["BatchStockBalance"] = relationship()
 
 
 class SaleReturn(Base):

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { AppConfig } from '~/types/stock-pos/settings'
+import type { AppConfig } from '~/types/mj/settings'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
@@ -23,6 +23,7 @@ const testingEmail = ref(false)
 const testingTelegram = ref(false)
 const resettingData = ref(false)
 const clearingTransactions = ref(false)
+const runningBackup = ref(false)
 const activeTab = ref('localization')
 const model = ref<AppConfig | null>(null)
 
@@ -48,6 +49,11 @@ function fieldValue(key: string): unknown {
 
   // Select options use string values; coerce number fields for USelect match.
   if (key === 'general.defaultPageSize' || key === 'system.paginationDefault') {
+    const raw = getByPath(model.value, key)
+    return raw == null || raw === '' ? undefined : String(raw)
+  }
+
+  if (key === 'backup.intervalHours') {
     const raw = getByPath(model.value, key)
     return raw == null || raw === '' ? undefined : String(raw)
   }
@@ -82,6 +88,12 @@ async function setFieldValue(key: string, value: unknown) {
   if (key === 'general.defaultPageSize' || key === 'system.paginationDefault') {
     const n = Number(value)
     setByPath(model.value, key, Number.isFinite(n) ? n : 20)
+    return
+  }
+
+  if (key === 'backup.intervalHours') {
+    const n = Number(value)
+    setByPath(model.value, key, Number.isFinite(n) ? n : 24)
     return
   }
 
@@ -191,6 +203,26 @@ async function clearTransactions() {
   }
 }
 
+/** Trigger an immediate Google Sheets backup and refresh the run summary. */
+async function runBackup() {
+  runningBackup.value = true
+  try {
+    const result = await appConfig.runBackupNow()
+    const ok = result.status === 'SUCCESS'
+    toast.add({
+      title: ok ? t('core.settings.backupRunSuccess') : t('core.settings.backupRunFailed'),
+      color: ok ? 'success' : 'error',
+    })
+    model.value = await appConfig.get()
+  }
+  catch (error: unknown) {
+    toast.add({ title: errorMessage(error, t('core.settings.backupRunFailed')), color: 'error' })
+  }
+  finally {
+    runningBackup.value = false
+  }
+}
+
 /** Destructive maintenance actions live behind the header ⋯ menu. */
 const dangerItems = computed<DropdownMenuItem[][]>(() => {
   if (!canConfigure.value) return []
@@ -242,6 +274,13 @@ useAppPageTitle(() => t('app.pages.settings'))
         v-if="activeTab === 'telegram' && canConfigure"
         :loading="testingTelegram"
         @click="testTelegram"
+      />
+      <UButton
+        v-if="activeTab === 'backup' && canConfigure"
+        icon="i-lucide-cloud-upload"
+        :loading="runningBackup"
+        :label="t('core.settings.backupRunNow')"
+        @click="runBackup"
       />
     </template>
   </DocumentAppDocumentPage>

@@ -21,17 +21,6 @@ export const categories: AppRecord[] = [
   { id: 'cat6', code: 'CAT-006', name: 'Stationery', description: 'School and office supplies.', status: 'Inactive', productCount: 1, createdAt: daysAgo(80) },
 ]
 
-export const uoms: AppRecord[] = [
-  { id: 'uom1', code: 'UOM-PCS', name: 'Piece', symbol: 'pcs', description: 'Individual pieces or units.', status: 'Active', createdAt: daysAgo(130) },
-  { id: 'uom2', code: 'UOM-BOX', name: 'Box', symbol: 'box', description: 'Boxed quantities.', status: 'Active', createdAt: daysAgo(130) },
-  { id: 'uom3', code: 'UOM-CAN', name: 'Can', symbol: 'can', description: 'Canned goods and drinks.', status: 'Active', createdAt: daysAgo(129) },
-  { id: 'uom4', code: 'UOM-BTL', name: 'Bottle', symbol: 'btl', description: 'Bottled products.', status: 'Active', createdAt: daysAgo(128) },
-  { id: 'uom5', code: 'UOM-KG', name: 'Kilogram', symbol: 'kg', description: 'Weight-based goods.', status: 'Active', createdAt: daysAgo(127) },
-  { id: 'uom6', code: 'UOM-PACK', name: 'Pack', symbol: 'pack', description: 'Packed or bagged goods.', status: 'Inactive', createdAt: daysAgo(126) },
-]
-
-export const uomById = (id: string) => uoms.find(uom => uom.id === id)
-
 export const brands: AppRecord[] = [
   { id: 'br1', code: 'BR-001', name: 'Coca-Cola', description: 'Global beverage brand.', status: 'Active', productCount: 2, createdAt: daysAgo(110) },
   { id: 'br2', code: 'BR-002', name: 'Mama', description: 'Instant noodles and snacks.', status: 'Active', productCount: 1, createdAt: daysAgo(108) },
@@ -51,6 +40,7 @@ export const suppliers: AppRecord[] = [
 ]
 
 export const customers: AppRecord[] = [
+  { id: 'cus0', code: 'CUS-0000', name: 'Walk-in Customer', phone: '', location: '', address: '', status: 'Active', debtBalance: 0, is_walk_in: true, createdAt: daysAgo(200) },
   { id: 'cus1', code: 'CUS-0001', name: 'Nita Sok', phone: '012 777 001', location: 'Phnom Penh, Toul Kork', address: 'Phnom Penh, Toul Kork', status: 'Active', debtBalance: 246, createdAt: daysAgo(180) },
   { id: 'cus2', code: 'CUS-0002', name: 'Ratana Pich', phone: '012 777 002', location: 'Phnom Penh, Chamkarmon', address: 'Phnom Penh, Chamkarmon', status: 'Active', debtBalance: 0, createdAt: daysAgo(178) },
   { id: 'cus3', code: 'CUS-0003', name: 'Vuthy Long', phone: '012 777 003', location: 'Kandal, Ta Khmau', address: 'Kandal, Ta Khmau', status: 'Active', debtBalance: 125, createdAt: daysAgo(150) },
@@ -62,91 +52,36 @@ export const customers: AppRecord[] = [
 type ProductSeed = {
   name: string
   categoryId: string
-  uomId: string
   cost: number
   price: number
   qty: number
-  barcode: string
   brandId?: string
   /** When set, product tracks expiry and list shows this nearest lot date. */
   expiryDate?: string
 }
 
-/**
- * Pricing rows for a few seeded products (spec §2.1.3: the Pricing tab edits
- * these `uomConversions`; all other products materialize a single base=base
- * row). Each product's full row list is persisted: the base=base row plus
- * pack rows. Exactly one row per product has `isDefaultSale` — the UOM the
- * POS pre-selects on add-to-cart. 1 box of Coca-Cola = 12 cans at $9.60; the
- * can price ($0.80) stays the base-row price.
- */
-function pricingRow(uomId: string, symbol: string, baseUomId: string, baseSymbol: string, factor: number, costPrice: number | null, salePrice: number, isDefaultSale: boolean) {
-  return {
-    uomId,
-    uomSymbol: symbol,
-    convertUomId: baseUomId,
-    convertUomSymbol: baseSymbol,
-    factorToBase: factor,
-    costPrice,
-    salePrice,
-    isDefaultSale,
-  }
-}
-
-const UOM_CONVERSIONS_BY_PRODUCT: Record<string, Array<Record<string, unknown>>> = {
-  prd1: [
-    pricingRow('uom3', 'can', 'uom3', 'can', 1, 0.5, 0.8, true),
-    pricingRow('uom2', 'box', 'uom3', 'can', 12, 6, 9.6, false),
-  ],
-  prd3: [
-    pricingRow('uom4', 'btl', 'uom4', 'btl', 1, 0.3, 0.6, true),
-    pricingRow('uom2', 'box', 'uom4', 'btl', 6, null, 3.6, false),
-  ],
-  prd5: [
-    pricingRow('uom1', 'pcs', 'uom1', 'pcs', 1, 0.45, 0.75, true),
-    pricingRow('uom2', 'box', 'uom1', 'pcs', 30, null, 21.9, false),
-  ],
-  prd11: [
-    pricingRow('uom1', 'pcs', 'uom1', 'pcs', 1, 0.55, 0.95, true),
-    pricingRow('uom2', 'box', 'uom1', 'pcs', 24, null, 21.6, false),
-  ],
-  prd12: [
-    pricingRow('uom4', 'btl', 'uom4', 'btl', 1, 1.8, 2.9, true),
-    pricingRow('uom2', 'box', 'uom4', 'btl', 12, null, 33.6, false),
-  ],
-  prd14: [
-    pricingRow('uom4', 'btl', 'uom4', 'btl', 1, 1.3, 1.9, true),
-    pricingRow('uom2', 'box', 'uom4', 'btl', 12, null, 21.6, false),
-  ],
-  prd17: [
-    pricingRow('uom1', 'pcs', 'uom1', 'pcs', 1, 0.2, 0.4, true),
-    pricingRow('uom2', 'box', 'uom1', 'pcs', 50, null, 20, false),
-  ],
-}
-
 const productSeeds: ProductSeed[] = [
-  { name: 'Coca-Cola 350ml', categoryId: 'cat1', uomId: 'uom3', cost: 0.5, price: 0.8, qty: 240, barcode: '8801001234501', brandId: 'br1', expiryDate: '2027-03-15' },
-  { name: 'Sprite 350ml', categoryId: 'cat1', uomId: 'uom3', cost: 0.5, price: 0.8, qty: 180, barcode: '8801001234502', brandId: 'br1', expiryDate: '2027-02-28' },
-  { name: 'Water 1.5L', categoryId: 'cat1', uomId: 'uom4', cost: 0.3, price: 0.6, qty: 500, barcode: '8801001234503', expiryDate: '2028-01-10' },
-  { name: 'Energy Drink 250ml', categoryId: 'cat1', uomId: 'uom3', cost: 0.9, price: 1.5, qty: 96, barcode: '8801001234504', expiryDate: '2026-11-30' },
-  { name: 'Instant Noodles 60g', categoryId: 'cat2', uomId: 'uom1', cost: 0.45, price: 0.75, qty: 320, barcode: '8801001234505', brandId: 'br2', expiryDate: '2026-12-20' },
-  { name: 'Salted Chips 90g', categoryId: 'cat2', uomId: 'uom1', cost: 0.7, price: 1.2, qty: 140, barcode: '8801001234506', expiryDate: '2026-10-05' },
-  { name: 'Butter Cookies 200g', categoryId: 'cat2', uomId: 'uom2', cost: 1.1, price: 1.8, qty: 60, barcode: '8801001234507', expiryDate: '2026-09-18' },
-  { name: 'Dish Soap 500ml', categoryId: 'cat3', uomId: 'uom4', cost: 1.2, price: 2.0, qty: 80, barcode: '8801001234508', brandId: 'br3' },
-  { name: 'Laundry Powder 1kg', categoryId: 'cat3', uomId: 'uom5', cost: 2.4, price: 3.5, qty: 55, barcode: '8801001234509' },
-  { name: 'Trash Bags 20pcs', categoryId: 'cat3', uomId: 'uom2', cost: 0.9, price: 1.4, qty: 110, barcode: '8801001234510' },
-  { name: 'Soap Bar 120g', categoryId: 'cat4', uomId: 'uom1', cost: 0.55, price: 0.95, qty: 200, barcode: '8801001234511', brandId: 'br4', expiryDate: '2027-06-01' },
-  { name: 'Shampoo 400ml', categoryId: 'cat4', uomId: 'uom4', cost: 1.8, price: 2.9, qty: 72, barcode: '8801001234512', expiryDate: '2027-08-15' },
-  { name: 'Toothpaste 150g', categoryId: 'cat4', uomId: 'uom1', cost: 1.0, price: 1.7, qty: 130, barcode: '8801001234513', expiryDate: '2027-04-22' },
-  { name: 'Fresh Milk 1L', categoryId: 'cat5', uomId: 'uom4', cost: 1.3, price: 1.9, qty: 40, barcode: '8801001234514', brandId: 'br5', expiryDate: '2026-09-12' },
-  { name: 'Yogurt Cup 100g', categoryId: 'cat5', uomId: 'uom1', cost: 0.5, price: 0.9, qty: 8, barcode: '8801001234515', expiryDate: '2026-09-08' },
-  { name: 'Cheese Slices 10pcs', categoryId: 'cat5', uomId: 'uom2', cost: 1.5, price: 2.4, qty: 25, barcode: '8801001234516', expiryDate: '2026-09-25' },
-  { name: 'Ballpoint Pen', categoryId: 'cat6', uomId: 'uom1', cost: 0.2, price: 0.4, qty: 400, barcode: '8801001234517', brandId: 'br6' },
+  { name: 'Coca-Cola 350ml', categoryId: 'cat1', cost: 0.5, price: 0.8, qty: 240, brandId: 'br1', expiryDate: '2027-03-15' },
+  { name: 'Sprite 350ml', categoryId: 'cat1', cost: 0.5, price: 0.8, qty: 180, brandId: 'br1', expiryDate: '2027-02-28' },
+  { name: 'Water 1.5L', categoryId: 'cat1', cost: 0.3, price: 0.6, qty: 500, expiryDate: '2028-01-10' },
+  { name: 'Energy Drink 250ml', categoryId: 'cat1', cost: 0.9, price: 1.5, qty: 96, expiryDate: '2026-11-30' },
+  { name: 'Instant Noodles 60g', categoryId: 'cat2', cost: 0.45, price: 0.75, qty: 320, brandId: 'br2', expiryDate: '2026-12-20' },
+  { name: 'Salted Chips 90g', categoryId: 'cat2', cost: 0.7, price: 1.2, qty: 140, expiryDate: '2026-10-05' },
+  { name: 'Butter Cookies 200g', categoryId: 'cat2', cost: 1.1, price: 1.8, qty: 60, expiryDate: '2026-09-18' },
+  { name: 'Dish Soap 500ml', categoryId: 'cat3', cost: 1.2, price: 2.0, qty: 80, brandId: 'br3' },
+  { name: 'Laundry Powder 1kg', categoryId: 'cat3', cost: 2.4, price: 3.5, qty: 55 },
+  { name: 'Trash Bags 20pcs', categoryId: 'cat3', cost: 0.9, price: 1.4, qty: 110 },
+  { name: 'Soap Bar 120g', categoryId: 'cat4', cost: 0.55, price: 0.95, qty: 200, brandId: 'br4', expiryDate: '2027-06-01' },
+  { name: 'Shampoo 400ml', categoryId: 'cat4', cost: 1.8, price: 2.9, qty: 72, expiryDate: '2027-08-15' },
+  { name: 'Toothpaste 150g', categoryId: 'cat4', cost: 1.0, price: 1.7, qty: 130, expiryDate: '2027-04-22' },
+  { name: 'Fresh Milk 1L', categoryId: 'cat5', cost: 1.3, price: 1.9, qty: 40, brandId: 'br5', expiryDate: '2026-09-12' },
+  { name: 'Yogurt Cup 100g', categoryId: 'cat5', cost: 0.5, price: 0.9, qty: 8, expiryDate: '2026-09-08' },
+  { name: 'Cheese Slices 10pcs', categoryId: 'cat5', cost: 1.5, price: 2.4, qty: 25, expiryDate: '2026-09-25' },
+  { name: 'Ballpoint Pen', categoryId: 'cat6', cost: 0.2, price: 0.4, qty: 400, brandId: 'br6' },
 ]
 
 export const products: AppRecord[] = productSeeds.map((seed, i) => {
   const category = categories.find(item => item.id === seed.categoryId)!
-  const uom = uomById(seed.uomId)!
   const brand = seed.brandId ? brandById(seed.brandId) : undefined
   const id = `prd${i + 1}`
   return {
@@ -159,17 +94,9 @@ export const products: AppRecord[] = productSeeds.map((seed, i) => {
     brand: brand?.name ?? '',
     supplierId: `sup${(i % 3) + 1}`,
     supplier: suppliers[i % 3]!.name,
-    barcode: seed.barcode,
-    uomId: uom.id,
-    uom: uom.name,
-    uomSymbol: uom.symbol,
     costPrice: seed.cost,
     salePrice: seed.price,
     quantity: seed.qty,
-    // Full Pricing rows (spec §2.1.3, edited on the product Pricing tab).
-    // Stock stays in the base UOM; products without pack rows still sell in
-    // their base UOM (the UI materializes a base=base row on save).
-    uomConversions: UOM_CONVERSIONS_BY_PRODUCT[id] ?? [],
     expiryTracking: Boolean(seed.expiryDate),
     // Batch/expiry toggles (spec §5.9 Stock Costing): expiry implies batch.
     trackBatch: Boolean(seed.expiryDate),
@@ -188,86 +115,21 @@ export const products: AppRecord[] = productSeeds.map((seed, i) => {
 export const productName = (id: string) => String(products.find(p => p.id === id)?.name || 'Unknown product')
 export const productById = (id: string) => products.find(p => p.id === id)
 
-/**
- * Sale-price versions (spec: product_sale_prices). Exactly one POS-active
- * version per product and the active price always equals `product.salePrice`,
- * so the Stock list and POS stay in sync.
- *
- * Base seed: version 1 = current sale price, active, dated at product creation.
- * Every 4th product also has 1–2 older versions (a price change since
- * creation): version 1 starts at the original price and the newest version
- * carries the current price as the active one.
- */
-export const productSalePrices: AppRecord[] = products.flatMap((product, i) => {
-  const price = Number(product.salePrice)
-  const createdAt = String(product.createdAt)
-  const createdDay = createdAt.slice(0, 10)
-  const base = {
-    productId: String(product.id),
-    product: String(product.name),
-    createdAt,
-  }
-  if (i % 4 === 1) {
-    // Price was raised since creation: keep older, cheaper versions.
-    const original = Math.max(0.05, Math.round((price - 0.1) * 100) / 100)
-    return [
-      { ...base, id: `psp${i + 1}v1`, salePrice: original, date: createdDay, isActive: false, version: 1 },
-      ...(i % 8 === 1
-        ? [{ ...base, id: `psp${i + 1}v2`, salePrice: Math.max(0.05, Math.round((price - 0.05) * 100) / 100), date: dateOnly(85 - i - 5), isActive: false, version: 2 }]
-        : []),
-      { ...base, id: `psp${i + 1}v3`, salePrice: price, date: dateOnly(85 - i - 20), isActive: true, version: i % 8 === 1 ? 3 : 2 },
-    ]
-  }
-  return [{ ...base, id: `psp${i + 1}v1`, salePrice: price, date: createdDay, isActive: true, version: 1 }]
-})
-
 /* ------------------------------------------------------------------ */
 /* Transactions                                                        */
 /* ------------------------------------------------------------------ */
 
 const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Payment'] as const
 
-/** Pack UOM choice for a sale line (deterministic): every third line of a
- *  multi-UOM product sells one pack so POS UOM selection has visible data. */
-function saleUomChoice(product: AppRecord, seedIndex: number) {
-  const conversions = Array.isArray(product.uomConversions)
-    ? product.uomConversions as Array<Record<string, unknown>>
-    : []
-  const pack = conversions.find(row => Number(row.factorToBase ?? 1) > 1)
-  if (pack && seedIndex % 3 === 2) {
-    return {
-      uomId: String(pack.uomId ?? ''),
-      uomSymbol: String(pack.uomSymbol ?? ''),
-      factorToBase: Number(pack.factorToBase ?? 1),
-      price: Number(pack.salePrice ?? 0),
-      quantity: 1,
-    }
-  }
-  return {
-    uomId: String(product.uomId ?? ''),
-    uomSymbol: String(product.uomSymbol ?? ''),
-    factorToBase: 1,
-    price: Number(product.salePrice ?? 0),
-    quantity: ((seedIndex % 4) + 1),
-  }
-}
-
 function saleItems(seedIndex: number, lineCount: number): AppRecord[] {
   return Array.from({ length: lineCount }, (_, i) => {
     const product = pick(products, seedIndex + i * 3)
-    const uom = saleUomChoice(product, seedIndex + i)
-    const quantity = uom.quantity
-    const price = uom.price
+    const quantity = ((seedIndex + i) % 4) + 1
+    const price = Number(product.salePrice ?? 0)
     return {
       id: createId('line'),
       productId: String(product.id),
       name: String(product.name),
-      // UOM snapshot (spec §2.1.x): the line is entered in the selected UOM;
-      // ledger math converts to base (qty × factorToBase).
-      uomId: uom.uomId,
-      uom: uom.uomSymbol,
-      uomSymbol: uom.uomSymbol,
-      factorToBase: uom.factorToBase,
       quantity,
       price,
       discountPercent: 0,
@@ -347,14 +209,8 @@ export const stockIns: AppRecord[] = Array.from({ length: 14 }, (_, i) => {
     const baseQty = Math.max(40, Math.ceil(Number(product?.quantity ?? 0) * 0.5))
     return {
       ...item,
-      // Purchases are costed at the product cost price (per base UOM).
+      // Purchases are costed at the product cost price.
       price: Number(product?.costPrice ?? item.price),
-      // Purchases receive stock in the product BASE UOM (spec: stock/batch
-      // quantities live in the base UOM; the line UOM converts on entry).
-      uomId: String(product?.uomId ?? ''),
-      uom: String(product?.uomSymbol ?? ''),
-      uomSymbol: String(product?.uomSymbol ?? ''),
-      factorToBase: 1,
       quantity: baseQty,
       // Batch traceability (spec §17): purchase lines carry the lot they
       // receive into — same identity the movement ledger stamps.
@@ -430,9 +286,6 @@ function buildStockMovements(): AppRecord[] {
       date,
       productId,
       product: String(product?.name ?? ''),
-      barcode: String(product?.barcode ?? ''),
-      unit: String(product?.uomSymbol ?? ''),
-      uomSymbol: String(product?.uomSymbol ?? ''),
     }
   }
 
@@ -482,9 +335,8 @@ function buildStockMovements(): AppRecord[] {
   // 2) Sales — FEFO out of the lots; one movement row per consumed lot.
   for (const sale of sales) {
     for (const item of (sale.items as AppRecord[])) {
-      const factor = Math.max(1, Number(item.factorToBase ?? 1))
-      const baseQty = Math.round(Number(item.quantity) * factor * 100) / 100
-      const unitPriceBase = Math.round(Number(item.price ?? 0) / factor * 100) / 100
+      const baseQty = Math.round(Number(item.quantity) * 100) / 100
+      const unitPriceBase = Math.round(Number(item.price ?? 0) * 100) / 100
       const common = {
         ...baseRow(String(item.productId), String(sale.date), String(sale.createdAt)),
         type: 'Sale',
@@ -579,7 +431,7 @@ function buildStockMovements(): AppRecord[] {
     }))
   }
 
-  // 5) Running balances per product (ledger math stays in the base UOM).
+  // 5) Running balances per product.
   const chronological = [...rows].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
   const balanceByProduct = new Map<string, number>()
   for (const row of chronological) {
@@ -638,13 +490,11 @@ function buildDeliveryNotes(): AppRecord[] {
       .map(([itemIndex, qty]): AppRecord | null => {
         const item = items[itemIndex]
         if (!item) return null
-        const product = productById(String(item.productId))
         return {
           id: createId('dline'),
           saleItemId: String(item.id),
           productId: String(item.productId),
           product: String(item.name),
-          uomSymbol: String(item.uomSymbol || product?.uomSymbol || ''),
           qtyOrdered: Number(item.quantity || 0),
           // Never deliver more than the sale line's remaining quantity.
           qtyToDeliver: Math.min(qty, Number(item.quantity || 0)),

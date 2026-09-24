@@ -1,4 +1,4 @@
-import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
+import type { AppRolePermissionRow } from '~/types/mj/entities'
 
 /**
  * Frontend projection of the backend permission catalog
@@ -90,7 +90,6 @@ export const PERMISSION_MATRIX_PAGES: readonly MatrixPageDefinition[] = [
       a('stock_in', 'stock.in'),
       a('adjust', 'stock.adjust'),
       a('damage', 'stock.damage'),
-      a('expire', 'stock.expire'),
     ],
   },
   {
@@ -105,7 +104,6 @@ export const PERMISSION_MATRIX_PAGES: readonly MatrixPageDefinition[] = [
     group: 'pos',
     actions: [
       a('checkout', 'pos.access'),
-      a('discount', 'pos.discount'),
       a('debt_sale', 'pos.debt_sale'),
       a('print_invoice', 'pos.print'),
     ],
@@ -124,7 +122,6 @@ export const PERMISSION_MATRIX_PAGES: readonly MatrixPageDefinition[] = [
     ],
   },
   { value: 'categories', labelKey: 'app.nav.categories', group: 'setup', actions: crud('category') },
-  { value: 'uoms', labelKey: 'app.nav.uoms', group: 'setup', actions: crud('uom') },
   { value: 'brands', labelKey: 'app.nav.brands', group: 'setup', actions: crud('brand') },
   {
     value: 'suppliers',
@@ -176,7 +173,12 @@ export const PERMISSION_MATRIX_PAGES: readonly MatrixPageDefinition[] = [
     value: 'settings',
     labelKey: 'app.pages.settings',
     group: 'administration',
-    actions: [a('view', 'settings.view'), a('update', 'settings.update')],
+    actions: [
+      a('view', 'settings.view'),
+      a('update', 'settings.update'),
+      a('run', 'backup.run'),
+      a('restore', 'backup.restore'),
+    ],
   },
 ] as const
 
@@ -196,7 +198,6 @@ export const ACTION_COLUMN_ORDER: readonly string[] = [
   'damage',
   'expire',
   'checkout',
-  'discount',
   'debt_sale',
   'print_invoice',
   'confirm',
@@ -204,6 +205,8 @@ export const ACTION_COLUMN_ORDER: readonly string[] = [
   'cancel',
   'pay_debt',
   'create_expense',
+  'run',
+  'restore',
 ]
 
 /** Fallback sidebar group for a raw backend module code. */
@@ -214,7 +217,6 @@ const MODULE_GROUP: Record<string, MatrixGroupId> = {
   pos: 'pos',
   delivery: 'delivery',
   category: 'setup',
-  uom: 'setup',
   brand: 'setup',
   supplier: 'setup',
   customer: 'setup',
@@ -225,6 +227,7 @@ const MODULE_GROUP: Record<string, MatrixGroupId> = {
   sequence: 'administration',
   audit: 'administration',
   settings: 'administration',
+  backup: 'administration',
 }
 
 export const SUPER_ADMIN_PERMISSION = 'ALL_PAGES'

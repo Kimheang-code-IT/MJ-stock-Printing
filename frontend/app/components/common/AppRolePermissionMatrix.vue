@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
+import type { AppRolePermissionRow } from '~/types/mj/entities'
 import {
   PERMISSION_MATRIX_PAGES,
   allFrontendPermissionCodes,
@@ -13,7 +13,7 @@ import {
   type MatrixPageDefinition,
 } from '~/utils/role/permissions'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
-import type { ApiResponse } from '~/types/stock-pos/common'
+import type { ApiResponse } from '~/types/mj/common'
 
 const rows = defineModel<AppRolePermissionRow[]>({ default: () => [] })
 

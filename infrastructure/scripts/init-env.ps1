@@ -71,8 +71,8 @@ Write-Host ""
 Write-Host "No data is seeded on startup. The first administrator is created on the" -ForegroundColor Cyan
 Write-Host "Setup page the first time you open the app (http://localhost)." -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Next: double-click 'Start Stock POS.bat' in the infrastructure folder,"
-Write-Host "or run: .\infrastructure\scripts\stockpos\start-system.ps1"
+Write-Host "Next: double-click 'Start MJ.bat' in the infrastructure folder,"
+Write-Host "or run: .\infrastructure\scripts\mj\start-system.ps1"
 Write-Host ""
 Write-Host "To wipe all data later: .\infrastructure\scripts\clear-data.ps1" -ForegroundColor Cyan
 exit 0

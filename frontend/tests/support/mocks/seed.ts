@@ -1,12 +1,12 @@
-import type { PersonSummary, AttachmentMeta } from '~/types/stock-pos/common'
+import type { PersonSummary, AttachmentMeta } from '~/types/mj/common'
 import { createId, nowIso } from './query'
 
 export const people: PersonSummary[] = [
-  { id: 'p1', name: 'Sokha Chan', email: 'sokha@stockpos.local' },
-  { id: 'p2', name: 'Dara Kim', email: 'dara@stockpos.local' },
-  { id: 'p3', name: 'Sreymom Lim', email: 'sreymom@stockpos.local' },
-  { id: 'p4', name: 'Vannak Ouk', email: 'vannak@stockpos.local' },
-  { id: 'p5', name: 'Chenda Meas', email: 'chenda@stockpos.local' },
+  { id: 'p1', name: 'Sokha Chan', email: 'sokha@mj.local' },
+  { id: 'p2', name: 'Dara Kim', email: 'dara@mj.local' },
+  { id: 'p3', name: 'Sreymom Lim', email: 'sreymom@mj.local' },
+  { id: 'p4', name: 'Vannak Ouk', email: 'vannak@mj.local' },
+  { id: 'p5', name: 'Chenda Meas', email: 'chenda@mj.local' },
 ]
 
 export function person(i = 0) {
@@ -43,18 +43,18 @@ export { nowIso, createId }
 
 export const seedUsers = [
   {
-    id: 'u1', username: 'admin', displayName: 'Sokha Chan', email: 'admin@stockpos.local',
+    id: 'u1', username: 'admin', displayName: 'Sokha Chan', email: 'admin@mj.local',
     roleId: '1', status: 'Active', lastLogin: daysAgo(0),
     permissions: ['ALL_PAGES'], effectivePermissions: ['ALL_PAGES'],
   },
   {
-    id: 'u2', username: 'dara', displayName: 'Dara Kim', email: 'dara@stockpos.local',
+    id: 'u2', username: 'dara', displayName: 'Dara Kim', email: 'dara@mj.local',
     roleId: '2', status: 'Active', lastLogin: daysAgo(1),
     permissions: ['dashboard.view', 'category.view', 'brand.view', 'stock.view', 'customer.view', 'supplier.view', 'pos.access', 'report.sales', 'delivery.view'],
     effectivePermissions: ['dashboard.view', 'category.view', 'brand.view', 'stock.view', 'customer.view', 'supplier.view', 'pos.access', 'report.sales', 'delivery.view'],
   },
   {
-    id: 'u3', username: 'sreymom', displayName: 'Sreymom Lim', email: 'sreymom@stockpos.local',
+    id: 'u3', username: 'sreymom', displayName: 'Sreymom Lim', email: 'sreymom@mj.local',
     roleId: '3', status: 'Inactive', lastLogin: daysAgo(12),
     permissions: ['dashboard.view', 'report.sales'],
     effectivePermissions: ['dashboard.view', 'report.sales'],

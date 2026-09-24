@@ -6,7 +6,7 @@ import httpx
 
 from app.core.config import settings
 
-logger = logging.getLogger("stock_pos.telegram")
+logger = logging.getLogger("mj.telegram")
 
 API_BASE = "https://api.telegram.org"
 

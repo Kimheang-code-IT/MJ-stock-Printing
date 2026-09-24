@@ -17,27 +17,9 @@ def _utcnow() -> datetime:
 # ------------------------------------------------------------------- search
 
 
-class UomConversionOut(BaseModel):
-    """One product Pricing row (spec 4.2 / §2.1.3 products.uom_conversions).
-
-    Original UOM (`uom_id`) is the POS-selectable sell unit; Convert UOM is
-    usually the product base UOM; exactly one row is the default sale.
-    """
-
-    uom_id: UUID
-    uom_symbol: str | None = None
-    convert_uom_id: UUID | None = None
-    convert_uom_symbol: str | None = None
-    factor_to_base: Decimal
-    cost_price: Decimal | None = None
-    sale_price: Decimal | None = None
-    is_default_sale: bool = False
-
-
 class POSProductOut(BaseModel):
     id: UUID
     sku: str | None
-    barcode: str
     name: str
     category_id: UUID | None
     category_name: str | None = None
@@ -45,11 +27,6 @@ class POSProductOut(BaseModel):
     quantity: Decimal = Decimal("0")
     image_object_key: str | None
     image_url: str | None = None
-    uom_id: UUID | None = None
-    uom_symbol: str | None = None
-    # Convert-UOM rows offered on POS plus the base UOM row.
-    uom_conversions: list[UomConversionOut] = Field(default_factory=list)
-    uomConversions: list[UomConversionOut] = Field(default_factory=list)
     status: str
 
 
@@ -59,10 +36,8 @@ class POSProductOut(BaseModel):
 class SaleItemRequest(BaseModel):
     """One POS cart line (snake_case and camelCase accepted).
 
-    Stock is always mutated in the base UOM: base_qty = quantity ×
-    factor_to_base. unit_price defaults to the product's POS-active sale
-    price (products.selling_price) for the base UOM, or the conversion row's
-    sale_price for a convert UOM.
+    unit_price defaults to the product's selling price
+    (products.selling_price).
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -74,27 +49,9 @@ class SaleItemRequest(BaseModel):
         gt=0,
         validation_alias=AliasChoices("unit_price", "unitPrice"),
     )
-    discount_percent: Decimal = Field(
-        default=Decimal("0"),
-        ge=0,
-        le=100,
-        validation_alias=AliasChoices("discount_percent", "discountPercent"),
-    )
-    discount_amount: Decimal = Field(default=Decimal("0"), ge=0)
-    uom_id: UUID | None = Field(
-        default=None,
-        validation_alias=AliasChoices("uom_id", "uomId"),
-    )
-    uom_symbol: str | None = Field(
-        default=None,
-        max_length=20,
-        validation_alias=AliasChoices("uom_symbol", "uomSymbol"),
-    )
-    factor_to_base: Decimal = Field(
-        default=Decimal("1"),
-        gt=0,
-        validation_alias=AliasChoices("factor_to_base", "factorToBase"),
-    )
+    # Sold-by-area lines: when both are given, quantity = height × width (m²).
+    height: Decimal | None = Field(default=None, gt=0)
+    width: Decimal | None = Field(default=None, gt=0)
 
 
 class SaleCreateRequest(BaseModel):
@@ -102,7 +59,7 @@ class SaleCreateRequest(BaseModel):
     accepted too.
 
     `amount_received` / paidAmount is payment for THIS sale only (grand_total =
-    subtotal − discount + delivery). `deposit` is the separate budget applied
+    subtotal + delivery). `deposit` is the separate budget applied
     to selected prior customer debts via included_debt_ids and never inflates
     the current sale total.
 
@@ -126,8 +83,6 @@ class SaleCreateRequest(BaseModel):
         ge=0,
         validation_alias=AliasChoices("amount_received", "paidAmount", "paid_amount"),
     )
-    # Header discount on the sale lines (currency amount).
-    discount: Decimal = Field(default=Decimal("0"), ge=0)
     delivery_price: Decimal = Field(
         default=Decimal("0"),
         ge=0,
@@ -148,7 +103,7 @@ class SaleCreateRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("due_date", "dueDate"),
     )
-    # Document currency: every amount on this sale (lines, discount, delivery,
+    # Document currency: every amount on this sale (lines, delivery,
     # paid, debt) is in THIS currency. exchange_rate = KHR per 1 USD.
     currency: str = Field(default="USD", pattern="^(USD|KHR)$")
     exchange_rate: Decimal = Field(
@@ -172,8 +127,8 @@ class SaleCreateRequest(BaseModel):
 class SaleUpdateRequest(BaseModel):
     """PATCH /pos/sales/{id} — edit a completed sale (no returns).
 
-    Items/quantities/prices/discounts/delivery are re-applied; the original
-    stock is reversed (restored to its batches) before the new lines are
+    Items/quantities/prices/delivery are re-applied; the original
+    stock is reversed before the new lines are
     applied. The customer and any recorded payments stay untouched — the
     outstanding customer debt is recalculated from the new grand total.
     """
@@ -181,7 +136,6 @@ class SaleUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     sale_date: datetime | None = None
-    discount: Decimal = Field(default=Decimal("0"), ge=0)
     delivery_price: Decimal = Field(
         default=Decimal("0"),
         ge=0,
@@ -204,16 +158,12 @@ class SaleItemOut(BaseModel):
     product_id: UUID
     product_name: str
     sku: str | None
-    barcode: str | None
-    uom_id: UUID | None = None
-    uom_code: str | None = None
-    uom_symbol: str | None = None
-    factor_to_base: Decimal = Decimal("1")
+    height: Decimal | None = None
+    width: Decimal | None = None
+    area_m2: Decimal | None = None
     quantity: Decimal
     unit_price: Decimal
     unit_cost: Decimal
-    discount_percent: Decimal = Decimal("0")
-    discount_amount: Decimal
     line_total: Decimal
     returned_quantity: Decimal
 
@@ -225,7 +175,6 @@ class SaleOut(BaseModel):
     customer_name: str | None = None
     sale_date: datetime
     subtotal: Decimal
-    discount_amount: Decimal
     delivery_price: Decimal = Decimal("0")
     deliveryPrice: Decimal = Decimal("0")
     grand_total: Decimal

@@ -18,8 +18,6 @@ const REFERENCE_KEYS = [
   'code',
   'saleNo',
   'invoiceNo',
-  'sku',
-  'barcode',
 ]
 
 function compact(value: unknown) {

@@ -22,7 +22,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // Marker attached to a thrown fetch error once `useApi` has already surfaced it
 // (generic toast, permission alert, or session-expired alert). Callers check it
 // to avoid showing a second, raw `[METHOD] "url": 409 Conflict` toast.
-const HANDLED_API_ERROR = Symbol.for('stockpos.apiErrorHandled')
+const HANDLED_API_ERROR = Symbol.for('mj.apiErrorHandled')
 
 export function markApiErrorHandled(error: unknown): void {
   if (error && (typeof error === 'object' || typeof error === 'function')) {
@@ -67,6 +67,46 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
     return error.message
   }
   return fallback
+}
+
+// Number of currently-mounted forms that render backend field errors inline.
+// While at least one is active, `useApi` suppresses the generic validation
+// toast so the form shows the message on the offending field instead. Flows
+// without such a form (dialogs, POS, auth) keep the toast.
+let inlineFieldErrorConsumers = 0
+
+/** Register an inline-field-error form; returns a release function. */
+export function registerInlineFieldErrorConsumer(): () => void {
+  inlineFieldErrorConsumers += 1
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    inlineFieldErrorConsumers = Math.max(0, inlineFieldErrorConsumers - 1)
+  }
+}
+
+export function hasInlineFieldErrorConsumer(): boolean {
+  return inlineFieldErrorConsumers > 0
+}
+
+/** snake_case → camelCase (backend field_errors → UI field keys). */
+export function camelCaseFieldKey(key: string): string {
+  return key.replace(/_([a-z0-9])/g, (_, char: string) => char.toUpperCase())
+}
+
+/**
+ * Field-level errors from a thrown API error (empty when none).
+ *
+ * Forms use this in their `catch` to render inline errors on the offending
+ * fields instead of a generic toast. The thrown ofetch error keeps `.data`
+ * and `.statusCode`, so this works even after `useApi` re-throws.
+ */
+export function apiFieldErrors(error: unknown): Record<string, string> {
+  if (!isRecord(error)) return {}
+  if ((error as { data?: unknown }).data === undefined) return {}
+  const status = (error as { statusCode?: number }).statusCode
+  return normalizeApiError((error as { data?: unknown }).data, status ?? 500).fieldErrors
 }
 
 export function normalizeApiError(payload: unknown, statusCode = 500): NormalizedApiError {

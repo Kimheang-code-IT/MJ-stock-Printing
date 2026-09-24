@@ -1,4 +1,4 @@
-import type { ApiMeta } from '~/types/stock-pos/common'
+import type { ApiMeta } from '~/types/mj/common'
 import type { AppRecord } from '~/config/admin-seed'
 
 /** Query translation of the workspace list controls into named API parameters. */
@@ -39,17 +39,11 @@ export interface EntityRepository {
 export interface PosSaleItemInput {
   productId: string
   quantity: number
+  /** Sold-by-area dimensions in metres; when both are set quantity = height × width (m²). */
+  height?: number
+  width?: number
   /** Optional override; when omitted the product sale price is used. */
   unitPrice?: number
-  /** Per-line percent discount (0–100). */
-  discountPercent?: number
-  /** Selected line UOM (base or a product Convert-UOM row). */
-  uomId?: string
-  /** Selected UOM symbol snapshot for the invoice/lines. */
-  uomSymbol?: string
-  /** How many base UOM units 1 of the selected UOM contains (default 1).
-   *  Stock is always mutated in the base UOM: baseQty = quantity × factor. */
-  factorToBase?: number
 }
 
 export interface PosCompleteSaleInput {
@@ -58,7 +52,6 @@ export interface PosCompleteSaleInput {
   items: PosSaleItemInput[]
   paymentMethod: string
   paidAmount: number
-  discount?: number
   note?: string | null
   /** Open customer-debt rows settled from `deposit` (separate from paidAmount). */
   includedDebtIds?: string[]
@@ -155,13 +148,11 @@ export interface ProductHistoryRow {
   date: string
   /** Backend movement label, e.g. 'Stock In' / 'Sale' / 'Damage'. */
   type: string
-  /** Signed base-UOM quantity (negative = stock out). */
+  /** Signed quantity (negative = stock out). */
   quantity: number
   /** Product name snapshot for the Stock In / Stock Out dialogs. */
   product: string
-  /** Line-unit symbol snapshot (display only). */
-  unit: string
-  /** Per-unit price (base-unit cost for stock in; sale price for stock out). */
+  /** Per-unit price (cost for stock in; sale price for stock out). */
   unitPrice: number
   reference: string
   /** Movement linkage: 'sale' rows can open their POS invoice detail. */
@@ -170,10 +161,6 @@ export interface ProductHistoryRow {
   user: string
   note: string
   kind: StockHistoryKind
-  /** Batch lot the change hit (null for unbatched products). */
-  batchNo?: string | null
-  /** Expiry stamped on the lot (display only). */
-  expiryDate?: string | null
 }
 
 /** One Stock In cost lot of a product (UI camelCase; GET /stock/products/{id}/cost-history). */
@@ -190,37 +177,6 @@ export interface ProductCostHistoryRow {
   documentNo: string
 }
 
-/** One sale-price version of a product (UI camelCase; /products/{id}/sale-prices). */
-export interface ProductSalePriceRow {
-  id: string
-  productId: string
-  product: string
-  /** Default-sale/base UOM price of the version (products.salePrice mirror). */
-  salePrice: number
-  /** Effective date of the version. */
-  date: string
-  /** Exactly one version per product + batch scope is POS-active. */
-  isActive: boolean
-  version: number
-  /** Optional batch/lot scope; blank = general pricing (all lots). */
-  batchNo?: string | null
-  purchaseDate?: string | null
-  expiryDate?: string | null
-  /** Purchase cost of the version's lot, when the API reports one. */
-  purchaseCost?: number | null
-  /** UOM price rows inside the version (pcs / pack / box…). */
-  uomPrices?: SalePriceUomRow[]
-}
-
-/** One UOM sale price inside a price version. */
-export interface SalePriceUomRow {
-  uomId: string
-  uomSymbol?: string | null
-  factorToBase: number
-  salePrice: number
-  isDefaultSale?: boolean
-}
-
 /** Query accepted by the product-scoped history / price dialogs. */
 export interface ProductScopedQuery {
   q?: string
@@ -232,71 +188,14 @@ export interface ProductScopedQuery {
   requestScope?: string
 }
 
-/** Batch status dialect (UI): Active | Expired | Depleted. */
-export type BatchStatus = 'Active' | 'Expired' | 'Depleted'
-
-/** One batch lot of a product, derived from the immutable movement ledger
- *  (GET /stock/movements?productId=… grouped by batch_no). Read-only lots;
- *  pricing active/inactive comes from the batch-scoped sale-price version. */
-export interface ProductBatchRow {
-  /** Batch identity = product + batch_no (the ledger's batch key). */
-  id: string
-  productId: string
-  batchNo: string
-  /** Nearest expiry stamped on the lot's movements; null when none. */
-  expiryDate: string | null
-  /** Remaining base-UOM quantity: inbound lots − outflows from the ledger. */
-  remainingQty: number
-  /** Received base-UOM quantity: remaining + everything that left the lot. */
-  receivedQty: number
-  /** Unit cost per base UOM from the latest Stock In movement of the lot. */
-  unitCost: number
-  supplier: string
-  /** Opening purchase document no (PIN-…). */
-  purchaseNo: string
-  createdDate: string
-  status: BatchStatus
-  /** Opening Stock In date (purchase date). */
-  purchaseDate?: string | null
-  /** Purchase-line UOM symbol (fallback: product base UOM). */
-  purchaseUom?: string | null
-  /** Document currency of the opening Stock In (USD / KHR). */
-  currency?: string | null
-  /** Batch-scoped sale price when set; else general / product fallback. */
-  salePrice?: number | null
-  /** Active (or latest) sale-price version id for this batch scope. */
-  salePriceId?: string | null
-  /** True when this lot has an active batch-scoped sale-price version (POS). */
-  pricingActive?: boolean
-}
-
 /** Read-only product-scoped queries used by the Stock list dialogs. */
 export interface StockQueryRepository {
   /** Movement history of one product; `type` filters by dialog kind. */
   listProductHistory(productId: string, query?: ProductScopedQuery & { type?: StockHistoryKind }): Promise<EntityListResult<ProductHistoryRow>>
   /** Stock In cost lots of one product (versions assigned oldest → newest). */
   listProductCostHistory(productId: string, query?: ProductScopedQuery): Promise<EntityListResult<ProductCostHistoryRow>>
-  /** Batch lots of one product, derived from the movement ledger. */
-  listProductBatches(productId: string, query?: ProductScopedQuery & { status?: string }): Promise<EntityListResult<ProductBatchRow>>
-  /** Sale-price versions of one product (newest first). */
-  listSalePrices(productId: string, query?: ProductScopedQuery): Promise<EntityListResult<ProductSalePriceRow>>
   /** Invoice detail behind one SALE movement (Stock Out dialog click-through); null when not a sale. */
   getMovementInvoice(movementId: string): Promise<SaleReceipt | null>
-  /** Add a new price version (per-UOM price rows, optional batch scope;
-   *  deactivates the previous matching scope, copies the default-sale UOM
-   *  price onto products.salePrice). */
-  addSalePrice(productId: string, input: {
-    date: string
-    salePrice: number
-    batchNo?: string | null
-    purchaseDate?: string | null
-    expiryDate?: string | null
-    uomPrices?: Array<{ uomId: string, uomSymbol?: string | null, factorToBase: number, salePrice: number, isDefaultSale?: boolean }>
-  }): Promise<ProductSalePriceRow>
-  /** Activate one version — exactly one stays active; copies onto products.salePrice. */
-  activateSalePrice(productId: string, priceId: string): Promise<ProductSalePriceRow>
-  /** Set `isActive` on a version (`false` deactivates that scope for POS). */
-  setSalePriceActive(priceId: string, isActive: boolean): Promise<ProductSalePriceRow>
 }
 
 /** One original sale line for POS return mode (GET /pos/sales/{id}). */
@@ -305,15 +204,15 @@ export interface SaleDetailItem {
   id: string
   productId: string
   name: string
-  uom: string
-  uomId?: string
-  factorToBase: number
-  /** Sold quantity in the line UOM. */
+  /** Sold-by-area dimensions (metres) when the line was sold by area. */
+  height?: number
+  width?: number
+  /** Derived area in m² (height × width) when the line was sold by area. */
+  areaM2?: number
+  /** Sold quantity. */
   quantity: number
   returnedQuantity: number
   unitPrice: number
-  discountPercent: number
-  discountAmount: number
   lineTotal: number
 }
 
@@ -330,7 +229,6 @@ export interface SaleDetail {
   paymentMethod: string
   paymentStatus: string
   subtotal: number
-  discount: number
   deliveryPrice: number
   paidAmount: number
   debtAmount: number
@@ -351,13 +249,13 @@ export interface SaleReceipt {
   items: Array<{
     name: string
     quantity: number
-    uom: string
+    height?: number
+    width?: number
+    areaM2?: number
     unitPrice: number
-    discount: number
     total: number
   }>
   subtotal: number
-  discount: number
   deliveryPrice: number
   deposit: number
   total: number
@@ -373,19 +271,11 @@ export interface SaleReceipt {
 export interface PurchaseLineInput {
   productId: string
   quantity: number
-  /** Line UOM (base or a product Pricing row). */
-  uomId?: string
-  /** Selected UOM symbol snapshot for history display. */
-  uomSymbol?: string
-  /** base qty = quantity × factorToBase (default 1, base UOM). */
-  factorToBase?: number
-  /** Unit cost per the selected UOM. */
+  /** Unit cost per unit. */
   unitCost?: number
-  /** Batch no of the lot this line is received into (required when the
-   *  product tracks batches; identity = product + batch_no). */
-  batchNo?: string | null
-  /** Recorded expiry date of the lot (when the product tracks expiry). */
-  expiryDate?: string | null
+  /** Sold-by-area purchase line: Height × Width (metres) becomes the quantity (m²). */
+  height?: number
+  width?: number
 }
 
 /**
@@ -398,7 +288,7 @@ export interface PosCommandRepository {
   /**
    * Edit a completed sale (PATCH /pos/sales/{id}): the backend reverses the
    * original stock (append-only compensating movements) and re-applies the new
-   * lines/prices/discounts; customer + recorded payments stay, the customer
+   * lines/prices; customer + recorded payments stay, the customer
    * debt is recalculated.
    */
   updateSale(input: PosCompleteSaleInput & { saleId: string }): Promise<AppRecord>
@@ -414,9 +304,7 @@ export interface PosCommandRepository {
     paidAmount?: number
     /** Payment label for the recorded payment row (CASH | BANK_QR). */
     paymentMethod?: string
-    /** Document-level discount subtracted from the line subtotal. */
-    discountAmount?: number
-    /** Document-level tax added after the discount. */
+    /** Document-level tax added to the line subtotal. */
     taxAmount?: number
     /** Document currency: every amount is in THIS currency (USD | KHR). */
     currency?: 'USD' | 'KHR'
@@ -434,7 +322,6 @@ export interface PosCommandRepository {
   updatePurchase(input: {
     stockInId: string
     lines: PurchaseLineInput[]
-    discountAmount?: number
     taxAmount?: number
     currency?: 'USD' | 'KHR'
     exchangeRate?: number
@@ -443,23 +330,12 @@ export interface PosCommandRepository {
     transactionDate?: string | null
   }): Promise<AppRecord>
   createStockOperation(input: {
-    type: 'stock_in' | 'adjustment' | 'damage' | 'expiry'
+    type: 'stock_in' | 'adjustment' | 'damage'
     productId: string
     quantity: number
     note?: string | null
-    /** Stock In line UOM (base or a product Convert-UOM row). */
-    uomId?: string
-    /** Selected UOM symbol snapshot for history display. */
-    uomSymbol?: string
-    /** base qty = quantity × factorToBase (default 1, base UOM). */
-    factorToBase?: number
-    /** Unit cost per the selected UOM (Stock In). */
+    /** Unit cost (Stock In). */
     unitCost?: number
-    /** Batch no of the target lot (Damage / Expiry on a batch-tracked
-     *  product; Stock In receives into this lot). */
-    batchNo?: string | null
-    /** Recorded expiry date of the lot (Stock In / Expiry). */
-    expiryDate?: string | null
     /** Stock In = purchase: supplier for the purchase / debt (optional). */
     supplierId?: string | null
     /** Amount paid now (0…line total; unpaid balance becomes supplier debt). */
@@ -487,12 +363,6 @@ export interface PosCommandRepository {
   getSaleReceipt(saleId: string): Promise<SaleReceipt>
   /** Original sale (lines + currency + customer) loaded into POS return mode. */
   getSale(saleId: string): Promise<SaleDetail>
-  /**
-   * Scanner lookup: the ACTIVE product with this exact barcode, or null when no
-   * product matches. Unlike the local product cache this is not limited to the
-   * first page, so any in-stock barcode can be auto-added to the cart.
-   */
-  getProductByBarcode(barcode: string): Promise<AppRecord | null>
   /** Customer return against a confirmed sale (POST /pos/sales/{id}/return). */
   returnSale(input: {
     saleId: string
@@ -547,7 +417,6 @@ export interface DashboardSummary {
   customerDebt: number
   supplierDebt: number
   damageLoss: number
-  expiryLoss: number
   pendingDeliveryNotes: number
   salesByDay: Array<{ date: string, count: number }>
   incomeByDay: Array<{ date: string, amount: number }>

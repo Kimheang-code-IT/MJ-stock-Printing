@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { systemSettingsTabs } from '../app/config/settings-schemas'
 import { MOCK_APP_CONFIG } from './support/repositories-mock/settings'
 import { applyAdminSettingsGroups, toAdminSettingsValues } from '../app/repositories/http/admin-settings'
-import type { AppConfig } from '../app/types/stock-pos/settings'
+import type { AppConfig } from '../app/types/mj/settings'
 
 describe('telegram settings', () => {
   const telegramFields = systemSettingsTabs
@@ -51,29 +51,6 @@ describe('telegram settings', () => {
   })
 })
 
-describe('stock settings (spec section 3.6)', () => {
-  const stockTab = systemSettingsTabs.find(tab => tab.id === 'stock')
-  const stockFields = stockTab?.sections.flatMap(section => section.fields) ?? []
-
-  it('has a Stock tab with the two expiry-alert lead times', () => {
-    expect(stockTab).toBeDefined()
-    const byKey = new Map(stockFields.map(field => [field.key, field]))
-    expect(byKey.get('stock.expiryAlert1Days')?.type).toBe('number')
-    expect(byKey.get('stock.expiryAlert2Days')?.type).toBe('number')
-  })
-
-  it('toggles Telegram expiry alerts from the Stock tab', () => {
-    const byKey = new Map(stockFields.map(field => [field.key, field]))
-    expect(byKey.get('stock.telegramExpiryAlertsEnabled')?.type).toBe('boolean')
-  })
-
-  it('mock defaults match the spec examples (90 / 7, alerts on)', () => {
-    expect(MOCK_APP_CONFIG.stock.expiryAlert1Days).toBe(90)
-    expect(MOCK_APP_CONFIG.stock.expiryAlert2Days).toBe(7)
-    expect(MOCK_APP_CONFIG.stock.telegramExpiryAlertsEnabled).toBe(true)
-  })
-})
-
 describe('security settings', () => {
   const securityFields = systemSettingsTabs
     .find(tab => tab.id === 'security')
@@ -91,22 +68,12 @@ describe('security settings', () => {
 describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
   const base = structuredClone(MOCK_APP_CONFIG) as AppConfig
 
-  it('maps the Stock tab lead times and expiry toggle to backend groups', () => {
-    const values = toAdminSettingsValues({
-      stock: { ...base.stock, expiryAlert1Days: 60, expiryAlert2Days: 3, telegramExpiryAlertsEnabled: false },
-    })
-    expect(values).toEqual({
-      stock: { expiry_alert_1_days: 60, expiry_alert_2_days: 3 },
-      telegram: { expiry_alerts_enabled: false },
-    })
-  })
-
   it('maps the Telegram feature toggles to backend keys', () => {
     const values = toAdminSettingsValues({
       telegram: { ...base.telegram, passwordResetEnabled: false, paymentInvoiceNotifyEnabled: false, stockInquiryEnabled: false },
     })
     // The full backend catalog maps from the form model (spec section 3.6):
-    // feature toggles + expiry/sale/purchase/summary notification toggles.
+    // feature toggles + sale/purchase/summary notification toggles.
     expect(values).toEqual({
       telegram: {
         enabled: false,
@@ -114,7 +81,6 @@ describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
         enable_password_reset: false,
         payment_invoice_notify_enabled: false,
         stock_inquiry_enabled: false,
-        expiry_alerts_enabled: true,
         sale_enabled: false,
         purchase_enabled: false,
         daily_summary_enabled: false,
@@ -146,12 +112,8 @@ describe('admin settings mapping (PATCH /api/v1/admin/settings)', () => {
 
   it('applies returned backend groups back onto the form model', () => {
     const next = applyAdminSettingsGroups(base, {
-      stock: { expiry_alert_1_days: 45, expiry_alert_2_days: 5 },
-      telegram: { enable_password_reset: false, expiry_alerts_enabled: false },
+      telegram: { enable_password_reset: false },
     })
-    expect(next.stock.expiryAlert1Days).toBe(45)
-    expect(next.stock.expiryAlert2Days).toBe(5)
-    expect(next.stock.telegramExpiryAlertsEnabled).toBe(false)
     expect(next.telegram.passwordResetEnabled).toBe(false)
     // Unmapped sections are untouched.
     expect(next.localization).toEqual(base.localization)

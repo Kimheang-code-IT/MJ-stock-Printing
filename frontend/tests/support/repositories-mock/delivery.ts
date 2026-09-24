@@ -95,14 +95,12 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
           if (qty > remaining) {
             throw new Error(`Only ${remaining} of ${Number(item.quantity)} remaining to deliver for ${item.name}`)
           }
-          const product = db.collections.products.find(row => String(row.id) === String(item.productId))
           lines.push({
             id: createId('dline'),
             saleId: String(sale.id),
             saleItemId: String(item.id),
             productId: String(item.productId),
             product: String(item.name),
-            uomSymbol: String(product?.uomSymbol || item.uom || ''),
             qtyOrdered: Number(item.quantity || 0),
             qtyToDeliver: qty,
             qtyDelivered: 0,
@@ -213,14 +211,12 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
             if (qty > remaining) {
               throw new Error(`Only ${remaining} of ${Number(item.quantity)} remaining to deliver for ${item.name}`)
             }
-            const product = db.collections.products.find(row => String(row.id) === String(item.productId))
             lines.push({
               id: createId('dline'),
               saleId,
               saleItemId: String(item.id),
               productId: String(item.productId),
               product: String(item.name),
-              uomSymbol: String(product?.uomSymbol || item.uom || ''),
               qtyOrdered: Number(item.quantity || 0),
               qtyToDeliver: qty,
               qtyDelivered: 0,
@@ -335,7 +331,6 @@ export function createMockDeliveryRepository(): DeliveryCommandRepository {
             productId: String(item.productId ?? ''),
             product: String(item.name ?? ''),
             sku: '',
-            uomSymbol: String(item.uom ?? ''),
             qtyOrdered: Number(item.quantity ?? 0),
             qtyRemaining: Math.max(0, Number(item.quantity || 0)
               - Number(item.returnedQuantity || 0)

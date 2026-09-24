@@ -72,9 +72,7 @@ const inputUi = computed(() => ({
   base: `${props.currencyToggle ? '' : 'pe-7'} ${props.align === 'right' ? 'text-right' : ''} ${String(props.ui?.base ?? '')}`.trim(),
 }))
 
-const inputClass = computed(() => props.inline
-  ? 'w-full'
-  : [props.class, fieldControlClass(Boolean(props.error))])
+const inputClass = computed(() => [props.class, fieldControlClass(Boolean(props.error))])
 
 const wrapperProps = computed(() => props.inline
   ? { class: props.class }

@@ -76,9 +76,11 @@ async def test_finance_entry_rows_expose_mapper_fields(client):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_expense_matches_finance_operating_expenses(client):
-    """Dashboard Expense KPI == Finance operating expenses for the same dates."""
+async def test_dashboard_matches_finance_ledger(client):
+    """Dashboard Income/Expense KPIs == the Finance Report ledger (cash basis)."""
     headers = await admin_headers(client)
+    baseline = (await client.get("/api/v1/dashboard/summary?period=7d", headers=headers)).json()["data"]
+
     tag = uuid.uuid4().hex[:6]
     product = await make_stocked_product(client, headers, sku=f"DASHF-{tag}", name=f"Dash Fin {tag}")
 
@@ -105,8 +107,18 @@ async def test_dashboard_expense_matches_finance_operating_expenses(client):
         )
     ).json()["data"]
 
-    assert Decimal(dashboard["summary"]["total_expense"]) == Decimal(finance["operating_expenses"])
-    assert Decimal(dashboard["summary"]["total_income"]) == Decimal(finance["total_sales"])
-    # Chart expense series agrees with the summary on the last day.
-    chart_day = next(row for row in dashboard["chart"] if str(row["date"]) == str(dashboard["period_end"]))
-    assert Decimal(chart_day["expense"]) == Decimal(dashboard["summary"]["total_expense"])
+    # Income KPI = cash actually received (the $50 checkout tender), not accrual sales.
+    assert Decimal(dashboard["summary"]["total_income"]) - Decimal(
+        baseline["summary"]["total_income"]
+    ) == Decimal("50.00")
+    # Expense KPI = supplier payment ($20 stock-in) + operating expense ($12);
+    # equals the finance summary total_expense for the same dates.
+    assert Decimal(dashboard["summary"]["total_expense"]) - Decimal(
+        baseline["summary"]["total_expense"]
+    ) == Decimal("32.00")
+    assert Decimal(dashboard["summary"]["total_expense"]) == Decimal(finance["total_expense"])
+    # Chart series reconcile with the period totals.
+    chart_income = sum((Decimal(row["income"]) for row in dashboard["chart"]), Decimal("0"))
+    chart_expense = sum((Decimal(row["expense"]) for row in dashboard["chart"]), Decimal("0"))
+    assert chart_income == Decimal(dashboard["summary"]["total_income"])
+    assert chart_expense == Decimal(dashboard["summary"]["total_expense"])

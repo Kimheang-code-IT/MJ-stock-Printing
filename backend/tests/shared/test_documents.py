@@ -1,8 +1,5 @@
 import asyncio
 
-import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker
-
 from app.core.database import SessionFactory
 from app.shared.documents import allocate_document_number, ensure_default_sequences
 
@@ -34,7 +31,6 @@ async def test_all_default_sequences_seeded(db_session):
         "STOCK_IN": "STI",
         "STOCK_ADJUSTMENT": "STA",
         "STOCK_DAMAGE": "DMG",
-        "STOCK_EXPIRE": "EXP",
         "CUSTOMER": "CUS",
         "SUPPLIER": "SUP",
         "CUSTOMER_DEBT_PAYMENT": "CDP",

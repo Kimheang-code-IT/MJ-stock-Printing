@@ -173,7 +173,6 @@ class DeliveryNoteService:
                     product_id=sale_item.product_id,
                     product_name=sale_item.product_name,
                     sku=sale_item.sku,
-                    uom_symbol=sale_item.uom_symbol,
                     qty_ordered=ordered,
                     qty_returned=_q4(sale_item.returned_quantity),
                     qty_allocated=line_allocated,
@@ -439,7 +438,6 @@ class DeliveryNoteService:
                         sale_item_id=sale_item.id,
                         product_id=sale_item.product_id,
                         product_name=sale_item.product_name,
-                        uom_symbol=sale_item.uom_symbol,
                         # qty_ordered is the original sale-line quantity (spec section 2.1.9).
                         qty_ordered=_q4(sale_item.quantity),
                         qty_to_deliver=qty,
@@ -588,7 +586,6 @@ class DeliveryNoteService:
                             sale_item_id=sale_item.id,
                             product_id=sale_item.product_id,
                             product_name=sale_item.product_name,
-                            uom_symbol=sale_item.uom_symbol,
                             qty_ordered=_q4(sale_item.quantity),
                             qty_to_deliver=qty,
                             qty_delivered=Decimal("0"),
@@ -765,6 +762,16 @@ class DeliveryNoteService:
         customer = await self.session.get(Customer, note.customer_id)
         return customer.name if customer else None
 
+    async def sale_dates(self, sale_ids: list[uuid.UUID]) -> dict[uuid.UUID, datetime | None]:
+        """Linked invoice sale dates per sale id (Delivery list Invoice Date)."""
+        unique = set(sale_ids)
+        if not unique:
+            return {}
+        result = await self.session.execute(
+            select(Sale.id, Sale.sale_date).where(Sale.id.in_(unique))
+        )
+        return {sale_id: sale_date for sale_id, sale_date in result.all()}
+
     async def invoice_delivery_statuses(
         self, sale_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, str]:
@@ -827,6 +834,7 @@ def note_to_out(
     note: DeliveryNote,
     customer_name: str | None = None,
     invoice_statuses: dict[uuid.UUID, str] | None = None,
+    sale_dates: dict[uuid.UUID, datetime | None] | None = None,
 ) -> DeliveryNoteOut:
     sales = sorted(
         (DeliveryNoteSaleOut(sale_id=link.sale_id, invoice_no=link.invoice_no) for link in note.sales),
@@ -837,6 +845,10 @@ def note_to_out(
             derived = invoice_statuses.get(link.sale_id, "NOT_DELIVERED")
             link.delivery_status = derived
             link.deliveryStatus = derived
+    if sale_dates:
+        for link in sales:
+            link.sale_date = sale_dates.get(link.sale_id)
+            link.saleDate = link.sale_date
     invoice_nos = [link.invoice_no for link in sales]
     return DeliveryNoteOut(
         id=note.id,

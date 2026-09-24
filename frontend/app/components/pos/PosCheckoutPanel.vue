@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import type { PaginationState } from '@tanstack/vue-table'
-import { h } from 'vue'
 import { formatMoney } from '~/composables/module/useModule'
 import { PAYMENT_METHODS } from '~/config/pos-options'
 import type { PosCartLine } from '~/utils/pos/cart'
 import type { PrintPaperSize } from '~/utils/print/html'
-import { cartDiscountTotal, cartSubtotal, lineDiscountAmount, lineNet, roundMoney } from '~/utils/pos/cart'
+import { cartSubtotal, lineNet, roundMoney } from '~/utils/pos/cart'
 import {
   checkoutDeliveryFee,
   checkoutDue,
   checkoutSaleNet,
   type CheckoutDebtRow,
 } from '~/utils/pos/checkout'
+import type { ListTableSortOption } from '~/utils/table/list-table'
 
 const props = defineProps<{
   cart: PosCartLine[]
@@ -39,6 +39,8 @@ const props = defineProps<{
     value: string
     phone?: string
     location?: string
+    /** True for the seeded system walk-in customer (default checkout customer). */
+    isWalkIn?: boolean
     /** Secondary display line (phone · location) under the name. */
     description?: string
   }>
@@ -95,12 +97,18 @@ type CheckoutLineRow = Record<string, unknown> & {
   lineNo: number
   productId: string
   name: string
-  uom: string
+  height?: number
+  width?: number
+  areaM2?: number
   quantity: number
   unitPrice: number
-  discountPercent: number
-  discountAmount: number
   amount: number
+}
+
+/** Positive dimension/area value for a checkout cell, else an em dash. */
+function dimensionText(value: unknown): string {
+  const amount = Number(value)
+  return Number.isFinite(amount) && amount > 0 ? String(amount) : '—'
 }
 
 const rows = computed<CheckoutLineRow[]>(() =>
@@ -108,10 +116,13 @@ const rows = computed<CheckoutLineRow[]>(() =>
     ...line,
     id: line.productId,
     lineNo: index + 1,
-    discountAmount: lineDiscountAmount(line),
     amount: lineNet(line),
   })),
 )
+
+const sortOptions = computed<ListTableSortOption[]>(() => [
+  { key: 'lineNo', kind: 'number', label: t('app.stock.pricingNo') },
+])
 
 const columns = computed<TableColumn<CheckoutLineRow>[]>(() => [
   {
@@ -126,11 +137,25 @@ const columns = computed<TableColumn<CheckoutLineRow>[]>(() => [
     enableSorting: false,
   },
   {
-    accessorKey: 'uom',
-    header: t('app.pos.uom'),
+    accessorKey: 'height',
+    header: t('app.pos.height'),
     enableSorting: false,
-    meta: { class: { td: 'whitespace-nowrap text-muted', th: '' } },
-    cell: ({ row }) => String(row.original.uom || '—'),
+    meta: { class: { td: 'text-end tabular-nums whitespace-nowrap text-muted', th: 'text-end' } },
+    cell: ({ row }) => dimensionText(row.original.height),
+  },
+  {
+    accessorKey: 'width',
+    header: t('app.pos.width'),
+    enableSorting: false,
+    meta: { class: { td: 'text-end tabular-nums whitespace-nowrap text-muted', th: 'text-end' } },
+    cell: ({ row }) => dimensionText(row.original.width),
+  },
+  {
+    accessorKey: 'areaM2',
+    header: t('app.pos.areaM2'),
+    enableSorting: false,
+    meta: { class: { td: 'text-end tabular-nums whitespace-nowrap text-muted', th: 'text-end' } },
+    cell: ({ row }) => dimensionText(row.original.areaM2),
   },
   {
     accessorKey: 'quantity',
@@ -144,17 +169,6 @@ const columns = computed<TableColumn<CheckoutLineRow>[]>(() => [
     enableSorting: false,
     meta: { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } },
     cell: ({ row }) => money(row.original.unitPrice),
-  },
-  {
-    accessorKey: 'discountAmount',
-    header: t('app.pos.discount'),
-    enableSorting: false,
-    meta: { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } },
-    cell: ({ row }) => {
-      const amount = row.original.discountAmount || 0
-      return h('span', { class: amount ? 'text-end tabular-nums' : 'text-end tabular-nums text-muted' },
-        amount ? `−${money(amount)}` : '—')
-    },
   },
   {
     accessorKey: 'amount',
@@ -180,12 +194,11 @@ const selectedCustomerName = computed(() =>
   || '')
 
 const subtotal = computed(() => cartSubtotal(props.cart))
-const discountTotal = computed(() => cartDiscountTotal(props.cart))
 const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(props.needsDelivery, props.deliveryPrice))
 // Sale amounts only — deposit / prior-debt payment is settled separately.
 const grandTotal = computed(() =>
-  checkoutSaleNet(subtotal.value, discountTotal.value, appliedDeliveryPrice.value))
+  checkoutSaleNet(subtotal.value, appliedDeliveryPrice.value))
 const due = computed(() => checkoutDue(grandTotal.value))
 const returnTotal = computed(() => grandTotal.value)
 const canComplete = computed(() =>
@@ -326,6 +339,7 @@ watch(() => props.cart.length, (length) => {
         v-model:pagination="pagination"
         :data="rows"
         :columns="columns"
+        :sort-options="sortOptions"
         :get-row-id="(row) => String(row.productId)"
         :empty-title="t('app.pos.emptyCart')"
         :empty-description="noEmptyDescription"

@@ -1,8 +1,8 @@
 """Backend support for the Stock page split: /stock/products + /stock/movements.
 
 Covers the required capabilities without adding new routes:
-- product list barcode-first search, brand filter, status filter, pagination, sort
-- movement list enrichment (barcode, qty in/out, balance before/after, user),
+- product list sku/name search, brand filter, status filter, pagination, sort
+- movement list enrichment (sku, qty in/out, balance before/after, user),
   filters (q, product, type, date range), pagination, sort
 - stock.view permission on the movement ledger
 - immutable movements: no write endpoints, no write access for stock.view users
@@ -15,7 +15,7 @@ from decimal import Decimal
 import pytest
 
 from tests.modules.pos.helpers import make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, deactivate_then_delete, login
+from tests.utils import admin_headers, create_user_with_role, deactivate_then_delete, login
 
 
 async def _create_brand(client, headers, code: str) -> dict:
@@ -30,14 +30,13 @@ async def _create_category(client, headers, code: str, name: str) -> dict:
     return response.json()["data"]
 
 
-async def _create_product(client, headers, *, tag: str, name: str, barcode: str, brand_id=None, category_id, status: str = "ACTIVE", selling_price: str = "10.00") -> dict:
+async def _create_product(client, headers, *, tag: str, name: str, sku: str, brand_id=None, category_id, status: str = "ACTIVE", selling_price: str = "10.00") -> dict:
     response = await client.post(
         "/api/v1/products",
         json={
-            "barcode": barcode,
+            "sku": sku,
             "name": name,
             "category_id": category_id,
-            "uom_id": str(DEFAULT_UOM_ID),
             "brand_id": brand_id,
             "selling_price": selling_price,
             "status": status,
@@ -52,8 +51,8 @@ async def _create_product(client, headers, *, tag: str, name: str, barcode: str,
 
 
 @pytest.mark.asyncio
-async def test_product_list_barcode_search_and_brand_filter(client):
-    """Barcode-first search + brand filter for the Products subpage."""
+async def test_product_list_sku_search_and_brand_filter(client):
+    """SKU/name search + brand filter for the Products subpage."""
     headers = await admin_headers(client)
     tag = uuid.uuid4().hex[:6]
     category = await _create_category(client, headers, f"C-{tag}", f"Cat {tag}")
@@ -61,23 +60,23 @@ async def test_product_list_barcode_search_and_brand_filter(client):
     brand_b = await _create_brand(client, headers, f"BB-{tag}")
 
     in_brand = await _create_product(
-        client, headers, tag=tag, name=f"Alpha Widget {tag}", barcode=f"880{tag}01", brand_id=brand_a["id"], category_id=category["id"]
+        client, headers, tag=tag, name=f"Alpha Widget {tag}", sku=f"880{tag}01", brand_id=brand_a["id"], category_id=category["id"]
     )
     other_brand = await _create_product(
-        client, headers, tag=tag, name=f"Beta Widget {tag}", barcode=f"880{tag}02", brand_id=brand_b["id"], category_id=category["id"]
+        client, headers, tag=tag, name=f"Beta Widget {tag}", sku=f"880{tag}02", brand_id=brand_b["id"], category_id=category["id"]
     )
     no_brand = await _create_product(
-        client, headers, tag=tag, name=f"Gamma Widget {tag}", barcode=f"880{tag}03", category_id=category["id"]
+        client, headers, tag=tag, name=f"Gamma Widget {tag}", sku=f"880{tag}03", category_id=category["id"]
     )
 
-    # Exact barcode search returns exactly that product.
-    barcode_hit = await client.get(f"/api/v1/products?q={in_brand['barcode']}", headers=headers)
-    assert barcode_hit.status_code == 200
-    rows = barcode_hit.json()["data"]
+    # Exact sku search returns exactly that product.
+    sku_hit = await client.get(f"/api/v1/products?q={in_brand['sku']}", headers=headers)
+    assert sku_hit.status_code == 200
+    rows = sku_hit.json()["data"]
     assert [row["id"] for row in rows] == [in_brand["id"]]
-    assert rows[0]["barcode"] == in_brand["barcode"]
+    assert rows[0]["sku"] == in_brand["sku"]
 
-    # Barcode prefix matches too (partial search).
+    # Sku prefix matches too (partial search).
     prefix = await client.get(f"/api/v1/products?q=880{tag}", headers=headers)
     ids = {row["id"] for row in prefix.json()["data"]}
     assert ids == {in_brand["id"], other_brand["id"], no_brand["id"]}
@@ -95,8 +94,6 @@ async def test_product_list_barcode_search_and_brand_filter(client):
 
     # Brand response data is present for the table.
     assert in_brand["brand_name"] == f"Brand BA-{tag}"
-    assert in_brand["uom_symbol"]
-    assert "expiry_date" in in_brand
     assert in_brand["image_url"] is None
 
     for product in (in_brand, other_brand, no_brand):
@@ -117,14 +114,14 @@ async def test_product_list_status_filter_and_pagination(client):
     ).json()["data"]
 
     active = await _create_product(
-        client, headers, tag=tag, name=f"Active Widget {tag}", barcode=f"881{tag}01", category_id=category["id"]
+        client, headers, tag=tag, name=f"Active Widget {tag}", sku=f"881{tag}01", category_id=category["id"]
     )
     inactive = await _create_product(
         client,
         headers,
         tag=tag,
         name=f"Inactive Widget {tag}",
-        barcode=f"881{tag}02",
+        sku=f"881{tag}02",
         category_id=category["id"],
         status="INACTIVE",
     )
@@ -160,10 +157,10 @@ async def test_product_list_sort(client):
     tag = uuid.uuid4().hex[:6]
     category = await _create_category(client, headers, f"CS-{tag}", f"CatSort {tag}")
     first = await _create_product(
-        client, headers, tag=tag, name=f"A-Sort Widget {tag}", barcode=f"882{tag}01", category_id=category["id"], selling_price="5.00"
+        client, headers, tag=tag, name=f"A-Sort Widget {tag}", sku=f"882{tag}01", category_id=category["id"], selling_price="5.00"
     )
     second = await _create_product(
-        client, headers, tag=tag, name=f"B-Sort Widget {tag}", barcode=f"882{tag}02", category_id=category["id"], selling_price="9.00"
+        client, headers, tag=tag, name=f"B-Sort Widget {tag}", sku=f"882{tag}02", category_id=category["id"], selling_price="9.00"
     )
 
     by_name_desc = await client.get(f"/api/v1/products?q=Sort Widget {tag}&sort=-name", headers=headers)
@@ -188,7 +185,7 @@ async def test_product_list_sort(client):
 
 @pytest.mark.asyncio
 async def test_movement_rows_expose_movements_page_columns(client):
-    """Date, document, product, barcode, type, UOM, qty in/out, balances, user."""
+    """Date, document, product, sku, type, qty in/out, balances, user."""
     headers = await admin_headers(client)
     tag = uuid.uuid4().hex[:6]
     product = await make_stocked_product(client, headers, sku=f"MVW-{tag}", name=f"Mov Widget {tag}", qty="10", unit_cost="2.00")
@@ -216,8 +213,7 @@ async def test_movement_rows_expose_movements_page_columns(client):
     # Common enrichment on every row.
     for row in rows:
         assert row["product_name"] == product["name"]
-        assert row["barcode"] == product["barcode"]
-        assert row["uom_symbol"]
+        assert row["sku"] == product["sku"]
         assert row["user"]
         assert row["created_at"]
         assert row["document_no"]

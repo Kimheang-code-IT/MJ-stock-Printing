@@ -47,7 +47,6 @@ class SummaryOut(BaseModel):
     customer_debt: Decimal
     supplier_debt: Decimal
     damage_loss: Decimal
-    expiry_loss: Decimal
     pending_delivery_notes_count: int
 
 

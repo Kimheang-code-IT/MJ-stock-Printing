@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { appModules, type ModuleConfig } from '~/config/modules'
 import type { AppRecord } from '~/config/admin-seed'
-import type { ApiMeta } from '~/types/stock-pos/common'
+import type { ApiMeta } from '~/types/mj/common'
 import type { EntityListQuery } from '~/repositories/contracts/entities'
 import { useEntityRepository } from '~/repositories/index'
 import { isApiCollection } from '~/utils/constants/api-endpoints'

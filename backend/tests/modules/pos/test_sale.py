@@ -1,4 +1,4 @@
-"""POS sale completion: atomicity, payments, discounts, oversell (spec 2.1.7)."""
+"""POS sale completion: atomicity, payments, oversell (spec 2.1.7)."""
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -10,7 +10,7 @@ from tests.modules.pos.helpers import (
     make_customer,
     make_stocked_product,
 )
-from tests.utils import admin_headers, create_user_with_role, login
+from tests.utils import admin_headers
 
 
 async def _cash_sale(client, headers, product_id, *, quantity="3", amount="100.00", **extra):
@@ -186,91 +186,6 @@ async def test_sale_rejects_unknown_product(client):
         headers=headers,
     )
     assert response.status_code == 404
-
-
-CASHIER_EMAIL = "cashier-nodisc@example.com"
-CASHIER_PASSWORD = "cashierpass1"
-
-
-@pytest.fixture
-async def cashier_headers(client, db_session):
-    await create_user_with_role(
-        db_session,
-        email=CASHIER_EMAIL,
-        password=CASHIER_PASSWORD,
-        role_name="Cashier NoDiscount",
-        permissions=["pos.access", "pos.print"],
-    )
-    await db_session.commit()
-    data = await login(client, CASHIER_EMAIL, CASHIER_PASSWORD)
-    return {"Authorization": f"Bearer {data['access_token']}"}
-
-
-@pytest.mark.asyncio
-async def test_discount_requires_permission(client, cashier_headers):
-    headers = await admin_headers(client)
-    product = await make_stocked_product(client, headers, sku="POS-5", name="Discount Widget")
-
-    denied = await client.post(
-        "/api/v1/pos/sales",
-        json={
-            "payment_method": "CASH",
-            "amount_received": "100.00",
-            "items": [{"product_id": product["id"], "quantity": "1", "discount_amount": "1.00"}],
-        },
-        headers=cashier_headers,
-    )
-    assert denied.status_code == 409
-
-    # Admin (all permissions) may discount.
-    allowed = await client.post(
-        "/api/v1/pos/sales",
-        json={
-            "payment_method": "CASH",
-            "amount_received": "100.00",
-            "items": [{"product_id": product["id"], "quantity": "1", "discount_amount": "1.00"}],
-        },
-        headers=headers,
-    )
-    assert allowed.status_code == 201, allowed.text
-    sale = allowed.json()["data"]
-    assert Decimal(sale["discount_amount"]) == Decimal("1.00")
-    assert Decimal(sale["grand_total"]) == Decimal("9.00")
-
-
-@pytest.mark.asyncio
-async def test_discount_respects_maximum_setting(client, db_session):
-    headers = await admin_headers(client)
-    product = await make_stocked_product(client, headers, sku="POS-6", name="Capped Widget")
-
-    from sqlalchemy import delete
-
-    from app.modules.administration.models import SystemSetting
-
-    db_session.add(
-        SystemSetting(group_name="pos", key="pos.maximum_discount", value={"v": 5})
-    )
-    await db_session.commit()
-    try:
-        response = await client.post(
-            "/api/v1/pos/sales",
-            json={
-                "payment_method": "CASH",
-                "amount_received": "100.00",
-                "items": [{"product_id": product["id"], "quantity": "1", "discount_amount": "2.00"}],
-            },
-            headers=headers,
-        )
-        assert response.status_code == 422
-    finally:
-        # The setting is global state in the shared test database — remove it so
-        # later tests keep the default (no cap).
-        await db_session.execute(
-            delete(SystemSetting).where(
-                SystemSetting.group_name == "pos", SystemSetting.key == "pos.maximum_discount"
-            )
-        )
-        await db_session.commit()
 
 
 @pytest.mark.asyncio

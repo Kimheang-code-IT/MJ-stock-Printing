@@ -1,7 +1,7 @@
 /** Shared Stock & POS option lists. */
 export const PAYMENT_METHODS = ['Cash', 'Card', 'Mobile Payment', 'Bank Transfer', 'Credit'] as const
 
-export const STOCK_OPERATION_TYPES = ['stock_in', 'adjustment', 'damage', 'expiry'] as const
+export const STOCK_OPERATION_TYPES = ['stock_in', 'adjustment', 'damage'] as const
 
 export type StockOperationType = (typeof STOCK_OPERATION_TYPES)[number]
 
@@ -15,7 +15,6 @@ export const STOCK_OPERATION_META: Record<StockOperationType, { label: string, i
   stock_in: { label: 'Purchase Stock', icon: 'i-lucide-package-plus', color: 'success' },
   adjustment: { label: 'Adjustment', icon: 'i-lucide-scale', color: 'primary' },
   damage: { label: 'Damage', icon: 'i-lucide-package-x', color: 'warning' },
-  expiry: { label: 'Expiry', icon: 'i-lucide-calendar-x', color: 'error' },
 }
 
 /** Backend permission required by each product row stock action. */
@@ -23,5 +22,4 @@ export const STOCK_OPERATION_PERMISSIONS: Record<StockOperationType, string> = {
   stock_in: 'stock.in',
   adjustment: 'stock.adjust',
   damage: 'stock.damage',
-  expiry: 'stock.expire',
 }

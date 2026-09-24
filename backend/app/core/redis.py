@@ -4,7 +4,7 @@ from redis import asyncio as aioredis
 
 from app.core.config import settings
 
-logger = logging.getLogger("stock_pos.redis")
+logger = logging.getLogger("mj.redis")
 
 _redis: aioredis.Redis | None = None
 

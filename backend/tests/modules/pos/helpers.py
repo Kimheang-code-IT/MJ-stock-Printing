@@ -2,9 +2,6 @@
 
 from decimal import Decimal
 
-from tests.utils import DEFAULT_UOM_ID
-
-
 
 async def make_stocked_product(client, headers, *, sku: str, name: str, qty: str = "10", unit_cost: str = "2.00", selling_price: str = "10.00") -> dict:
     category = (
@@ -19,7 +16,6 @@ async def make_stocked_product(client, headers, *, sku: str, name: str, qty: str
                 "sku": sku,
                 "name": name,
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": selling_price,
             },
             headers=headers,

@@ -21,6 +21,7 @@ describe('party history normalizer', () => {
       paidAmount: 60,
       debtAmount: 40,
       status: 'PARTIAL',
+      returnable: true,
     })
   })
 
@@ -35,6 +36,24 @@ describe('party history normalizer', () => {
     expect(row.documentNo).toBe('PIN-1')
     expect(row.total).toBe(250)
     expect(row.status).toBe('CONFIRMED')
+    expect(row.returnable).toBe(true)
+  })
+
+  it('marks fully returned documents as not returnable', () => {
+    const sale = normalizePartyHistory('customer', {
+      id: 's2',
+      invoice_no: 'INV-2',
+      sale_status: 'RETURNED',
+      payment_status: 'PAID',
+    })
+    expect(sale.returnable).toBe(false)
+
+    const purchase = normalizePartyHistory('supplier', {
+      id: 't2',
+      document_no: 'PIN-2',
+      status: 'CANCELLED',
+    })
+    expect(purchase.returnable).toBe(false)
   })
 
   it('exposes an inclusive YYYY-MM-DD day bucket', () => {

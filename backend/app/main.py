@@ -17,7 +17,7 @@ from app.core.redis import close_redis
 from app.core.scheduler import start_backend_scheduler
 
 setup_logging()
-logger = logging.getLogger("stock_pos")
+logger = logging.getLogger("mj")
 
 
 @asynccontextmanager
@@ -36,18 +36,18 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to sync permission catalog / Administrator role on startup")
     stop_scheduler = None
-    scheduler_task = None
+    scheduler_tasks: list[asyncio.Task] = []
     if settings.scheduler_enabled:
-        stop_scheduler, scheduler_task = start_backend_scheduler()
+        stop_scheduler, scheduler_tasks = start_backend_scheduler()
     try:
         yield
     finally:
         if stop_scheduler is not None:
             stop_scheduler.set()
-        if scheduler_task is not None:
-            scheduler_task.cancel()
+        for task in scheduler_tasks:
+            task.cancel()
             try:
-                await scheduler_task
+                await task
             except asyncio.CancelledError:
                 pass
         await close_redis()

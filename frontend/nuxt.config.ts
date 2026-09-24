@@ -16,7 +16,7 @@ export default defineNuxtConfig({
 
   app: {
     head: {
-      title: 'Yoeun Sokhon Pharmacy',
+      title: 'MJ Printing',
       htmlAttrs: {
         lang: 'en',
       },
@@ -25,7 +25,7 @@ export default defineNuxtConfig({
         { name: 'theme-color', content: '#000000' },
         {
           name: 'description',
-          content: 'Yoeun Sokhon Pharmacy — stock, sales and point-of-sale management.',
+          content: 'MJ Printing — stock, sales and point-of-sale management.',
         },
       ],
       link: [
@@ -56,7 +56,7 @@ export default defineNuxtConfig({
       csrfHeaderName: import.meta.env.NUXT_PUBLIC_CSRF_HEADER_NAME || 'X-CSRF-Token',
       appVersion: import.meta.env.NUXT_PUBLIC_APP_VERSION || '0.1.0',
       // Canonical public origin for Open Graph / Twitter image URLs (no trailing slash).
-      // Example: https://app.stockpos.example — required for link previews to show images.
+      // Example: https://app.mj.example — required for link previews to show images.
       siteUrl: import.meta.env.NUXT_PUBLIC_SITE_URL || '',
     }
   },

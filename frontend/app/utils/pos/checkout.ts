@@ -14,9 +14,9 @@ export function checkoutDeliveryFee(needsDelivery: boolean, deliveryPrice: numbe
   return roundMoney(Math.max(0, Number(deliveryPrice) || 0))
 }
 
-/** Subtotal − discount + delivery — the current sale only (never includes old debts). */
-export function checkoutSaleNet(subtotal: number, discount: number, deliveryPrice = 0) {
-  return roundMoney(Math.max(0, subtotal - discount + deliveryPrice))
+/** Subtotal + delivery — the current sale only (never includes old debts). */
+export function checkoutSaleNet(subtotal: number, deliveryPrice = 0) {
+  return roundMoney(Math.max(0, subtotal + deliveryPrice))
 }
 
 /** Selected open invoices to settle at checkout (separate from sale grand total). */

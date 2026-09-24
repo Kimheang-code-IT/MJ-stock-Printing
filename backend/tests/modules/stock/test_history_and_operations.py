@@ -10,41 +10,6 @@ from tests.utils import admin_headers
 
 
 @pytest.mark.asyncio
-async def test_damage_dialog_excludes_expire(client):
-    """Expiry is a separate operation and never folds into the Damage dialog."""
-    headers = await admin_headers(client)
-    tag = uuid.uuid4().hex[:6]
-    product = await make_stocked_product(client, headers, sku=f"EXPD-{tag}", name=f"Expiry Widget {tag}", qty="10")
-    pid = product["id"]
-    tracked = await client.patch(f"/api/v1/products/{pid}", json={"expiry_tracking": True}, headers=headers)
-    assert tracked.status_code == 200, tracked.text
-
-    damaged = await client.post(
-        "/api/v1/stock/damage",
-        json={"items": [{"product_id": pid, "quantity": "1", "reason": "dropped"}]},
-        headers=headers,
-    )
-    assert damaged.status_code == 201, damaged.text
-    expired = await client.post(
-        "/api/v1/stock/expire",
-        json={"items": [{"product_id": pid, "quantity": "1", "expiry_date": "2026-01-01", "note": "old"}]},
-        headers=headers,
-    )
-    assert expired.status_code == 201, expired.text
-
-    damage = await client.get(f"/api/v1/stock/products/{pid}/history?type=damage", headers=headers)
-    rows = damage.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["type"] == "Damage"
-    assert rows[0]["note"] == "dropped"
-
-    # Full history still contains the EXPIRE row (admin/debug view).
-    everything = await client.get(f"/api/v1/stock/products/{pid}/history?type=all", headers=headers)
-    types = {row["type"] for row in everything.json()["data"]}
-    assert "Expire" in types
-
-
-@pytest.mark.asyncio
 async def test_history_kind_rows_and_display_labels(client):
     headers = await admin_headers(client)
     tag = uuid.uuid4().hex[:6]
@@ -71,19 +36,17 @@ async def test_history_kind_rows_and_display_labels(client):
     types = {row["type"] for row in in_rows}
     assert kinds == {"stock_in"}
     assert types == {"Stock In", "Sale Return"}
-    # Stock In dialog columns: product name, unit snapshot and per-unit price.
+    # Stock In dialog columns: product name and per-unit price.
     assert all(row["product"] == product["name"] for row in in_rows)
-    assert all(row["unit"] for row in in_rows)
     assert all(Decimal(row["unit_price"]) > 0 for row in in_rows)
 
     stock_out = await client.get(f"/api/v1/stock/products/{pid}/history?type=stock_out", headers=headers)
     out_rows = stock_out.json()["data"]
     assert {row["type"] for row in out_rows} == {"Sale"}
     assert all(Decimal(row["qty"]) < 0 for row in out_rows)
-    # Stock Out dialog columns: invoice no, product, unit, unit price.
+    # Stock Out dialog columns: invoice no, product, unit price.
     assert all(row["reference"] for row in out_rows)
     assert all(row["product"] == product["name"] for row in out_rows)
-    assert all(row["unit"] for row in out_rows)
     assert all(Decimal(row["unit_price"]) > 0 for row in out_rows)
     # SALE rows carry the sale linkage for the invoice detail click-through.
     assert all(row["reference_type"] == "sale" for row in out_rows)

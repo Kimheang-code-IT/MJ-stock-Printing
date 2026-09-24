@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExportFieldOption, ExportFormat, ExportRequest } from '~/types/stock-pos/export'
+import type { ExportFieldOption, ExportFormat, ExportRequest } from '~/types/mj/export'
 
 const open = defineModel<boolean>('open', { default: false })
 

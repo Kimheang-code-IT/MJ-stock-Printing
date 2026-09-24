@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, login
 
 VIEWER_EMAIL = "dash-viewer@example.com"
 VIEWER_PASSWORD = "viewerpass1"
@@ -48,7 +48,6 @@ async def _seed_transactions(client, headers):
                 "sku": f"DASH-{tag}",
                 "name": f"Dash Widget {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "10.00",
                 "minimum_stock": "4",
             },
@@ -141,25 +140,23 @@ async def test_dashboard_summary_reconciles_with_transactions(client, dashboard_
     assert _delta(dashboard_baseline, data, "cards", "supplier_debt") == Decimal("0.00")
     assert _delta(dashboard_baseline, data, "cards", "gross_profit") == Decimal("40.00")
 
-    assert _delta(dashboard_baseline, data, "summary", "total_income") == Decimal("50.00")
-    assert _delta(dashboard_baseline, data, "summary", "total_expense") == Decimal("20.00")
+    assert _delta(dashboard_baseline, data, "summary", "total_income") == Decimal("30.00")
+    assert _delta(dashboard_baseline, data, "summary", "total_expense") == Decimal("40.00")
     assert _delta(dashboard_baseline, data, "summary", "gross_profit") == Decimal("40.00")
-    # Net income = gross profit (40) - damage loss (2) - expiry loss (0)
-    # - operating expenses (20).
-    assert _delta(dashboard_baseline, data, "summary", "net_income") == Decimal("18.00")
+    # Net income = gross profit (40) - damage loss (2) - total expense (40).
+    assert _delta(dashboard_baseline, data, "summary", "net_income") == Decimal("-2.00")
     # Both seeded sales happened today, i.e. inside the calendar month.
     assert _delta(dashboard_baseline, data, "summary", "sales_this_month_count") == Decimal("2")
     assert _delta(dashboard_baseline, data, "summary", "sales_this_month_amount") == Decimal("50.00")
     assert _delta(dashboard_baseline, data, "summary", "customer_debt") == Decimal("20.00")
     assert _delta(dashboard_baseline, data, "summary", "damage_loss") == Decimal("2.00")
-    assert _delta(dashboard_baseline, data, "summary", "expiry_loss") == Decimal("0.00")
     assert isinstance(data["summary"]["pending_delivery_notes_count"], int)
 
     # Chart: exactly 7 points for 7d; today's bucket carries the deltas.
     chart = data["chart"]
     assert len(chart) == 7
-    assert Decimal(chart[-1]["income"]) - Decimal(dashboard_baseline["chart"][-1]["income"]) == Decimal("50.00")
-    assert Decimal(chart[-1]["expense"]) - Decimal(dashboard_baseline["chart"][-1]["expense"]) == Decimal("20.00")
+    assert Decimal(chart[-1]["income"]) - Decimal(dashboard_baseline["chart"][-1]["income"]) == Decimal("30.00")
+    assert Decimal(chart[-1]["expense"]) - Decimal(dashboard_baseline["chart"][-1]["expense"]) == Decimal("40.00")
     assert int(chart[-1]["sales_count"]) - int(dashboard_baseline["chart"][-1]["sales_count"]) == 2
 
     extras = data["extras"]
@@ -196,7 +193,7 @@ async def test_dashboard_month_and_custom_periods(client, dashboard_baseline):
     assert len(custom_data["chart"]) == 1
     assert Decimal(custom_data["chart"][0]["income"]) - Decimal(
         dashboard_baseline["chart"][-1]["income"]
-    ) >= Decimal("50.00")
+    ) >= Decimal("30.00")
 
     bad = await client.get("/api/v1/dashboard/summary?period=custom", headers=headers)
     assert bad.status_code == 422
@@ -255,7 +252,7 @@ async def test_dashboard_hides_profit_without_permission(client, dashboard_viewe
     assert data["summary"]["net_income"] is None
     # Non-sensitive values still visible.
     assert _delta(dashboard_baseline, data, "cards", "today_sales") == Decimal("50.00")
-    assert _delta(dashboard_baseline, data, "summary", "total_income") == Decimal("50.00")
+    assert _delta(dashboard_baseline, data, "summary", "total_income") == Decimal("30.00")
     assert _delta(dashboard_baseline, data, "summary", "sales_this_month_count") == Decimal("2")
     assert _delta(dashboard_baseline, data, "summary", "damage_loss") == Decimal("2.00")
     assert _delta(dashboard_baseline, data, "summary", "pending_delivery_notes_count") == 0

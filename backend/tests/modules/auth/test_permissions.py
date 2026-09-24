@@ -1,8 +1,6 @@
 from app.core.permissions import (
     PERMISSION_CATALOG,
-    ASSIGNABLE_PERMISSIONS,
     SUPER_ADMIN_PERMISSION,
-    build_all_permissions,
     cashier_permissions,
     effective_permissions,
     normalize_role_permissions,
@@ -15,11 +13,10 @@ def test_permission_catalog_matches_spec():
         "dashboard": {"view", "view_profit"},
         "category": {"view", "create", "update", "delete"},
         "brand": {"view", "create", "update", "delete"},
-        "uom": {"view", "create", "update", "delete"},
-        "stock": {"view", "in", "adjust", "damage", "expire"},
+        "stock": {"view", "in", "adjust", "damage"},
         "product": {"create", "update", "delete"},
         "supplier": {"view", "create", "update", "delete", "debt.pay"},
-        "pos": {"access", "discount", "debt_sale", "print"},
+        "pos": {"access", "debt_sale", "print"},
         "customer": {"view", "create", "update", "delete", "debt.pay"},
         "delivery": {"view", "create", "update", "confirm", "deliver", "cancel"},
         "report": {"sales", "purchase", "customer_debt", "supplier_debt", "finance"},
@@ -29,6 +26,7 @@ def test_permission_catalog_matches_spec():
         "sequence": {"view", "create", "update", "delete"},
         "audit": {"view"},
         "settings": {"view", "update"},
+        "backup": {"run", "restore"},
     }
     assert {module: set(actions) for module, actions in PERMISSION_CATALOG.items()} == expected
 

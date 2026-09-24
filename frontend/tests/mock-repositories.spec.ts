@@ -7,10 +7,9 @@ import {
 } from './support/repositories-mock/entities'
 import { mockRecords } from './support/mocks/db'
 import {
-  convertToBase,
+  divideDecimalSafe,
   multiplyDecimalSafe,
-  normalizeUomConversions,
-} from '../app/utils/stock/uom-conversions'
+} from '../app/utils/stock/numbers'
 
 describe('mock entity repository', () => {
   it('lists seeded collections with pagination meta', async () => {
@@ -537,83 +536,7 @@ describe('mock finance entries (Finance Report table)', () => {
   })
 })
 
-describe('sale price versions (spec: product_sale_prices)', () => {
-  it('seeds exactly one POS-active version per product, matching product.salePrice', () => {
-    const prices = mockRecords('productSalePrices')
-    const products = mockRecords('products')
-    expect(prices.length).toBeGreaterThanOrEqual(products.length)
-
-    for (const product of products) {
-      const rows = prices.filter(row => String(row.productId) === String(product.id))
-      expect(rows.length).toBeGreaterThanOrEqual(1)
-      const active = rows.filter(row => row.isActive === true)
-      expect(active).toHaveLength(1)
-      expect(Number(active[0]!.salePrice)).toBe(Number(product.salePrice))
-      expect(rows.every(row => Number(row.version) >= 1)).toBe(true)
-      expect(new Set(rows.map(row => Number(row.version))).size).toBe(rows.length)
-    }
-  })
-
-  it('seeds multiple versions on some products (history is not always one row)', () => {
-    const products = mockRecords('products')
-    const multi = products.filter(product =>
-      mockRecords('productSalePrices').filter(row => String(row.productId) === String(product.id)).length > 1)
-    expect(multi.length).toBeGreaterThan(0)
-  })
-
-  it('inserts active sale-price version 1 when a product is created', async () => {
-    const repository = createMockEntityRepository()
-    const created = await repository.create('products', {
-      code: 'PRD-TEST', name: 'Test Product', costPrice: 1, salePrice: 2.5, quantity: 10, status: 'Active',
-    })
-    const rows = mockRecords('productSalePrices').filter(row => String(row.productId) === String(created.id))
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ version: 1, isActive: true, salePrice: 2.5 })
-  })
-
-  it('persists activation: unchecking others, copying the price onto the product', async () => {
-    const queries = createMockStockQueryRepository()
-    const product = mockRecords('products').find(row =>
-      mockRecords('productSalePrices').filter(p => String(p.productId) === String(row.id)).length > 1)!
-    const rows = mockRecords('productSalePrices').filter(row => String(row.productId) === String(product.id))
-    const next = rows.find(row => !row.isActive)!
-
-    const activated = await queries.activateSalePrice(String(product.id), String(next.id))
-
-    expect(activated.isActive).toBe(true)
-    const after = mockRecords('productSalePrices').filter(row => String(row.productId) === String(product.id))
-    expect(after.filter(row => row.isActive === true)).toHaveLength(1)
-    expect(after.find(row => row.isActive)?.version).toBe(Number(next.version))
-    expect(Number(mockRecords('products').find(row => row.id === product.id)?.salePrice)).toBe(Number(next.salePrice))
-    // Repository list matches the persisted state (newest version first).
-    const listed = await queries.listSalePrices(String(product.id))
-    expect(listed.items[0]!.version).toBe(Math.max(...after.map(row => Number(row.version))))
-  })
-
-  it('adds a sale price as version MAX+1, active, and copies it onto the product', async () => {
-    const queries = createMockStockQueryRepository()
-    const product = mockRecords('products').find(row =>
-      mockRecords('productSalePrices').filter(p => String(p.productId) === String(row.id)).length > 1)!
-    const before = mockRecords('productSalePrices').filter(row => String(row.productId) === String(product.id))
-    const maxVersion = Math.max(...before.map(row => Number(row.version)))
-
-    const created = await queries.addSalePrice(String(product.id), { date: '2100-01-01', salePrice: 12.34 })
-
-    expect(created.version).toBe(maxVersion + 1)
-    expect(created.isActive).toBe(true)
-    const after = mockRecords('productSalePrices').filter(row => String(row.productId) === String(product.id))
-    expect(after.filter(row => row.isActive === true)).toHaveLength(1)
-    expect(Number(after.find(row => row.isActive)?.salePrice)).toBe(12.34)
-    expect(Number(mockRecords('products').find(row => row.id === product.id)?.salePrice)).toBe(12.34)
-  })
-
-  it('rejects sale prices that are not positive', async () => {
-    const queries = createMockStockQueryRepository()
-    const product = mockRecords('products')[0]!
-    await expect(queries.addSalePrice(String(product.id), { date: '2100-01-01', salePrice: 0 }))
-      .rejects.toThrow(/greater than zero/i)
-  })
-
+describe('product-scoped stock queries (mock)', () => {
   it('lists product history filtered by kind without fetching every movement', async () => {
     const queries = createMockStockQueryRepository()
     const product = mockRecords('products').find(row =>
@@ -692,36 +615,14 @@ describe('sale price versions (spec: product_sale_prices)', () => {
   })
 })
 
-describe('UOM Pricing rows (spec §2.1.3: Convert UOM, stock always in base UOM)', () => {
-  it('rejects duplicate Original UOMs', () => {
-    const rows = [
-      { uomId: 'uom2', uomSymbol: 'box', convertUomId: 'uom3', factorToBase: 12, costPrice: null, salePrice: 9.6, isDefaultSale: false },
-    ]
-    expect(() => normalizeUomConversions(
-      [...rows, { ...rows[0] }],
-      'uom3',
-    )).toThrow(/duplicate/i)
-  })
-
-  it('derives and persists cost from base cost × factor when cost is empty', () => {
-    const rows = normalizeUomConversions(
-      [{ uomId: 'uom2', uomSymbol: 'box', convertUomId: 'uom3', factorToBase: 12, costPrice: null, salePrice: 9.6, isDefaultSale: false }],
-      'uom3',
-      { baseCostPrice: 0.5 },
-    )
-    expect(rows).toHaveLength(1)
-    expect(rows[0]!.costPrice).toBe(6)
-    expect(rows[0]!.salePrice).toBe(9.6)
-  })
-
-  it('keeps decimal factors exact (no binary-float drift)', () => {
+describe('decimal-safe stock math', () => {
+  it('keeps decimal math exact (no binary-float drift)', () => {
     expect(multiplyDecimalSafe('1.1', 3)).toBe(3.3)
-    expect(convertToBase(2, '1.5')).toBe(3)
-    expect(convertToBase('0.1', 3)).toBe(0.3)
+    expect(divideDecimalSafe(3, '1.5')).toBe(2)
     expect(multiplyDecimalSafe('0.1', 0.2)).toBe(0.02)
   })
 
-  it('stock in 2 box (factor 12) adds +24 in the base UOM and snapshots the line UOM', async () => {
+  it('stock in adds the entered quantity and snapshots the cost', async () => {
     const repository = createMockPosRepository()
     const product = mockRecords('products').find(row => String(row.id) === 'prd1')!
     const before = Number(product.quantity)
@@ -731,47 +632,41 @@ describe('UOM Pricing rows (spec §2.1.3: Convert UOM, stock always in base UOM)
       type: 'stock_in',
       productId: 'prd1',
       quantity: 2,
-      uomId: 'uom2',
-      uomSymbol: 'box',
-      factorToBase: 12,
       unitCost: 6,
     })
-    expect(Number(record.quantity)).toBe(24)
-    expect(Number(product.quantity)).toBe(before + 24)
+    expect(Number(record.quantity)).toBe(2)
+    expect(Number(product.quantity)).toBe(before + 2)
 
     const movement = mockRecords('stockMovements')[0]!
-    expect(Number(movement.quantity)).toBe(24)
-    expect(String(movement.uom)).toBe('box')
-    expect(Number(movement.unitCost)).toBe(0.5)
+    expect(Number(movement.quantity)).toBe(2)
+    expect(Number(movement.unitCost)).toBe(6)
   })
 
-  it('POS sell 1 box stocks out -12 base and prices the line at the box price', async () => {
+  it('POS sell stocks out the entered quantity at the line price', async () => {
     const repository = createMockPosRepository()
     const product = mockRecords('products').find(row => String(row.id) === 'prd1')!
     const before = Number(product.quantity)
 
     const sale = await repository.completeSale({
-      items: [{ productId: 'prd1', quantity: 1, unitPrice: 9.6, uomId: 'uom2', uomSymbol: 'box', factorToBase: 12 }],
+      items: [{ productId: 'prd1', quantity: 1, unitPrice: 9.6 }],
       paymentMethod: 'Cash',
       paidAmount: 9.6,
     })
     const line = (sale.items as Array<Record<string, unknown>>)[0]!
     expect(Number(line.quantity)).toBe(1)
     expect(Number(line.price)).toBe(9.6)
-    expect(String(line.uom)).toBe('box')
-    expect(Number(product.quantity)).toBe(before - 12)
+    expect(Number(product.quantity)).toBe(before - 1)
 
     const movement = mockRecords('stockMovements')[0]!
-    expect(Number(movement.quantity)).toBe(-12)
-    expect(String(movement.uom)).toBe('box')
+    expect(Number(movement.quantity)).toBe(-1)
   })
 
-  it('still blocks oversell against base stock when a large factor is used', async () => {
+  it('still blocks oversell against available stock', async () => {
     const repository = createMockPosRepository()
     const product = mockRecords('products').find(row => String(row.id) === 'prd1')!
     const baseStock = Number(product.quantity)
     await expect(repository.completeSale({
-      items: [{ productId: 'prd1', quantity: baseStock, unitPrice: 9.6, uomId: 'uom2', uomSymbol: 'box', factorToBase: 12 }],
+      items: [{ productId: 'prd1', quantity: baseStock + 1, unitPrice: 9.6 }],
       paymentMethod: 'Cash',
       paidAmount: 0,
     })).rejects.toThrow(/insufficient stock/i)
@@ -793,7 +688,7 @@ describe('mock complete purchase (Stock In) command', () => {
     // 100 paid of a 12*3 + 5*2 = 46 total? keep it simple: partial payment.
     const record = await commands.createPurchase({
       lines: [
-        { productId: String(first.id), quantity: 3, unitCost: 12, uomSymbol: 'pcs' },
+        { productId: String(first.id), quantity: 3, unitCost: 12 },
         { productId: String(second.id), quantity: 5, unitCost: 2 },
       ],
       supplierId: 'sup2',

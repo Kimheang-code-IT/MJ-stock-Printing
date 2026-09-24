@@ -1,4 +1,4 @@
-import type { AppConfigLocalization } from '~/types/stock-pos/settings'
+import type { AppConfigLocalization } from '~/types/mj/settings'
 
 /** Defaults aligned with System Settings → Localization. */
 export const DEFAULT_FORMAT_CONFIG: AppConfigLocalization = {

@@ -16,14 +16,12 @@ class SalesReportRow(BaseModel):
     invoice_no: str
     customer_name: str | None
     product_name: str
-    # Legacy internal code: nullable since 0021 (barcode is operational).
+    # Legacy internal code: optional.
     sku: str | None = None
     quantity: Decimal
     returned_quantity: Decimal = Decimal("0")
     returnable_quantity: Decimal = Decimal("0")
     selling_price: Decimal
-    # Line discount (this sold line only).
-    discount_amount: Decimal
     sales_amount: Decimal
     return_amount: Decimal
     net_quantity: Decimal
@@ -39,8 +37,6 @@ class SalesReportRow(BaseModel):
     # Saved sale header (authoritative checkout values, repeated per line so the
     # SPA groups without recomputing from current product prices).
     subtotal: Decimal = Decimal("0")
-    # Sale-level discount total (line + header) = sales.discount_amount.
-    sale_discount: Decimal = Decimal("0")
     delivery_price: Decimal = Decimal("0")
     grand_total: Decimal = Decimal("0")
     paid_amount: Decimal = Decimal("0")
@@ -63,6 +59,10 @@ class PurchaseReportRow(BaseModel):
     returned_quantity: Decimal = Decimal("0")
     returnable_quantity: Decimal = Decimal("0")
     return_amount: Decimal = Decimal("0")
+    # Sold-by-area purchase line dimensions (NULL for count-based lines).
+    height: Decimal | None = None
+    width: Decimal | None = None
+    area_m2: Decimal | None = None
     cost_price: Decimal
     total_cost: Decimal
     paid_amount: Decimal
@@ -74,7 +74,6 @@ class PurchaseReportRow(BaseModel):
     # Header fields the purchase Edit form reloads (repeated per line; the SPA
     # groups rows client-side).
     note: str | None = None
-    discount_amount: Decimal = Decimal("0")
     tax_amount: Decimal = Decimal("0")
     # Tender recorded for the stock-in (earliest purchase/supplier-debt payment).
     payment_method: str | None = None
@@ -137,7 +136,6 @@ class FinanceReportOut(BaseModel):
     total_supplier_debt: Decimal
     cost_of_goods_sold: Decimal
     stock_damage_loss: Decimal
-    stock_expire_loss: Decimal
     gross_profit: Decimal
     operating_expenses: Decimal
     # Cash paid to suppliers in the period (purchase payments + debt repayments).

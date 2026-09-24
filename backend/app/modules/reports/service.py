@@ -95,11 +95,12 @@ class ReportsService:
                 SaleItem.product_id.label("product_id"),
                 SaleItem.quantity,
                 SaleItem.unit_price,
-                SaleItem.discount_amount,
                 SaleItem.line_total,
                 SaleItem.returned_quantity,
                 SaleItem.unit_cost,
-                SaleItem.factor_to_base,
+                SaleItem.height,
+                SaleItem.width,
+                SaleItem.area_m2,
                 User.full_name.label("cashier_name"),
                 Sale.debt_amount,
                 # Document currency of the sale — reprints and grouped report
@@ -109,7 +110,6 @@ class ReportsService:
                 # Saved sale header (repeat per line) so the SPA shows the real
                 # checkout values instead of recomputing them.
                 Sale.subtotal.label("subtotal"),
-                Sale.discount_amount.label("sale_discount"),
                 Sale.delivery_price.label("delivery_price"),
                 Sale.grand_total.label("grand_total"),
                 Sale.paid_amount.label("paid_amount"),
@@ -130,14 +130,12 @@ class ReportsService:
         returned = Decimal(row.returned_quantity)
         line_total = Decimal(row.line_total)
         unit_cost = Decimal(row.unit_cost)
-        factor = Decimal(row.factor_to_base or 1)
         net_quantity = quantity - returned
         return_amount = (line_total * returned / quantity).quantize(Q2) if quantity else Q2 * 0
         net_sales = line_total - return_amount
-        # unit_cost is per BASE unit in the canonical USD cost currency;
-        # quantity is in the entered UOM. Reconcile the factor, then convert
-        # to the document (sale) currency so the report line matches the invoice.
-        cost_usd = unit_cost * net_quantity * factor
+        # unit_cost is per unit in the canonical USD cost currency; convert to
+        # the document (sale) currency so the report line matches the invoice.
+        cost_usd = unit_cost * net_quantity
         cost = (
             (cost_usd * Decimal(row.exchange_rate or 1)).quantize(Q2)
             if str(row.currency or "USD").upper() == "KHR"
@@ -155,8 +153,11 @@ class ReportsService:
             "quantity": quantity,
             "returned_quantity": returned,
             "returnable_quantity": (quantity - returned).quantize(Q4),
+            # Sold-by-area sale line dimensions (NULL for count-based lines).
+            "height": row.height,
+            "width": row.width,
+            "area_m2": row.area_m2,
             "selling_price": Decimal(row.unit_price),
-            "discount_amount": Decimal(row.discount_amount),
             "sales_amount": line_total,
             "return_amount": return_amount,
             "net_quantity": net_quantity,
@@ -167,7 +168,6 @@ class ReportsService:
             "payment_method": payment_method,
             # Saved sale header — grouped report rows show these directly.
             "subtotal": Decimal(row.subtotal or 0),
-            "sale_discount": Decimal(row.sale_discount or 0),
             "delivery_price": Decimal(row.delivery_price or 0),
             "grand_total": Decimal(row.grand_total or 0),
             "paid_amount": Decimal(row.paid_amount or 0),
@@ -297,11 +297,13 @@ class ReportsService:
                 StockTransactionItem.returned_quantity,
                 StockTransactionItem.unit_cost,
                 StockTransactionItem.line_total,
+                StockTransactionItem.height,
+                StockTransactionItem.width,
+                StockTransactionItem.area_m2,
                 StockTransaction.status,
                 StockTransaction.currency,
                 StockTransaction.exchange_rate,
                 StockTransaction.note,
-                StockTransaction.discount_amount,
                 StockTransaction.tax_amount,
                 payment_method,
             )
@@ -385,6 +387,9 @@ class ReportsService:
                     "returned_quantity": returned,
                     "returnable_quantity": (quantity - returned).quantize(Q4),
                     "return_amount": (returned * unit_cost).quantize(Q2),
+                    "height": row.height,
+                    "width": row.width,
+                    "area_m2": row.area_m2,
                     "cost_price": unit_cost,
                     "total_cost": Decimal(row.line_total),
                     "paid_amount": Decimal(row.line_total) - remaining if debt else Decimal(row.line_total),
@@ -395,7 +400,6 @@ class ReportsService:
                     # Header fields the purchase Edit form reloads (repeated
                     # per line; the SPA groups rows client-side).
                     "note": row.note,
-                    "discount_amount": Decimal(row.discount_amount or 0),
                     "tax_amount": Decimal(row.tax_amount or 0),
                     "payment_method": row.payment_method,
                 }
@@ -666,16 +670,15 @@ class ReportsService:
             return Decimal(result.scalar_one())
 
         damage_loss = await loss("DAMAGE")
-        expiry_loss = await loss("EXPIRE")
 
         sold = await self.session.execute(
-            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity * SaleItem.factor_to_base), 0))
+            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity), 0))
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
         )
         restocked = await self.session.execute(
-            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost * SaleItem.factor_to_base), 0))
+            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost), 0))
             .select_from(SaleReturnItem)
             .join(SaleItem, SaleItem.id == SaleReturnItem.sale_item_id)
             .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
@@ -695,7 +698,7 @@ class ReportsService:
         # Total Expense = operating expenses + cash paid to suppliers; Net
         # Result includes operating expenses and supplier payments (spec 2.1.10).
         total_expense = operating_expenses + supplier_payments
-        net_result = gross_profit - damage_loss - expiry_loss - total_expense
+        net_result = gross_profit - damage_loss - total_expense
 
         return {
             "period_start": period_start,
@@ -707,7 +710,6 @@ class ReportsService:
             "total_supplier_debt": Decimal(supplier_debt.scalar_one()),
             "cost_of_goods_sold": cogs,
             "stock_damage_loss": damage_loss,
-            "stock_expire_loss": expiry_loss,
             "gross_profit": gross_profit,
             "operating_expenses": operating_expenses,
             "supplier_payments": supplier_payments,
@@ -817,6 +819,18 @@ class ReportsService:
             .where(Payment.payment_type.in_(("STOCK_IN_PAYMENT", "SUPPLIER_DEBT_PAYMENT")))
         )
 
+    def finance_ledger_stmt(self) -> select:
+        """Combined income + expense ledger (cash basis) used by both the Finance
+        Report table and the Dashboard income/expense chart + KPIs, so the two
+        views always reconcile.
+
+        Income = customer cash actually received; Expense = operating expenses
+        plus cash paid to suppliers."""
+        return self._finance_income_stmt().union_all(
+            self._finance_expense_stmt(),
+            self._finance_supplier_payment_stmt(),
+        )
+
     async def finance_entries(
         self,
         *,
@@ -829,14 +843,7 @@ class ReportsService:
     ) -> tuple[list[dict], int]:
         """Combined income + expense ledger table with date/type/search filters."""
         start_at, end_at = _range(start, end)
-        union = (
-            self._finance_income_stmt()
-            .union_all(
-                self._finance_expense_stmt(),
-                self._finance_supplier_payment_stmt(),
-            )
-            .subquery()
-        )
+        union = self.finance_ledger_stmt().subquery()
 
         # Accept INCOME|EXPENSE and lowercase variants.
         normalized_type = entry_type.strip().lower() if entry_type else None

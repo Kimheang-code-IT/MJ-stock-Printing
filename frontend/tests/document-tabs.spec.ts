@@ -30,37 +30,32 @@ function moduleFixture(overrides: Partial<ModuleConfig> = {}): ModuleConfig {
 describe('product document tabs (spec §5.9)', () => {
   const productModule = stockModules.find(item => item.collection === 'products')!
 
-  it('has exactly General | Pricing | Batches | Barcode — no Expire or Convert UOM tab', () => {
+  it('has exactly General — no Barcode, Pricing, Batches or Expire tab', () => {
     const tabs = moduleDocumentTabs(productModule)
-    expect(tabs.map(tab => tab.id)).toEqual(['general', 'pricing', 'batches', 'barcode'])
-    expect(tabs.map(tab => tab.labelKey)).toEqual([
-      'app.stock.tabGeneral',
-      'app.stock.tabPricing',
-      'app.stock.tabBatches',
-      'app.stock.tabBarcode',
-    ])
+    expect(tabs.map(tab => tab.id)).toEqual(['general'])
+    expect(tabs.map(tab => tab.labelKey)).toEqual(['app.stock.tabGeneral'])
   })
 
-  it('keeps General to identity fields (cost price / current stock removed)', () => {
+  it('keeps General to identity fields + the editable sale price', () => {
     const tabs = moduleDocumentTabs(productModule)
     const generalKeys = tabs[0]!.sections.flatMap(section =>
       section.fields.map(field => field.key))
     expect(generalKeys).toContain('name')
     expect(generalKeys).toContain('categoryId')
-    expect(generalKeys).toContain('uomId')
     expect(generalKeys).toContain('supplierId')
     // Cost Price and Current Stock are not editable document fields.
     expect(generalKeys).not.toContain('costPrice')
     expect(generalKeys).not.toContain('quantity')
-    // Sale price lives on the Pricing tab.
-    expect(generalKeys).not.toContain('salePrice')
+    // Sale price lives on the General tab.
+    expect(generalKeys).toContain('salePrice')
   })
 
-  it('binds the Pricing tab to uomConversions with the exact column contract', () => {
+  it('binds the General tab sale price to the editable number field', () => {
     const tabs = moduleDocumentTabs(productModule)
-    const pricingField = tabs[1]!.sections.flatMap(s => s.fields).find(f => f.key === 'uomConversions')
-    expect(pricingField?.type).toBe('uom-conversions')
-    expect(pricingField?.colSpan).toBe(2)
+    const generalFields = tabs[0]!.sections.flatMap(s => s.fields)
+    const salePriceField = generalFields.find(f => f.key === 'salePrice')
+    expect(salePriceField?.type).toBe('number')
+    expect(salePriceField?.required).toBe(true)
   })
 
   it('hides the Stock Costing toggles and the read-only Expire Date', () => {
@@ -74,9 +69,9 @@ describe('product document tabs (spec §5.9)', () => {
     expect(keys).not.toContain('expiryDate')
   })
 
-  it('create mode hides Barcode, Expire Date/batches and the Movements tab', () => {
+  it('create mode keeps only the General tab', () => {
     const tabs = moduleDocumentTabs(productModule, { isCreate: true })
-    expect(tabs.map(tab => tab.id)).toEqual(['general', 'pricing'])
+    expect(tabs.map(tab => tab.id)).toEqual(['general'])
 
     const sections = tabs.flatMap(tab => tab.sections)
     expect(sections.some(section => section.id === 'stock-expire')).toBe(false)
@@ -88,7 +83,7 @@ describe('product document tabs (spec §5.9)', () => {
     expect(keys).not.toContain('trackBatch')
     // Editable create inputs stay.
     expect(keys).toContain('name')
-    expect(keys).toContain('uomId')
+    expect(keys).toContain('salePrice')
   })
 })
 

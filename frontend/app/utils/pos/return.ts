@@ -3,13 +3,12 @@ import type { SaleDetail } from '~/repositories/contracts/entities'
 import {
   productImageUrl,
   roundMoney,
-  uomOptionsFor,
   type PosCartLine,
 } from '~/utils/pos/cart'
 
 /**
  * Build the POS edit-mode cart from an original sale: every sold line with its
- * original UOM, price, discount and full quantity so the invoice can be edited
+ * original price and full quantity so the invoice can be edited
  * (lines/prices/quantities) and re-saved via PATCH.
  */
 export function saleEditCartLines(
@@ -18,24 +17,19 @@ export function saleEditCartLines(
 ): PosCartLine[] {
   return sale.items.map((item) => {
     const product = productById.get(item.productId) || null
-    const baseQuantity = Number(item.quantity || 0) * Number(item.factorToBase || 1)
+    const quantity = Number(item.quantity || 0)
     return {
       productId: item.productId,
       name: item.name,
-      barcode: String(product?.barcode || ''),
-      uom: item.uom,
-      uomId: item.uomId || '',
-      factorToBase: item.factorToBase || 1,
-      uomOptions: product
-        ? uomOptionsFor(product)
-        : (item.uomId ? [{ label: item.uom, value: item.uomId }] : []),
       imageUrl: product ? productImageUrl(product) : null,
       // The edit reverses the original line back into stock first, so at least
       // the originally sold quantity is always available to keep.
-      availableStock: Number(product?.quantity || 0) + baseQuantity,
+      availableStock: Number(product?.quantity || 0) + quantity,
       unitPrice: roundMoney(item.unitPrice),
-      discountPercent: item.discountPercent,
-      quantity: Number(item.quantity || 0),
+      height: item.height,
+      width: item.width,
+      areaM2: item.areaM2,
+      quantity,
       saleItemId: item.id,
     }
   })
@@ -43,8 +37,8 @@ export function saleEditCartLines(
 
 /**
  * Build the POS return-mode cart from an original sale: only the lines that
- * still have a returnable quantity, carrying the original UOM, price,
- * discount and currency so Submit records a faithful Sale Return.
+ * still have a returnable quantity, carrying the original price and
+ * currency so Submit records a faithful Sale Return.
  */
 export function saleReturnCartLines(
   sale: SaleDetail,
@@ -58,17 +52,12 @@ export function saleReturnCartLines(
     lines.push({
       productId: item.productId,
       name: item.name,
-      barcode: String(product?.barcode || ''),
-      uom: item.uom,
-      uomId: item.uomId || '',
-      factorToBase: item.factorToBase || 1,
-      uomOptions: product
-        ? uomOptionsFor(product)
-        : (item.uomId ? [{ label: item.uom, value: item.uomId }] : []),
       imageUrl: product ? productImageUrl(product) : null,
       availableStock: returnable,
       unitPrice: roundMoney(item.unitPrice),
-      discountPercent: item.discountPercent,
+      height: item.height,
+      width: item.width,
+      areaM2: item.areaM2,
       quantity: returnable,
       saleItemId: item.id,
     })

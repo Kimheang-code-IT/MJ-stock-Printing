@@ -1,4 +1,4 @@
-import type { AppConfigLocalization } from '~/types/stock-pos/settings'
+import type { AppConfigLocalization } from '~/types/mj/settings'
 import { DEFAULT_FORMAT_CONFIG } from '~/utils/format/format-service'
 
 const LOCALE_BY_LANGUAGE: Record<string, string> = {

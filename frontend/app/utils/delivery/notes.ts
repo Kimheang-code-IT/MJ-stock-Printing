@@ -186,7 +186,6 @@ export interface DeliveryLineAvailability {
   saleItemId: string
   productId: string
   product: string
-  uomSymbol: string
   qtyOrdered: number
   qtyReserved: number
   qtyRemaining: number
@@ -203,7 +202,6 @@ export function deliverableLines(sale: AppRecord | null | undefined, notes: AppR
     saleItemId: String(item.id ?? ''),
     productId: String(item.productId ?? ''),
     product: String(item.name ?? ''),
-    uomSymbol: String(item.uomSymbol ?? item.uom ?? ''),
     qtyOrdered: Number(item.quantity ?? 0),
     qtyReserved: saleItemReservedQty(saleId, item.id, notes),
     qtyRemaining: Number(item.quantity ?? 0) - saleItemReservedQty(saleId, item.id, notes),
@@ -225,7 +223,6 @@ export interface DeliverableInvoiceItem {
   productId: string
   product: string
   sku: string
-  uomSymbol: string
   qtyOrdered: number
   qtyRemaining: number
 }
@@ -269,7 +266,6 @@ export function normalizeDeliverableInvoice(row: Record<string, unknown>): Deliv
       productId: String(item.productId ?? item.product_id ?? ''),
       product: String(item.product ?? item.product_name ?? item.name ?? ''),
       sku: String(item.sku ?? ''),
-      uomSymbol: String(item.uomSymbol ?? item.uom_symbol ?? item.uom ?? ''),
       qtyOrdered: num4(item.qtyOrdered ?? item.qty_ordered ?? item.quantity),
       qtyRemaining: num4(item.qtyRemaining ?? item.qty_remaining),
     })).filter(item => item.qtyRemaining > 0 && item.saleItemId),

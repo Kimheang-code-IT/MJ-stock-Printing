@@ -26,7 +26,7 @@ if (-not (Test-Path (Join-Path $infra ".env"))) {
 if ($Tag) { $env:IMAGE_TAG = $Tag }
 if ($Registry) { $env:IMAGE_REGISTRY = $Registry }
 if (-not $env:IMAGE_TAG) { $env:IMAGE_TAG = "latest" }
-if (-not $env:IMAGE_REGISTRY) { $env:IMAGE_REGISTRY = "ghcr.io/kimheang-code-it/stock_pos" }
+if (-not $env:IMAGE_REGISTRY) { $env:IMAGE_REGISTRY = "ghcr.io/kimheang-code-it/mj" }
 if (-not $env:PULL_POLICY) { $env:PULL_POLICY = "always" }
 
 $compose = @("-f", "docker-compose.yml")

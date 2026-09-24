@@ -19,9 +19,6 @@ export const ApiEndpoints = {
   CATEGORIES: '/api/v1/categories',
   CATEGORY: (id: string) => `/api/v1/categories/${id}`,
 
-  UOMS: '/api/v1/uoms',
-  UOM: (id: string) => `/api/v1/uoms/${id}`,
-
   BRANDS: '/api/v1/brands',
   BRAND: (id: string) => `/api/v1/brands/${id}`,
 
@@ -58,7 +55,6 @@ export const ApiEndpoints = {
   /** Original sale detail (lines + currency) for POS return mode. */
   SALE_DETAIL: (id: string) => `/api/v1/pos/sales/${id}`,
   POS_PRODUCT_SEARCH: '/api/v1/pos/products/search',
-  POS_PRODUCT_BARCODE: (barcode: string) => `/api/v1/pos/products/barcode/${encodeURIComponent(barcode)}`,
   POS_PRODUCT_DELIVERY_NOTE: (saleId: string) => `/api/v1/pos/sales/${saleId}/delivery`,
   /** Stock Out dialog click-through: invoice detail behind one SALE movement. */
   MOVEMENT_INVOICE: (movementId: string) => `/api/v1/stock/movements/${movementId}/invoice`,
@@ -90,16 +86,8 @@ export const ApiEndpoints = {
   STOCK_MOVEMENTS: '/api/v1/stock/movements',
   /** Product-scoped movement history (spec: GET /stock/products/{id}/history). */
   PRODUCT_HISTORY: (id: string) => `/api/v1/stock/products/${id}/history`,
-  /** Batch lots of one product (spec: GET /stock/products/{id}/batches). */
-  PRODUCT_BATCHES: (id: string) => `/api/v1/stock/products/${id}/batches`,
   /** Stock In cost lots for one product (spec: GET /stock/products/{id}/cost-history). */
   PRODUCT_COST_HISTORY: (id: string) => `/api/v1/stock/products/${id}/cost-history`,
-  /** Nested sale-price versions of one product (spec: /products/{id}/sale-prices). */
-  PRODUCT_SALE_PRICES: (productId: string) => `/api/v1/products/${productId}/sale-prices`,
-  PRODUCT_SALE_PRICE_ACTIVATE: (productId: string, priceId: string) =>
-    `/api/v1/products/${productId}/sale-prices/${priceId}/activate`,
-  /** Flat patch path for activate/deactivate (`{ isActive }`). */
-  SALE_PRICE: (priceId: string) => `/api/v1/products/sale-prices/${priceId}`,
 
   DASHBOARD: '/api/v1/dashboard/summary',
   /** Canonical Finance summary (spec §7 Reports). */
@@ -136,6 +124,10 @@ export const ApiEndpoints = {
   APP_CONFIG_SEND_TEST_EMAIL: '/api/v1/settings/app-config/email/send-test',
   APP_CONFIG_TEST_TELEGRAM: '/api/v1/settings/app-config/telegram/test-connection',
   APP_CONFIG_SEND_TEST_TELEGRAM: '/api/v1/settings/app-config/telegram/send-test',
+  /** Google Sheets automatic backup (status / manual run / restore). */
+  BACKUP_RUN: '/api/v1/backups/run',
+  BACKUP_STATUS: '/api/v1/backups/status',
+  BACKUP_RESTORE: '/api/v1/backups/restore',
   STORAGE_PROVIDERS: '/api/v1/settings/storage',
   STORAGE_PROVIDER: (id: string) => `/api/v1/settings/storage/${id}`,
   STORAGE_PROVIDER_TEST: (id: string) => `/api/v1/settings/storage/${id}/test-connection`,
@@ -151,7 +143,6 @@ export const ApiEndpoints = {
  */
 export const CollectionEndpoints = {
   categories: ApiEndpoints.CATEGORIES,
-  uoms: ApiEndpoints.UOMS,
   brands: ApiEndpoints.BRANDS,
   products: ApiEndpoints.PRODUCTS,
   suppliers: ApiEndpoints.SUPPLIERS,
@@ -164,10 +155,6 @@ export const CollectionEndpoints = {
   saleReturns: ApiEndpoints.REPORT_SALE_RETURNS,
   purchaseReturns: ApiEndpoints.REPORT_PURCHASE_RETURNS,
   stockMovements: ApiEndpoints.STOCK_MOVEMENTS,
-  // Sale-price rows are product-scoped (PRODUCT_SALE_PRICES(productId)); this
-  // collection key exists for legacy compatibility only and is never flat CRUD
-  // against the backend.
-  productSalePrices: ApiEndpoints.PRODUCTS,
   customerDebtPayments: ApiEndpoints.CUSTOMERS,
   customerDebts: ApiEndpoints.CUSTOMER_DEBTS,
   supplierDebtPayments: ApiEndpoints.SUPPLIERS,

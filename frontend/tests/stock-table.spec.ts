@@ -21,7 +21,7 @@ describe('print controls (POS + reprint entry points)', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 1, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 1, discountPercent: 0 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -33,37 +33,39 @@ describe('print controls (POS + reprint entry points)', () => {
   })
 })
 
-describe('stock table (spec §2.1.5 — no SKU / product code columns)', () => {
+describe('stock table (spec §2.1.5 — no SKU / product code / barcode columns)', () => {
   const products = stockModules.find(module => module.collection === 'products')!
 
   it('shows exactly the approved stock columns in order', () => {
     const keys = products.columns.map(column => column.key)
     expect(keys).toEqual([
       'imageUrl',
-      'barcode',
       'name',
       'category',
       'brand',
-      'uomSymbol',
       'quantity',
+      'stockInQty',
+      'stockOutQty',
       'costPrice',
       'salePrice',
       'status',
     ])
   })
 
-  it('never exposes SKU / product code as a user-facing column or field', () => {
+  it('never exposes SKU / product code / barcode as a user-facing column or field', () => {
     const keys = products.columns.map(column => column.key)
     expect(keys).not.toContain('code')
     expect(keys).not.toContain('sku')
+    expect(keys).not.toContain('barcode')
     const fields = products.fields.map(field => field.key)
     expect(fields).not.toContain('code')
     expect(fields).not.toContain('sku')
+    expect(fields).not.toContain('barcode')
   })
 
-  it('keeps Barcode before Status and drops the nearest-expiry column', () => {
+  it('keeps Status last and drops the barcode / nearest-expiry columns', () => {
     const keys = products.columns.map(column => column.key)
-    expect(keys.indexOf('barcode')).toBe(1)
+    expect(keys).not.toContain('barcode')
     expect(keys).not.toContain('expiryDate')
     expect(keys[keys.length - 1]).toBe('status')
   })

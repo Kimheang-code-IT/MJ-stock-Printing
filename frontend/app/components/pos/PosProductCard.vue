@@ -62,7 +62,7 @@ class="size-6 opacity-40" />
           {{ product.name }}
         </p>
         <p class="text-sm font-bold text-primary tabular-nums">
-          {{ money(product.salePrice) }}
+          {{ money(product.salePrice) }}<span class="text-xs font-medium text-muted">/m²</span>
         </p>
       </div>
       <UButton

@@ -25,8 +25,6 @@ from app.modules.administration.service import get_setting_value
 from app.modules.auth.models import User
 from app.modules.pos.models import Sale
 from app.modules.stock.models import Product, StockBalance
-from app.modules.telegram.repository import ExpiryAlertRepository
-from app.modules.uoms.models import UOM
 
 PAGE_SIZE = 15
 MAX_MESSAGE_CHARS = 3500
@@ -53,7 +51,7 @@ CB_HELP = "help"
 CB_TOOL_PREFIX = "tool:"  # tool:<tool>
 CB_PAGE_PREFIX = "page:"  # page:<tool>:<period|->:<n>
 
-TOOLS = ("current_stock", "low_stock", "expiring", "sales")
+TOOLS = ("current_stock", "low_stock", "sales")
 PERIODS = ("today", "7d", "month")
 
 
@@ -150,22 +148,12 @@ def period_bounds(period: str) -> tuple[datetime, datetime]:
 # -------------------------------------------------------------------- tools
 
 
-async def _uom_codes(session: AsyncSession, product_ids: list) -> dict:
-    if not product_ids:
-        return {}
-    rows = await session.execute(
-        select(Product.uom_id, UOM.code).join(UOM, UOM.id == Product.uom_id).where(Product.id.in_(product_ids))
-    )
-    return dict(rows.all())
-
-
 async def current_stock_rows(session: AsyncSession, page: int, page_size: int = PAGE_SIZE):
-    """Paged current stock (product, qty, UOM) from the canonical balance."""
+    """Paged current stock (product, qty) from the canonical balance."""
     base = (
-        select(Product.name, Product.sku, StockBalance.quantity, UOM.code.label("uom"))
+        select(Product.name, Product.sku, StockBalance.quantity)
         .select_from(Product)
         .join(StockBalance, StockBalance.product_id == Product.id)
-        .join(UOM, UOM.id == Product.uom_id)
         .where(Product.status == "ACTIVE")
     )
     total = (
@@ -186,10 +174,9 @@ async def low_stock_rows(session: AsyncSession, page: int, page_size: int = PAGE
     LOW; quantity <= 0 is OUT.
     """
     base = (
-        select(Product.name, Product.sku, StockBalance.quantity, Product.minimum_stock, UOM.code.label("uom"))
+        select(Product.name, Product.sku, StockBalance.quantity, Product.minimum_stock)
         .select_from(Product)
         .join(StockBalance, StockBalance.product_id == Product.id)
-        .join(UOM, UOM.id == Product.uom_id)
         .where(Product.status == "ACTIVE", Product.minimum_stock > 0, StockBalance.quantity <= Product.minimum_stock)
     )
     total = (
@@ -201,35 +188,6 @@ async def low_stock_rows(session: AsyncSession, page: int, page_size: int = PAGE
         .limit(page_size)
     )
     return [dict(row._mapping) for row in rows.all()], int(total)
-
-
-async def expiring_rows(session: AsyncSession, page: int, page_size: int = PAGE_SIZE):
-    """Paged lots expiring inside the Alert 1 settings window.
-
-    Windows come from the persisted settings `stock.expiry_alert_1_days` and
-    `stock.expiry_alert_2_days` (spec section 3.6). Lot remaining quantities
-    reuse the canonical `ExpiryAlertRepository.expiring_lots()` read model
-    (immutable stock movements) — the same single inventory truth the expiry
-    alert job uses, not a second implementation.
-    """
-    alert1 = int(await get_setting_value(session, "stock", "expiry_alert_1_days", 90))
-    alert2 = int(await get_setting_value(session, "stock", "expiry_alert_2_days", 7))
-    today = datetime.now(timezone.utc).date()
-    cutoff1 = today + timedelta(days=alert1)
-    cutoff2 = today + timedelta(days=alert2)
-    lots = await ExpiryAlertRepository(session).expiring_lots()
-    lots = [lot for lot in lots if today <= lot["expiry_date"] <= cutoff1]
-    lots.sort(key=lambda lot: (lot["expiry_date"], lot["product_name"]))
-    total = len(lots)
-    start = (page - 1) * page_size
-    rows = lots[start : start + page_size]
-    uom_by_product = await _uom_codes(session, [lot["product_id"] for lot in rows])
-    return (
-        [lot | {"cutoff2": cutoff2, "uom": uom_by_product.get(lot["product_id"], "")} for lot in rows],
-        total,
-        alert1,
-        alert2,
-    )
 
 
 async def sales_summary(session: AsyncSession, period: str) -> dict:
@@ -281,7 +239,7 @@ async def run_tool(session: AsyncSession, action: InquiryAction) -> tuple[str, i
     page = max(1, action.page)
     if action.tool == "current_stock":
         rows, total = await current_stock_rows(session, page)
-        lines = [f"{r['name']} ({r['sku']}) — {_fmt_qty(r['quantity'])} {r['uom']}" for r in rows]
+        lines = [f"{r['name']} ({r['sku']}) — {_fmt_qty(r['quantity'])}" for r in rows]
         return render_page("Current Stock", lines, page, total)
     if action.tool == "low_stock":
         rows, total = await low_stock_rows(session, page)
@@ -289,19 +247,9 @@ async def run_tool(session: AsyncSession, action: InquiryAction) -> tuple[str, i
         for r in rows:
             level = "OUT" if r["quantity"] <= 0 else "LOW"
             lines.append(
-                f"[{level}] {r['name']} ({r['sku']}) — {_fmt_qty(r['quantity'])}/{_fmt_qty(r['minimum_stock'])} {r['uom']}"
+                f"[{level}] {r['name']} ({r['sku']}) — {_fmt_qty(r['quantity'])}/{_fmt_qty(r['minimum_stock'])}"
             )
         return render_page("Low Stock", lines, page, total)
-    if action.tool == "expiring":
-        rows, total, alert1, alert2 = await expiring_rows(session, page)
-        lines = []
-        for lot in rows:
-            level = "ALERT 2" if lot["expiry_date"] <= lot["cutoff2"] else "ALERT 1"
-            batch = f", batch {lot['batch_no']}" if lot["batch_no"] else ""
-            lines.append(
-                f"[{level}] {lot['product_name']} ({lot['sku']}) — {_fmt_qty(lot['remaining_qty'])} {lot['uom']}, exp {lot['expiry_date'].isoformat()}{batch}"
-            )
-        return render_page(f"Expiring Soon (Alert 1 = {alert1}d, Alert 2 = {alert2}d)", lines, page, total)
     if action.tool == "sales":
         if not action.period:
             raise ValueError("Sales summary requires a period")
@@ -319,7 +267,7 @@ async def run_tool(session: AsyncSession, action: InquiryAction) -> tuple[str, i
 
 HELP_TEXT = (
     "Stock & POS inquiry bot (view only).\n"
-    "Tools: Current Stock, Low Stock, Expiring Soon, Sales Summary.\n"
+    "Tools: Current Stock, Low Stock, Sales Summary.\n"
     "Sales Summary asks for a period (Today / Last 7 days / This month).\n"
     "Long lists are paginated — use Next / Prev.\n"
     "This bot cannot create, edit, or delete anything."

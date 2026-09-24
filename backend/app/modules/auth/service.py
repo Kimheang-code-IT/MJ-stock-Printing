@@ -37,7 +37,7 @@ from app.modules.auth.schemas import (
 )
 from app.shared.audit.service import record_audit
 
-logger = logging.getLogger("stock_pos.auth")
+logger = logging.getLogger("mj.auth")
 
 RESET_CODE_PREFIX = "pwreset"
 REFRESH_DENYLIST_PREFIX = "jwt:revoked"

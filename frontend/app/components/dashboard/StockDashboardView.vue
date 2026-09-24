@@ -209,7 +209,6 @@ const summaryGroups = computed<Array<{ key: string, label: string, rows: Summary
         row(t('app.dashboard.lowStock'), summary ? String(summary.lowStockCount) : undefined),
         row(t('app.dashboard.outOfStock'), summary ? String(summary.outOfStockCount) : undefined),
         row(t('app.dashboard.damageLoss'), summary ? money(summary.damageLoss) : undefined),
-        row(t('app.dashboard.expiryLoss'), summary ? money(summary.expiryLoss) : undefined),
       ],
     },
     {

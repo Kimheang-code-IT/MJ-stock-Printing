@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.administration.service import get_setting_value
 from app.modules.auth.models import User
 
-logger = logging.getLogger("stock_pos.telegram")
+logger = logging.getLogger("mj.telegram")
 
 Sender = callable
 
@@ -65,7 +65,6 @@ _LABELS: dict[str, dict[str, str]] = {
         "products": "Products",
         "subtotal": "Subtotal",
         "delivery_fee": "Delivery Fee",
-        "discount": "Discount",
         "tax": "Tax",
         "total": "Total",
         "paid": "Paid",
@@ -99,7 +98,6 @@ _LABELS: dict[str, dict[str, str]] = {
         "products": "ទំនិញ",
         "subtotal": "សរុបរង",
         "delivery_fee": "តម្លៃដឹកជញ្ជូន",
-        "discount": "បញ្ចុះតម្លៃ",
         "tax": "ពន្ធ",
         "total": "សរុប",
         "paid": "បានបង់",
@@ -173,8 +171,7 @@ def _product_lines(items, currency, label: dict) -> list[str]:
     for index, item in enumerate(items, start=1):
         name = _esc(item.get("name") or "-")
         quantity = _fmt_qty(item.get("quantity"))
-        unit = str(item.get("uom") or "").strip()
-        quantity_text = f"{quantity} {unit}".strip()
+        quantity_text = quantity
         price = _money(item.get("unit_price", item.get("unit_cost")), currency)
         line_total = _money(item.get("line_total"), currency)
         lines.append(f"{index}. {name} {quantity_text} @ {price} = {line_total}")
@@ -252,7 +249,6 @@ async def notify_sale(
     currency: str,
     exchange_rate,
     subtotal,
-    discount,
     delivery_price,
     total,
     paid,
@@ -280,7 +276,6 @@ async def notify_sale(
                 "currency": currency,
                 "exchange_rate": str(exchange_rate),
                 "subtotal": str(subtotal),
-                "discount": str(discount),
                 "delivery_price": str(delivery_price),
                 "total": str(total),
                 "paid": str(paid),
@@ -309,7 +304,6 @@ async def notify_purchase(
     currency: str,
     exchange_rate,
     subtotal,
-    discount,
     tax,
     total,
     paid,
@@ -334,7 +328,6 @@ async def notify_purchase(
                 "currency": currency,
                 "exchange_rate": str(exchange_rate),
                 "subtotal": str(subtotal),
-                "discount": str(discount),
                 "tax": str(tax),
                 "total": str(total),
                 "paid": str(paid),
@@ -504,8 +497,6 @@ def format_sale_text(payload: dict, *, timezone_name: str = "UTC", lang: str = "
         lines.append(f"{label['subtotal']}: {_money(payload['subtotal'], currency)}")
     if _nonzero(payload.get("delivery_price")):
         lines.append(f"{label['delivery_fee']}: {_money(payload['delivery_price'], currency)}")
-    if _nonzero(payload.get("discount")):
-        lines.append(f"{label['discount']}: {_money(payload['discount'], currency)}")
     lines.append(f"<b>{label['total']}: {_money(payload.get('total'), currency)}</b>")
     if payload.get("paid") is not None:
         lines.append(f"{label['paid']}: {_money(payload['paid'], currency)}")
@@ -533,8 +524,6 @@ def format_purchase_text(payload: dict, *, timezone_name: str = "UTC", lang: str
     lines.append("")
     if payload.get("subtotal") is not None:
         lines.append(f"{label['subtotal']}: {_money(payload['subtotal'], currency)}")
-    if _nonzero(payload.get("discount")):
-        lines.append(f"{label['discount']}: {_money(payload['discount'], currency)}")
     if _nonzero(payload.get("tax")):
         lines.append(f"{label['tax']}: {_money(payload['tax'], currency)}")
     lines.append(f"<b>{label['total']}: {_money(payload.get('total'), currency)}</b>")
@@ -639,7 +628,7 @@ async def daily_summary_totals(session: AsyncSession, *, day: date | None = None
         return out
 
     sales = await currency_totals(Sale, Sale.sale_date)
-    # Purchase total per document = sum(item.line_total) − discount + tax.
+    # Purchase total per document = sum(item.line_total) + tax.
     items_subtotal = (
         select(
             StockTransactionItem.stock_transaction_id.label("tx_id"),
@@ -653,7 +642,7 @@ async def daily_summary_totals(session: AsyncSession, *, day: date | None = None
             StockTransaction.currency,
             func.count(),
             func.coalesce(
-                func.sum(items_subtotal.c.subtotal - StockTransaction.discount_amount + StockTransaction.tax_amount),
+                func.sum(items_subtotal.c.subtotal + StockTransaction.tax_amount),
                 0,
             ),
         )

@@ -43,9 +43,9 @@ def resolve_database_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if url:
         return url
-    user = os.environ.get("POSTGRES_USER") or _env_file_value(INFRA_ENV, "POSTGRES_USER") or "stock_pos"
-    password = os.environ.get("POSTGRES_PASSWORD") or _env_file_value(INFRA_ENV, "POSTGRES_PASSWORD") or "stock_pos"
-    database = os.environ.get("POSTGRES_DB") or _env_file_value(INFRA_ENV, "POSTGRES_DB") or "stock_pos"
+    user = os.environ.get("POSTGRES_USER") or _env_file_value(INFRA_ENV, "POSTGRES_USER") or "mj"
+    password = os.environ.get("POSTGRES_PASSWORD") or _env_file_value(INFRA_ENV, "POSTGRES_PASSWORD") or "mj"
+    database = os.environ.get("POSTGRES_DB") or _env_file_value(INFRA_ENV, "POSTGRES_DB") or "mj"
     return f"postgresql+asyncpg://{user}:{password}@localhost:55432/{database}"
 
 

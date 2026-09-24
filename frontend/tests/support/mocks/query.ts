@@ -1,4 +1,4 @@
-import type { ApiMeta, ApiResponse, ListQuery } from '~/types/stock-pos/common'
+import type { ApiMeta, ApiResponse, ListQuery } from '~/types/mj/common'
 import { TABLE_PAGE_SIZES } from '~/utils/pagination'
 
 function delay(ms = 40) {

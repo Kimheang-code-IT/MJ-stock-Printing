@@ -436,12 +436,6 @@ async def test_print_payload_and_customer_listing(client):
     assert customer_notes.status_code == 200
     assert note["id"] in {n["id"] for n in customer_notes.json()["data"]}
 
-    # Sale item responses expose the UOM snapshot captured at sale time.
-    sale_detail = await client.get(f"/api/v1/pos/sales/{sale['id']}", headers=headers)
-    assert sale_detail.status_code == 200
-    sale_item = sale_detail.json()["data"]["items"][0]
-    assert sale_item["uom_symbol"] == "ea"
-
     # POS post-sale entry point creates a note for the same sale.
     pos_note = await client.post(
         f"/api/v1/pos/sales/{sale['id']}/delivery",

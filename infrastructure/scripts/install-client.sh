@@ -23,7 +23,7 @@ if [[ -d "$repo_root_candidate/backend" ]]; then
 elif [[ -n "${INSTALL_DIR:-}" ]]; then
   root="$INSTALL_DIR"
 else
-  root="${HOME}/stock_pos"
+  root="${HOME}/mj"
 fi
 
 if [[ ! -f "$root/infrastructure/docker-compose.yml" ]]; then
@@ -58,4 +58,4 @@ echo "Stock & POS is starting on this computer."
 echo "  App:   http://localhost:${frontend_port}"
 echo "  Login: see SEED_ADMIN_* in infrastructure/.env"
 echo
-echo "Logs: docker compose logs -f frontend api"
+echo "Logs: docker compose logs -f mj-stock-management-frontend mj-stock-management-api"

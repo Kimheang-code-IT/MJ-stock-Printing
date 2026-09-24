@@ -4,11 +4,12 @@ import type { PaginationState } from '@tanstack/vue-table'
 import { h } from 'vue'
 import type { AppRecord } from '~/config/admin-seed'
 import { STOCK_OPERATION_META } from '~/config/pos-options'
-import type { ProductBatchRow, ProductHistoryRow, SaleReceipt, StockHistoryKind } from '~/repositories/contracts/entities'
+import type { ProductHistoryRow, SaleReceipt, StockHistoryKind } from '~/repositories/contracts/entities'
 import { usePosCommands, useStockQueries } from '~/repositories/index'
 import { formatMoney } from '~/utils/format/format-service'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
-import { conversionForUom, convertToBase, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
+import { multiplyDecimalSafe } from '~/utils/stock/numbers'
+import type { ListTableSortOption } from '~/utils/table/list-table'
 
 /**
  * Stock movement history for one product, opened from the Stock list
@@ -82,120 +83,15 @@ const addOpen = ref(false)
 const addBusy = ref(false)
 const addQuantity = ref<number | undefined>()
 const addNote = ref('')
-const addUomId = ref('')
 const addUnitCost = ref<number | undefined>()
-// Batch selection (spec §13/§14): batch-tracked products drain a named lot;
-// expiry defaults to the nearest-expiry batch. Never offered for unbatched
-// products and never for depleted lots.
-const addBatchNo = ref('')
-const addExpiryDate = ref('')
-const batchRows = ref<ProductBatchRow[]>([])
-const batchLoading = ref(false)
 
-/** Batch-tracked product (spec §5.9 Stock Costing toggles). */
-const tracksBatch = computed(() =>
-  productRecord.value?.trackBatch === true
-  || (productRecord.value?.trackBatch == null && (productRecord.value?.expiryTracking === true || productRecord.value?.expiryTracking === 'true')))
+const addCanSubmit = computed(() => Boolean(addQuantity.value))
 
-const tracksExpiry = computed(() =>
-  productRecord.value?.trackExpiry === true || productRecord.value?.expiryTracking === true)
-
-/** Selectable lots: Active (with stock) first — depleted lots are rejected
- *  server-side, expired lots are allowed for Damage but pre-warned. */
-const batchOptions = computed(() => batchRows.value
-  .filter(row => Number(row.remainingQty) > 0)
-  .map(row => ({
-    label: `${row.batchNo} — ${t('app.stock.expiryDateCol')} ${row.expiryDate || '—'} — ${row.remainingQty} ${baseUomSymbol.value}`,
-    value: row.batchNo,
-  })))
-
-const selectedBatch = computed(() =>
-  batchRows.value.find(row => row.batchNo === addBatchNo.value) || null)
-
-const selectedBatchExpired = computed(() => selectedBatch.value?.status === 'Expired')
-
-const selectedBatchDepleted = computed(() =>
-  selectedBatch.value != null && Number(selectedBatch.value.remainingQty) <= 0)
-
-/** Over-batch guard: entered qty (converted to base) vs the lot remaining. */
-const batchQtyExceeded = computed(() => {
-  const batch = selectedBatch.value
-  if (!batch || addKind.value === 'stock_in' || !addQuantity.value) return false
-  const baseQty = multiplyDecimalSafe(Number(addQuantity.value), addFactor.value)
-  return baseQty > Number(batch.remainingQty)
-})
-
-const addCanSubmit = computed(() => Boolean(
-  addQuantity.value
-  && (!tracksBatch.value || (addBatchNo.value.trim() && !selectedBatchDepleted.value && !batchQtyExceeded.value))
-  && (!tracksExpiry.value || addKind.value !== 'stock_in' || addExpiryDate.value)))
-
-async function loadBatches() {
-  if (!productRecord.value || !tracksBatch.value) {
-    batchRows.value = []
-    return
-  }
-  batchLoading.value = true
-  try {
-    const result = await stockQueries.listProductBatches(String(productRecord.value.id), { limit: 500 })
-    batchRows.value = result.items
-    // Default: the nearest-expiry lot with stock (spec §13/§14).
-    if (!addBatchNo.value) {
-      addBatchNo.value = batchRows.value.find(row => Number(row.remainingQty) > 0)?.batchNo ?? ''
-    }
-  }
-  catch {
-    batchRows.value = []
-  }
-  finally {
-    batchLoading.value = false
-  }
-}
-
-watch(addOpen, (open) => {
-  if (open && (addKind.value === 'damage' || addKind.value === 'stock_in') && tracksBatch.value) {
-    addBatchNo.value = ''
-    void loadBatches()
-  }
-})
-
-/** Live product row (UOM / cost) — prefer store cache, fall back to prop. */
+/** Live product row (cost) — prefer store cache, fall back to prop. */
 const productRecord = computed(() => {
   const id = String(props.product?.id || '')
   if (!id) return props.product
   return store.list('products').find(row => String(row.id) === id) || props.product
-})
-
-const uomOptions = computed(() => {
-  const product = productRecord.value
-  if (!product) return []
-  const conversions = Array.isArray(product.uomConversions)
-    ? product.uomConversions as Array<Record<string, unknown>>
-    : []
-  if (conversions.length) {
-    return conversions
-      .filter(row => row.uomId)
-      .map(row => ({ label: String(row.uomSymbol || row.uomId || ''), value: String(row.uomId) }))
-  }
-  return [{ label: String(product.uomSymbol || product.uom || ''), value: String(product.uomId || '') }]
-})
-
-const addConversion = computed(() => conversionForUom(productRecord.value, addUomId.value))
-
-const addFactor = computed(() =>
-  addKind.value === 'stock_in' ? (addConversion.value?.factorToBase ?? 1) : 1)
-
-const addUomSymbol = computed(() =>
-  addConversion.value?.uomSymbol
-  || String(productRecord.value?.uomSymbol || productRecord.value?.uom || ''))
-
-const baseUomSymbol = computed(() =>
-  String(productRecord.value?.uomSymbol || productRecord.value?.uom || ''))
-
-const stockInConvertHint = computed(() => {
-  if (addKind.value !== 'stock_in' || !addQuantity.value) return ''
-  const baseQty = convertToBase(addQuantity.value, addFactor.value)
-  return `${addQuantity.value} ${addUomSymbol.value} = ${baseQty} ${baseUomSymbol.value}`
 })
 
 async function loadHistory() {
@@ -247,30 +143,13 @@ function openAdd() {
   }
   addQuantity.value = undefined
   addNote.value = ''
-  addUomId.value = String(productRecord.value.uomId || '')
-  addUnitCost.value = undefined
+  addUnitCost.value = Number(productRecord.value.costPrice ?? 0) || undefined
   addOpen.value = true
 }
 
-watch(addUomId, (uomId) => {
-  const product = productRecord.value
-  if (!product || addKind.value !== 'stock_in') return
-  const conversion = conversionForUom(product, uomId)
-  const suggested = conversion?.costPrice != null
-    ? conversion.costPrice
-    : multiplyDecimalSafe(Number(product.costPrice || 0), conversion?.factorToBase ?? 1)
-  addUnitCost.value = suggested > 0 ? suggested : undefined
-})
-
 async function submitAdd() {
   if (!productRecord.value || !addKind.value || !addQuantity.value) return
-  if (!addCanSubmit.value) {
-    if (selectedBatchDepleted.value) toast.add({ title: t('app.stock.batchDepletedError'), color: 'error' })
-    else if (batchQtyExceeded.value) toast.add({ title: t('app.stock.batchQtyExceeds'), color: 'error' })
-    else if (tracksBatch.value && !addBatchNo.value.trim()) toast.add({ title: t('app.stock.batchRequired'), color: 'error' })
-    else if (addKind.value === 'stock_in' && tracksExpiry.value && !addExpiryDate.value) toast.add({ title: t('app.stock.expiryRequired'), color: 'error' })
-    return
-  }
+  if (!addCanSubmit.value) return
   addBusy.value = true
   try {
     const record = await posCommands.createStockOperation({
@@ -278,17 +157,8 @@ async function submitAdd() {
       productId: String(productRecord.value.id),
       quantity: Number(addQuantity.value),
       note: addNote.value || null,
-      // Batch traceability (spec §13/§14): damage/expiry drain the named lot;
-      // stock-in receives into it (stamping the lot's expiry).
-      ...((tracksBatch.value && addBatchNo.value.trim()) ? { batchNo: addBatchNo.value.trim() } : {}),
-      ...((addKind.value === 'stock_in') && addExpiryDate.value
-        ? { expiryDate: addExpiryDate.value }
-        : {}),
       ...(addKind.value === 'stock_in'
         ? {
-            uomId: addUomId.value || undefined,
-            uomSymbol: addUomSymbol.value || undefined,
-            factorToBase: addFactor.value,
             ...(addUnitCost.value != null ? { unitCost: Number(addUnitCost.value) } : {}),
           }
         : {}),
@@ -379,9 +249,6 @@ const productCell: HistoryCell = ({ row }) =>
   h('span', { class: 'block max-w-48 truncate font-medium', title: String(row.original.product ?? '') },
     String(row.original.product || '—'))
 
-const unitCell: HistoryCell = ({ row }) =>
-  h('span', { class: 'whitespace-nowrap text-muted' }, String(row.original.unit || '—'))
-
 const unitPriceCell: HistoryCell = ({ row }) =>
   h('span', { class: 'text-end tabular-nums whitespace-nowrap' }, formatMoney(row.original.unitPrice))
 
@@ -396,8 +263,8 @@ const noteCell: HistoryCell = ({ row }) => {
 
 /**
  * Kind-specific column sets (spec §2.1.5 Stock dialogs):
- * - Stock In: No, Date, Product, Unit, Unit price, Qty, Amount, Note.
- * - Stock Out: No, Date, Invoice No, Product, Unit, Unit price, Amount, Note.
+ * - Stock In: No, Date, Product, Unit price, Qty, Amount, Note.
+ * - Stock Out: No, Date, Invoice No, Product, Unit price, Amount, Note.
  * - Damage keeps the original compact movement layout.
  */
 const columns = computed<TableColumn<HistoryRow>[]>(() => {
@@ -420,12 +287,6 @@ const columns = computed<TableColumn<HistoryRow>[]>(() => {
     header: t('app.pos.product'),
     enableSorting: false,
     cell: productCell,
-  }
-  const unit: TableColumn<HistoryRow> = {
-    accessorKey: 'unit',
-    header: t('app.pos.uom'),
-    enableSorting: false,
-    cell: unitCell,
   }
   const unitPrice: TableColumn<HistoryRow> = {
     accessorKey: 'unitPrice',
@@ -453,7 +314,6 @@ const columns = computed<TableColumn<HistoryRow>[]>(() => {
       no,
       date,
       product,
-      unit,
       unitPrice,
       {
         accessorKey: 'quantity',
@@ -484,7 +344,6 @@ const columns = computed<TableColumn<HistoryRow>[]>(() => {
           : h('span', { class: 'font-medium whitespace-nowrap' }, String(row.original.reference ?? '')),
       },
       product,
-      unit,
       unitPrice,
       amount,
       note,
@@ -524,6 +383,11 @@ const columns = computed<TableColumn<HistoryRow>[]>(() => {
   ]
 })
 
+const sortOptions = computed<ListTableSortOption[]>(() => [
+  { key: 'date', kind: 'date', label: t('app.fields.date') },
+  { key: 'reference', kind: 'number', label: t('app.fields.invoiceNo') },
+])
+
 const title = computed(() => {
   const label = t(KIND_TITLE_KEYS[props.kind])
   return props.product ? `${props.product.name} · ${label}` : label
@@ -560,6 +424,7 @@ const nestedDialogUi = {
         :columns="columns"
         :loading="loading"
         :show-date-range="true"
+        :sort-options="sortOptions"
         :date-label="t('app.ui.date')"
         :empty-title="t('app.stock.noHistory')"
         :empty-description="noEmptyDescription"
@@ -635,10 +500,8 @@ const nestedDialogUi = {
               <tr class="border-b border-default bg-elevated text-start text-xs text-muted">
                 <th class="w-10 px-2 py-1.5 text-start font-medium">{{ t('app.stock.pricingNo') }}</th>
                 <th class="px-2 py-1.5 text-start font-medium">{{ t('app.pos.product') }}</th>
-                <th class="px-2 py-1.5 text-start font-medium">{{ t('app.pos.uom') }}</th>
                 <th class="px-2 py-1.5 text-end font-medium">{{ t('app.fields.unitPrice') }}</th>
                 <th class="px-2 py-1.5 text-end font-medium">{{ t('app.fields.quantity') }}</th>
-                <th class="px-2 py-1.5 text-end font-medium">{{ t('app.fields.discount') }}</th>
                 <th class="px-2 py-1.5 text-end font-medium">{{ t('app.fields.amount') }}</th>
               </tr>
             </thead>
@@ -650,15 +513,13 @@ const nestedDialogUi = {
               >
                 <td class="px-2 py-1.5 text-muted tabular-nums">{{ item.__no }}</td>
                 <td class="max-w-48 truncate px-2 py-1.5 font-medium" :title="item.name">{{ item.name }}</td>
-                <td class="px-2 py-1.5 text-muted">{{ item.uom || '—' }}</td>
                 <td class="px-2 py-1.5 text-end tabular-nums">{{ formatMoney(item.unitPrice) }}</td>
                 <td class="px-2 py-1.5 text-end tabular-nums">{{ item.quantity }}</td>
-                <td class="px-2 py-1.5 text-end tabular-nums">{{ item.discount ? formatMoney(item.discount) : '—' }}</td>
                 <td class="px-2 py-1.5 text-end font-medium tabular-nums">{{ formatMoney(item.total) }}</td>
               </tr>
               <tr v-if="!invoiceItems.length">
                 <td
-                  colspan="7"
+                  colspan="5"
                   class="px-2 py-4 text-center text-muted"
                 >—</td>
               </tr>
@@ -670,10 +531,6 @@ const nestedDialogUi = {
           <div class="flex justify-between">
             <span class="text-muted">{{ t('app.fields.subtotal') }}</span>
             <span class="tabular-nums">{{ formatMoney(invoice.subtotal) }}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-muted">{{ t('app.fields.discount') }}</span>
-            <span class="tabular-nums">{{ formatMoney(invoice.discount) }}</span>
           </div>
           <div class="flex justify-between">
             <span class="text-muted">{{ t('app.fields.paidAmount') }}</span>
@@ -723,77 +580,12 @@ const nestedDialogUi = {
         :disabled="true"
         class="w-full"
       />
-      <!-- Batch selector: Active lots only, nearest expiry first (spec §13).
-           Never shown for unbatched products; depleted lots are rejected. -->
-      <CommonAppSelectMenuField
-        v-if="tracksBatch && (addKind === 'stock_in' || addKind === 'damage')"
-        v-model="addBatchNo"
-        :items="batchOptions"
-        :label="t('app.stock.batch')"
-        :required="true"
-        :loading="batchLoading"
-        class="w-full"
-      />
-      <p
-        v-if="tracksBatch && selectedBatchExpired && addKind === 'damage'"
-        class="text-xs text-warning"
-      >
-        {{ t('app.stock.batchExpiredError') }}
-      </p>
-      <p
-        v-if="tracksBatch && selectedBatchDepleted"
-        class="text-xs text-error"
-      >
-        {{ t('app.stock.batchDepletedError') }}
-      </p>
-      <p
-        v-if="tracksBatch && batchQtyExceeded"
-        class="text-xs text-error"
-      >
-        {{ t('app.stock.batchQtyExceeds') }}
-      </p>
-      <CommonAppSelectMenuField
-        v-if="addKind === 'stock_in'"
-        v-model="addUomId"
-        :items="uomOptions"
-        :label="t('app.pos.uom')"
-        class="w-full"
-      />
       <CommonAppNumberField
         v-model="addQuantity"
         :label="addKind === 'damage' ? `${t('app.fields.quantity')} (−)` : t('app.fields.quantity')"
         :required="true"
         :min="0"
         :step="1"
-        class="w-full"
-      />
-      <p
-        v-if="addKind === 'stock_in' && stockInConvertHint"
-        class="text-xs text-muted"
-      >
-        {{ stockInConvertHint }}
-      </p>
-      <CommonAppInputDate
-        v-if="addKind === 'stock_in' && tracksExpiry"
-        v-model="addExpiryDate"
-        :label="t('app.stock.expiryDateCol')"
-        :required="true"
-        size="md"
-        class="w-full"
-      />
-      <CommonAppMoneyField
-        v-if="addKind === 'stock_in'"
-        v-model="addUnitCost"
-        :label="t('app.stock.convCost')"
-        :min="0"
-        :step="0.01"
-        :help="t('app.stock.convCostHint')"
-        class="w-full"
-      />
-      <CommonAppTextareaField
-        v-model="addNote"
-        :label="t('app.fields.note')"
-        :rows="2"
         class="w-full"
       />
       <p

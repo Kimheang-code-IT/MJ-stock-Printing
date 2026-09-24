@@ -1,11 +1,11 @@
-"""Live-mode FE/BE contract checks (Phase 9 alignment).
+"""Live-mode FE/BE single-unit contract checks.
 
 - SaleReturnRequest accepts `items` (canonical) AND `lines` (UI alias) with
   camelCase element keys.
 - Stock In with payment_method records an immutable payment row when
   paid_amount > 0 (full payment or partial-with-debt).
-- Line UOM symbol snapshots persist on stock_transaction_items and
-  stock_movements.
+- Stock movements expose the Stock-page read model (sku, qty in/out,
+  balances, document number) and none of the removed UOM fields.
 """
 
 from decimal import Decimal
@@ -13,19 +13,10 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import admin_headers
 
 
-async def _make_uom(client, headers, code: str) -> dict:
-    response = await client.post(
-        "/api/v1/uoms", json={"code": code, "name": f"Unit {code}", "symbol": code.lower()}, headers=headers
-    )
-    assert response.status_code == 201, response.text
-    return response.json()["data"]
-
-
-async def _make_pack_product(client, headers, *, sku: str) -> dict:
-    pack = await _make_uom(client, headers, f"PK{sku[-3:]}")
+async def _make_product(client, headers, *, sku: str) -> dict:
     category = (
         await client.post(
             "/api/v1/categories", json={"code": f"C-{sku}", "name": f"Cat {sku}"}, headers=headers
@@ -37,23 +28,7 @@ async def _make_pack_product(client, headers, *, sku: str) -> dict:
             "sku": sku,
             "name": f"Product {sku}",
             "category_id": category["id"],
-            "uom_id": str(DEFAULT_UOM_ID),
             "selling_price": "12.00",
-            "uom_conversions": [
-                {
-                    "uom_id": str(DEFAULT_UOM_ID),
-                    "factor_to_base": "1",
-                    "sale_price": "12.00",
-                    "is_default_sale": True,
-                },
-                {
-                    "uom_id": pack["id"],
-                    "uom_symbol": pack["symbol"],
-                    "factor_to_base": "10",
-                    "sale_price": "110.00",
-                    "is_default_sale": False,
-                },
-            ],
         },
         headers=headers,
     )
@@ -64,9 +39,9 @@ async def _make_pack_product(client, headers, *, sku: str) -> dict:
 @pytest.mark.asyncio
 async def test_sale_return_accepts_lines_alias_with_camel_keys(client):
     headers = await admin_headers(client)
-    product = await _make_pack_product(client, headers, sku="CTA-1")
+    product = await _make_product(client, headers, sku="CTA-1")
 
-    # Stock 20 base units, sell 2 packs via POS.
+    # Stock 20 units, sell 2.
     stock_in = await client.post(
         "/api/v1/stock/in",
         json={
@@ -81,15 +56,7 @@ async def test_sale_return_accepts_lines_alias_with_camel_keys(client):
         json={
             "payment_method": "CASH",
             "amount_received": "1000.00",
-            "items": [{
-                "product_id": product["id"],
-                "uom_id": next(
-                    row["uom_id"] for row in product["uomConversions"]
-                    if row["uom_id"] != str(DEFAULT_UOM_ID)
-                ),
-                "quantity": "2",
-                "unit_price": "110.00",
-            }],
+            "items": [{"product_id": product["id"], "quantity": "2"}],
         },
         headers=headers,
     )
@@ -111,28 +78,18 @@ async def test_sale_return_accepts_lines_alias_with_camel_keys(client):
 
 
 @pytest.mark.asyncio
-async def test_stock_in_payment_method_records_payment_row(client, db_session):
+async def test_stock_in_payment_method_records_payment_and_movement(client, db_session):
     from app.modules.pos.models import Payment
 
     headers = await admin_headers(client)
-    product = await _make_pack_product(client, headers, sku="CTA-2")
-    pack = next(
-        row for row in product["uomConversions"] if row["uom_id"] != str(DEFAULT_UOM_ID)
-    )
+    product = await _make_product(client, headers, sku="CTA-2")
 
     response = await client.post(
         "/api/v1/stock/in",
         json={
             "paid_amount": "200.00",
             "payment_method": "BANK_QR",
-            "items": [{
-                "product_id": product["id"],
-                "uom_id": pack["uom_id"],
-                "uom_symbol": pack.get("uom_symbol"),
-                "factor_to_base": pack["factor_to_base"],
-                "quantity": "2",
-                "unit_cost": "100.00",
-            }],
+            "items": [{"product_id": product["id"], "quantity": "20", "unit_cost": "10.00"}],
         },
         headers=headers,
     )
@@ -153,13 +110,20 @@ async def test_stock_in_payment_method_records_payment_row(client, db_session):
     assert payments[0].payment_method == "BANK_QR"
     assert payments[0].supplier_debt_id is None
 
-    # Line UOM symbol snapshot persisted on item + movement.
-    item = stock_in["items"][0]
-    assert item["uom_symbol"] == (pack.get("uom_symbol") or "pktcta")
+    # Movement read model carries the Stock-page fields, without any UOM fields.
     movements = await client.get(
-        f"/api/v1/stock/movements?product_id={product['id']}&movement_type=STOCK_IN", headers=headers
+        f"/api/v1/stock/movements?product_id={product['id']}&movement_type=STOCK_IN",
+        headers=headers,
     )
-    assert movements.json()["data"][0]["uom_symbol"] == item["uom_symbol"]
+    assert movements.status_code == 200, movements.text
+    row = movements.json()["data"][0]
+    assert row["product_name"] == product["name"]
+    assert row["sku"] == product["sku"]
+    assert Decimal(row["qty_in"]) == Decimal("20.0000")
+    assert Decimal(row["balance_after"]) == Decimal("20.0000")
+    assert row["document_no"] == stock_in["document_no"]
+    for removed in ("uom_symbol", "entered_uom_id", "entered_quantity"):
+        assert removed not in row
 
 
 @pytest.mark.asyncio
@@ -167,7 +131,7 @@ async def test_stock_in_partial_payment_records_debt_payment(client, db_session)
     from app.modules.pos.models import Payment
 
     headers = await admin_headers(client)
-    product = await _make_pack_product(client, headers, sku="CTA-3")
+    product = await _make_product(client, headers, sku="CTA-3")
     supplier = (
         await client.post("/api/v1/suppliers", json={"name": "CTA Supplier"}, headers=headers)
     ).json()["data"]

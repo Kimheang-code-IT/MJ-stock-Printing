@@ -1,4 +1,4 @@
-import type { AppConfig } from '~/types/stock-pos/settings'
+import type { AppConfig } from '~/types/mj/settings'
 
 /**
  * Mapping between the frontend settings form model (AppConfig) and the
@@ -16,14 +16,6 @@ export type AdminSettingsGroups = Record<string, Record<string, unknown>>
 export function toAdminSettingsValues(input: Partial<AppConfig>): AdminSettingsGroups {
   const values: AdminSettingsGroups = {}
 
-  const stock = input.stock
-  if (stock) {
-    const group: Record<string, unknown> = {}
-    if (stock.expiryAlert1Days !== undefined) group.expiry_alert_1_days = stock.expiryAlert1Days
-    if (stock.expiryAlert2Days !== undefined) group.expiry_alert_2_days = stock.expiryAlert2Days
-    if (Object.keys(group).length > 0) values.stock = group
-  }
-
   const telegram: Record<string, unknown> = {}
   const telegramInput = input.telegram
   if (telegramInput) {
@@ -35,7 +27,6 @@ export function toAdminSettingsValues(input: Partial<AppConfig>): AdminSettingsG
     if (telegramInput.passwordResetEnabled !== undefined) telegram.enable_password_reset = telegramInput.passwordResetEnabled
     if (telegramInput.paymentInvoiceNotifyEnabled !== undefined) telegram.payment_invoice_notify_enabled = telegramInput.paymentInvoiceNotifyEnabled
     if (telegramInput.stockInquiryEnabled !== undefined) telegram.stock_inquiry_enabled = telegramInput.stockInquiryEnabled
-    if (telegramInput.expiryAlertsEnabled !== undefined) telegram.expiry_alerts_enabled = telegramInput.expiryAlertsEnabled
     if (telegramInput.saleNotificationsEnabled !== undefined) telegram.sale_enabled = telegramInput.saleNotificationsEnabled
     if (telegramInput.purchaseNotificationsEnabled !== undefined) telegram.purchase_enabled = telegramInput.purchaseNotificationsEnabled
     if (telegramInput.dailySummaryEnabled !== undefined) telegram.daily_summary_enabled = telegramInput.dailySummaryEnabled
@@ -45,19 +36,22 @@ export function toAdminSettingsValues(input: Partial<AppConfig>): AdminSettingsG
     }
     if (telegramInput.messageLanguage !== undefined) telegram.notification_language = telegramInput.messageLanguage
   }
-  // The expiry-alerts toggle lives on the Stock tab of the UI but is stored
-  // under the telegram settings group (spec section 3.6).
-  if (stock?.telegramExpiryAlertsEnabled !== undefined) {
-    telegram.expiry_alerts_enabled = stock.telegramExpiryAlertsEnabled
-  }
   if (Object.keys(telegram).length > 0) values.telegram = telegram
 
-  return values
-}
+  const backup: Record<string, unknown> = {}
+  const backupInput = input.backup
+  if (backupInput) {
+    if (backupInput.enabled !== undefined) backup.enabled = backupInput.enabled
+    if (backupInput.intervalHours !== undefined) backup.interval_hours = Number(backupInput.intervalHours)
+    if (backupInput.spreadsheetId !== undefined) backup.spreadsheet_id = String(backupInput.spreadsheetId).trim()
+    // Never write the masked placeholder back; only a newly entered key clears/sets it.
+    if (backupInput.serviceAccountJson !== undefined && backupInput.serviceAccountJson !== '********') {
+      backup.service_account_json = String(backupInput.serviceAccountJson).trim()
+    }
+  }
+  if (Object.keys(backup).length > 0) values.backup = backup
 
-function asNumber(value: unknown, fallback: number): number {
-  const n = Number(value)
-  return Number.isFinite(n) ? n : fallback
+  return values
 }
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
@@ -70,12 +64,7 @@ export function applyAdminSettingsGroups(config: AppConfig, groups: AdminSetting
     ...config,
     stock: { ...config.stock },
     telegram: { ...config.telegram },
-  }
-
-  const stock = groups.stock
-  if (stock) {
-    if (stock.expiry_alert_1_days !== undefined) next.stock.expiryAlert1Days = asNumber(stock.expiry_alert_1_days, next.stock.expiryAlert1Days)
-    if (stock.expiry_alert_2_days !== undefined) next.stock.expiryAlert2Days = asNumber(stock.expiry_alert_2_days, next.stock.expiryAlert2Days)
+    backup: { ...config.backup },
   }
 
   const telegram = groups.telegram
@@ -85,11 +74,6 @@ export function applyAdminSettingsGroups(config: AppConfig, groups: AdminSetting
     if (telegram.enable_password_reset !== undefined) next.telegram.passwordResetEnabled = asBoolean(telegram.enable_password_reset, next.telegram.passwordResetEnabled)
     if (telegram.payment_invoice_notify_enabled !== undefined) next.telegram.paymentInvoiceNotifyEnabled = asBoolean(telegram.payment_invoice_notify_enabled, next.telegram.paymentInvoiceNotifyEnabled)
     if (telegram.stock_inquiry_enabled !== undefined) next.telegram.stockInquiryEnabled = asBoolean(telegram.stock_inquiry_enabled, next.telegram.stockInquiryEnabled)
-    if (telegram.expiry_alerts_enabled !== undefined) {
-      const enabled = asBoolean(telegram.expiry_alerts_enabled, next.telegram.expiryAlertsEnabled)
-      next.telegram.expiryAlertsEnabled = enabled
-      next.stock.telegramExpiryAlertsEnabled = enabled
-    }
     if (telegram.sale_enabled !== undefined) next.telegram.saleNotificationsEnabled = asBoolean(telegram.sale_enabled, next.telegram.saleNotificationsEnabled)
     if (telegram.purchase_enabled !== undefined) next.telegram.purchaseNotificationsEnabled = asBoolean(telegram.purchase_enabled, next.telegram.purchaseNotificationsEnabled)
     if (telegram.daily_summary_enabled !== undefined) next.telegram.dailySummaryEnabled = asBoolean(telegram.daily_summary_enabled, next.telegram.dailySummaryEnabled)
@@ -97,6 +81,21 @@ export function applyAdminSettingsGroups(config: AppConfig, groups: AdminSetting
     if (telegram.notification_language !== undefined) {
       const language = String(telegram.notification_language)
       if (language === 'en' || language === 'km') next.telegram.messageLanguage = language
+    }
+  }
+
+  const backup = groups.backup
+  if (backup) {
+    if (backup.enabled !== undefined) next.backup.enabled = asBoolean(backup.enabled, next.backup.enabled)
+    if (backup.interval_hours !== undefined) {
+      const hours = Number(backup.interval_hours)
+      if (hours === 1 || hours === 3 || hours === 6 || hours === 12 || hours === 24) {
+        next.backup.intervalHours = hours
+      }
+    }
+    if (backup.spreadsheet_id !== undefined) next.backup.spreadsheetId = String(backup.spreadsheet_id)
+    if (backup.service_account_json !== undefined) {
+      next.backup.serviceAccountJson = String(backup.service_account_json)
     }
   }
 

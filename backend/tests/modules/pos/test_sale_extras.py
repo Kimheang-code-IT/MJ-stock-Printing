@@ -1,12 +1,12 @@
-"""POS complete-sale extras: camelCase input, UOM lines, delivery price,
-included debts, active sale price, and the print-ready receipt payload."""
+"""POS complete-sale extras: camelCase input, delivery price, included debts,
+product selling price, and the print-ready receipt payload."""
 
 import uuid
 from decimal import Decimal
 
 import pytest
 
-from tests.modules.pos.helpers import balance_of, make_customer, make_stocked_product
+from tests.modules.pos.helpers import make_customer, make_stocked_product
 from tests.utils import admin_headers
 
 
@@ -32,18 +32,60 @@ async def test_complete_sale_alias_and_camel_case_payload(client):
 
 
 @pytest.mark.asyncio
-async def test_default_unit_price_is_active_sale_price_version(client):
+async def test_sold_by_area_line_uses_height_times_width_as_quantity(client):
+    """Height × Width (m) becomes the billed m² quantity and is persisted."""
+    headers = await admin_headers(client)
+    tag = uuid.uuid4().hex[:6]
+    product = await make_stocked_product(client, headers, sku=f"POSA-{tag}", name=f"POSA Widget {tag}")
+
+    response = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "100.00",
+            "items": [{"product_id": product["id"], "quantity": "1", "height": "2", "width": "3"}],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    sale = response.json()["data"]
+    item = sale["items"][0]
+    # quantity was overridden by the area: 2 × 3 = 6 m² × $10.00 = $60.00.
+    assert Decimal(item["quantity"]) == Decimal("6.0000")
+    assert Decimal(item["height"]) == Decimal("2.0000")
+    assert Decimal(item["width"]) == Decimal("3.0000")
+    assert Decimal(item["area_m2"]) == Decimal("6.0000")
+    assert Decimal(sale["grand_total"]) == Decimal("60.00")
+
+    receipt = await client.get(f"/api/v1/pos/sales/{sale['id']}/receipt", headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    receipt_item = receipt.json()["data"]["items"][0]
+    assert Decimal(receipt_item["area_m2"]) == Decimal("6.0000")
+
+    # Height without width is rejected.
+    invalid = await client.post(
+        "/api/v1/pos/sales",
+        json={
+            "payment_method": "CASH",
+            "amount_received": "100.00",
+            "items": [{"product_id": product["id"], "quantity": "1", "height": "2"}],
+        },
+        headers=headers,
+    )
+    assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_default_unit_price_is_product_selling_price(client):
     headers = await admin_headers(client)
     tag = uuid.uuid4().hex[:6]
     product = await make_stocked_product(client, headers, sku=f"POSP-{tag}", name=f"POSP Widget {tag}")
 
-    # Add a new POS-active price version; POS must follow it.
-    created = await client.post(
-        "/api/v1/products/sale-prices",
-        json={"productId": product["id"], "salePrice": "15.00"},
-        headers=headers,
+    # Change the product selling price; POS must charge it.
+    patched = await client.patch(
+        f"/api/v1/products/{product['id']}", json={"selling_price": "15.00"}, headers=headers
     )
-    assert created.status_code == 201, created.text
+    assert patched.status_code == 200, patched.text
 
     response = await client.post(
         "/api/v1/pos/sales",
@@ -54,66 +96,6 @@ async def test_default_unit_price_is_active_sale_price_version(client):
     sale = response.json()["data"]
     assert Decimal(sale["grand_total"]) == Decimal("30.00")
     assert Decimal(sale["items"][0]["unit_price"]) == Decimal("15.00")
-
-
-@pytest.mark.asyncio
-async def test_convert_uom_line_stocks_out_base_quantity(client):
-    headers = await admin_headers(client)
-    tag = uuid.uuid4().hex[:6]
-    product = await make_stocked_product(client, headers, sku=f"POSU-{tag}", name=f"POSU Widget {tag}", qty="12")
-
-    box_uom = None
-    options = (await client.get("/api/v1/uoms/options", headers=headers)).json()["data"]
-    for row in options:
-        if row["code"] == "BOX":
-            box_uom = row
-            break
-    assert box_uom is not None, "BOX UOM is not seeded"
-
-    # 1 BOX = 6 base units; sale price per BOX 30.00 (spec §2.1.3 Pricing row).
-    updated = await client.patch(
-        f"/api/v1/products/{product['id']}",
-        json={
-            "uomConversions": [
-                {
-                    "uom_id": box_uom["id"],
-                    "uom_symbol": box_uom["symbol"],
-                    "convert_uom_id": product["uom_id"],
-                    "factor_to_base": "6",
-                    "sale_price": "30.00",
-                    "is_default_sale": False,
-                }
-            ]
-        },
-        headers=headers,
-    )
-    assert updated.status_code == 200, updated.text
-
-    response = await client.post(
-        "/api/v1/pos/sales",
-        json={
-            "payment_method": "CASH",
-            "amount_received": "60.00",
-            "items": [
-                {
-                    "productId": product["id"],
-                    "quantity": 2,
-                    "uomId": box_uom["id"],
-                    "uomSymbol": box_uom["symbol"],
-                }
-            ],
-        },
-        headers=headers,
-    )
-    assert response.status_code == 201, response.text
-    sale = response.json()["data"]
-    # 2 BOX × 15? No: default price for a conversion UOM is its sale_price 30.00.
-    assert Decimal(sale["grand_total"]) == Decimal("60.00")
-    assert Decimal(sale["items"][0]["factor_to_base"]) == Decimal("6")
-    assert sale["items"][0]["uom_symbol"] == box_uom["symbol"]
-
-    # Stock was mutated in the BASE uom: 12 - 2×6 = 0.
-    assert await balance_of(client, headers, product["id"]) == Decimal("0")
 
 
 @pytest.mark.asyncio
@@ -247,7 +229,7 @@ async def test_receipt_payload_is_print_ready(client):
                 "payment_method": "CASH",
                 "amount_received": "30.00",
                 "deliveryPrice": "2.00",
-                "items": [{"productId": product["id"], "quantity": 2, "discountPercent": 10}],
+                "items": [{"productId": product["id"], "quantity": 2}],
             },
             headers=headers,
         )
@@ -263,13 +245,11 @@ async def test_receipt_payload_is_print_ready(client):
     item = data["items"][0]
     assert item["name"] == product["name"]
     assert item["sku"]
-    assert item["uom_symbol"]
-    assert Decimal(item["line_total"]) == Decimal("18.00")  # 2 × 10 − 10%
+    assert Decimal(item["line_total"]) == Decimal("20.00")  # 2 × 10
     assert Decimal(data["subtotal"]) == Decimal("20.00")
-    assert Decimal(data["discount"]) == Decimal("2.00")
     assert Decimal(data["delivery_price"]) == Decimal("2.00")
-    assert Decimal(data["grand_total"]) == Decimal("20.00")
-    assert Decimal(data["paid"]) == Decimal("20.00")
+    assert Decimal(data["grand_total"]) == Decimal("22.00")
+    assert Decimal(data["paid"]) == Decimal("22.00")
 
 @pytest.mark.asyncio
 async def test_receipt_payload_full_invoice_contract(client):
@@ -319,16 +299,15 @@ async def test_receipt_payload_full_invoice_contract(client):
     assert data["currency"] == "USD"
     assert Decimal(data["exchange_rate"]) == Decimal("1")
 
-    # Items: UOM, quantity, unit price, discount, line amount
+    # Items: quantity, unit price, line amount
     assert len(data["items"]) == 1
     item = data["items"][0]
-    for key in ("name", "barcode", "uom_symbol", "quantity", "unit_price", "discount", "line_total"):
+    for key in ("name", "sku", "quantity", "unit_price", "line_total"):
         assert key in item
     assert Decimal(item["line_total"]) == Decimal("20.00")
 
-    # Totals: subtotal/discount/delivery fee/grand total/paid/debt/change
+    # Totals: subtotal/delivery fee/grand total/paid/debt/change
     assert Decimal(data["subtotal"]) == Decimal("20.00")
-    assert Decimal(data["discount"]) == Decimal("0.00")
     assert Decimal(data["delivery_price"]) == Decimal("1.50")
     assert Decimal(data["grand_total"]) == Decimal("21.50")
     # `paid` is the amount applied to the sale (over-tender is returned as

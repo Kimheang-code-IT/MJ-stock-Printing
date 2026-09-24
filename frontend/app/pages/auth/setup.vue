@@ -93,7 +93,7 @@ name="email"
 type="email"
 size="lg"
 class="w-full"
-placeholder="admin@stockpos.local" />
+placeholder="admin@mj.local" />
       </UFormField>
       <UFormField :label="t('pages.auth.password')" name="password" required>
         <UInput
@@ -101,7 +101,8 @@ v-model="state.password"
 name="password"
 type="password"
 size="lg"
-class="w-full" />
+class="w-full"
+:placeholder="t('pages.auth.passwordPlaceholder')" />
       </UFormField>
       <UFormField :label="t('pages.auth.passwordConfirm')" name="passwordConfirmation" required>
         <UInput
@@ -109,7 +110,8 @@ v-model="state.passwordConfirmation"
 name="passwordConfirmation"
 type="password"
 size="lg"
-class="w-full" />
+class="w-full"
+:placeholder="t('pages.auth.passwordConfirmPlaceholder')" />
       </UFormField>
 
       <UButton

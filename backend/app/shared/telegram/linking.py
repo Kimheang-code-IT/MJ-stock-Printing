@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.redis import get_redis
 from app.modules.auth.models import User
 
-logger = logging.getLogger("stock_pos.telegram")
+logger = logging.getLogger("mj.telegram")
 
 TELEGRAM_LINK_PREFIX = "tglink"  # must match app.modules.auth.service
 

@@ -1,4 +1,4 @@
-import type { SourcePermission } from '~/types/stock-pos/domain'
+import type { SourcePermission } from '~/types/mj/domain'
 
 export interface AuthUser {
   id?: number

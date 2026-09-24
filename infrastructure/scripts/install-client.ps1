@@ -38,7 +38,7 @@ if ($InstallDir) {
 } elseif ($inRepo) {
   $root = $repoRoot
 } else {
-  $root = Join-Path $HOME "stock_pos"
+  $root = Join-Path $HOME "mj"
 }
 
 if (-not (Test-Path (Join-Path $root "infrastructure\docker-compose.yml"))) {
@@ -76,5 +76,5 @@ Write-Host "Stock & POS is starting on this computer." -ForegroundColor Green
 Write-Host "  App:  http://localhost:$frontendPort"
 Write-Host "  No data is seeded: create the first administrator on the Setup page."
 Write-Host ""
-Write-Host "Daily use: double-click 'Start Stock POS.bat' in the infrastructure folder."
-Write-Host "Logs: docker compose logs -f frontend api"
+Write-Host "Daily use: double-click 'Start MJ.bat' in the infrastructure folder."
+Write-Host "Logs: docker compose logs -f mj-stock-management-frontend mj-stock-management-api"

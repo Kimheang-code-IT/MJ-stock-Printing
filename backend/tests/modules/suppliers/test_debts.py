@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, login
 
 VIEWER_EMAIL = "sup-debt-viewer@example.com"
 VIEWER_PASSWORD = "viewerpass1"
@@ -44,7 +44,6 @@ async def _supplier_with_debt(client, headers, *, code: str, total="20.00", paid
                 "sku": f"SUP-{code}",
                 "name": f"Widget {code}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "10.00",
             },
             headers=headers,

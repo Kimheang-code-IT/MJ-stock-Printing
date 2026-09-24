@@ -5,18 +5,14 @@ import PosProductBrowser from '~/components/pos/PosProductBrowser.vue'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { usePosChrome } from '~/composables/layout/usePosChrome'
-import { usePosScanner } from '~/composables/pos/usePosScanner'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { useDeliveryCommands, usePosCommands, useSettingsRepositories } from '~/repositories/index'
 import type { PosCartLine } from '~/utils/pos/cart'
 import {
-  availableStockInUom,
-  cartDiscountTotal,
   cartSubtotal,
-  defaultLineUomFor,
+  lineAreaM2,
   productImageUrl,
   roundMoney,
-  uomOptionsFor,
 } from '~/utils/pos/cart'
 import {
   checkoutDeliveryFee,
@@ -29,10 +25,8 @@ import {
 } from '~/utils/pos/checkout'
 import { printSaleInvoice, type SaleInvoicePrintInput } from '~/utils/print/invoice'
 import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
-import { resolveExactBarcode } from '~/utils/pos/barcode-scan'
 import { saleEditCartLines, saleReturnCartLines } from '~/utils/pos/return'
 import type { PrintPaperSize } from '~/utils/print/html'
-import { conversionForUom, salePriceForUom } from '~/utils/stock/uom-conversions'
 
 definePageMeta({ titleKey: 'app.nav.pos', permission: 'pos.access' })
 
@@ -54,7 +48,11 @@ const deliveryCommands = useDeliveryCommands()
 const { appInfo } = useSettingsRepositories()
 const toast = useToast()
 
-const shopName = ref('Yoeun Sokhon Pharmacy')
+const shopName = ref('MJ Printing')
+/** Letterhead details from System Settings → App Info (used on printed invoices). */
+const shopAddress = ref('')
+const shopPhone = ref('')
+const shopLogoUrl = ref('/logo.png')
 const step = ref<PosStep>('cart')
 const search = ref('')
 const categoryId = ref('')
@@ -153,9 +151,6 @@ const editMode = ref(false)
 const editSaleId = ref('')
 const editInvoiceNo = ref('')
 const editLoading = ref(false)
-/** Original header-level discount + note preserved across an edit save (the
- *  POS has no header-discount UI, so it must round-trip unchanged). */
-const editHeaderDiscount = ref(0)
 const editNote = ref('')
 
 /** View-only: Sales Report Sale No → checkout panel, no edits / no submit. */
@@ -188,6 +183,9 @@ onMounted(async () => {
     const info = await appInfo.get()
     const name = String(info.businessName || info.applicationName || '').trim()
     if (name) shopName.value = name
+    shopAddress.value = String(info.address || '').trim()
+    shopPhone.value = String(info.supportPhone || '').trim()
+    shopLogoUrl.value = String(info.branding?.mainLogoUrl || '').trim() || '/logo.png'
   }
   catch {
     // Keep default shop name when settings are unavailable.
@@ -209,10 +207,6 @@ onMounted(async () => {
 const canOperate = computed(() =>
   auth.canAccessPage('pos.access'))
 
-/** Line discounts are gated by `pos.discount` (backend re-checks on save). */
-const canDiscount = computed(() =>
-  auth.canAccessPage('pos.discount'))
-
 const currency = computed(() => preferences.currency)
 
 const categoryOptions = computed(() => [
@@ -229,7 +223,7 @@ const products = computed(() => {
     .filter(row => !categoryId.value || String(row.categoryId) === categoryId.value)
     .filter((row) => {
       if (!q) return true
-      return [row.name, row.barcode, row.code]
+      return [row.name, row.code]
         .map(value => String(value || '').toLowerCase())
         .some(value => value.includes(q))
     })
@@ -246,12 +240,32 @@ const customerOptions = computed(() =>
       value: String(row.id),
       phone: String(row.phone || ''),
       location: String(row.location || row.address || ''),
+      /** Marks the seeded system walk-in record (default checkout customer). */
+      isWalkIn: row.is_walk_in === true || row.isWalkIn === true,
       description: [row.phone, row.location || row.address]
         .map(part => String(part || '').trim())
         .filter(Boolean)
         .join(' · '),
     })),
 )
+
+/** True when the selected checkout customer is the system walk-in record.
+ *  Walk-in sales cannot take debt (spec §5.11). */
+const isWalkInSelected = computed(() => {
+  if (!customerId.value) return false
+  const row = store.get('customers', String(customerId.value))
+  return row?.is_walk_in === true || row?.isWalkIn === true
+})
+
+/** Default the checkout customer to the seeded walk-in record so an anonymous
+ *  cash sale shows it selected (the backend already falls back to walk-in). */
+function applyDefaultCustomer() {
+  if (customerId.value) return
+  const walkIn = customerOptions.value.find(option => option.isWalkIn)
+  if (!walkIn) return
+  customerId.value = walkIn.value
+  customerName.value = walkIn.label
+}
 
 const openDebts = computed<CheckoutDebtRow[]>(() => {
   if (!customerId.value) return []
@@ -276,7 +290,6 @@ const openDebts = computed<CheckoutDebtRow[]>(() => {
     .sort((a, b) => b.date.localeCompare(a.date))
 })
 
-const discountTotal = computed(() => cartDiscountTotal(cart.value))
 const selectedDeposit = computed(() => checkoutDepositTotal(
   openDebts.value
     .filter(row => includedDebtIds.value.includes(row.id))
@@ -284,12 +297,10 @@ const selectedDeposit = computed(() => checkoutDepositTotal(
 ))
 const appliedDeliveryPrice = computed(() =>
   checkoutDeliveryFee(needsDelivery.value, deliveryPrice.value))
-/** Header discount preserved from the edited invoice (never in a new sale). */
-const headerDiscount = computed(() => (editMode.value ? editHeaderDiscount.value : 0))
 // Cart prices and delivery fee are in the sale currency. Deposit / prior-debt
 // payment is settled separately and must not inflate this sale's due amount.
 const due = computed(() => checkoutDue(
-  checkoutSaleNet(cartSubtotal(cart.value), discountTotal.value + headerDiscount.value, appliedDeliveryPrice.value),
+  checkoutSaleNet(cartSubtotal(cart.value), appliedDeliveryPrice.value),
 ))
 const isCredit = computed(() => paymentMethod.value === 'Credit')
 /** Untouched Paid now pays the grand total in full — a walk-in cash sale
@@ -324,15 +335,8 @@ const cashierName = computed(() => String(auth.user?.name || auth.user?.email ||
 const canCreateDelivery = computed(() =>
   auth.canAccessPage('delivery.create') || auth.canAccessPage('ALL_PAGES'))
 
-/** Cart line UOM options: every Pricing row's Original UOM of that product. */
-const lineUomOptions = uomOptionsFor
-
-/** Look up a product by id over the full loaded list (not the category/search
- *  filtered view), so scanner-added or filtered-out products still resolve. */
-function productById(productId: string): Record<string, unknown> | null {
-  return store.list('products').find(row => String(row.id) === productId) ?? null
-}
-
+/** Add a product to the cart (or bump its quantity), priced from the master
+ *  record's current sale price. */
 function addProduct(row: Record<string, unknown>) {
   if (returnMode.value) return
   const id = String(row.id)
@@ -350,93 +354,18 @@ function addProduct(row: Record<string, unknown>) {
     existing.quantity += 1
     return
   }
-  // Pre-select the product's **Default sale** Pricing row (else base/first,
-  // spec §2.1.3 POS cart rule 2): price = that row's sale price, remaining
-  // stock shown in the selected UOM (base stock ÷ conversion qty).
-  const lineUom = defaultLineUomFor(row)
   // Product master prices are USD; the cart stores prices in the sale currency.
-  const usdPrice = salePriceForUom(row, lineUom.uomId) ?? Number(row.salePrice || 0)
+  const usdPrice = Number(row.salePrice || 0)
   const price = saleCurrency.value === 'KHR' ? usdPrice * saleRate.value : usdPrice
   cart.value.push({
     productId: id,
     name: String(row.name || ''),
-    barcode: String(row.barcode || ''),
-    uom: lineUom.uomSymbol,
-    uomId: lineUom.uomId,
-    factorToBase: lineUom.factorToBase,
-    uomOptions: lineUomOptions(row),
     imageUrl: productImageUrl(row),
-    availableStock: availableStockInUom(stock, lineUom.factorToBase),
+    availableStock: stock,
     unitPrice: roundMoney(price),
-    discountPercent: 0,
     quantity: 1,
   })
 }
-
-/**
- * Switch a cart line's UOM: price follows that Pricing row's sale price
- * (quantity stays in the Original UOM); remaining stock is shown in the
- * selected UOM (base stock ÷ conversion qty); line UOM symbol = Original UOM.
- */
-function changeUom(productId: string, uomId: string) {
-  const line = cart.value.find(item => item.productId === productId)
-  if (!line || !uomId || line.uomId === uomId) return
-  const product = productById(productId)
-  if (!product) return
-  const usdPrice = salePriceForUom(product, uomId)
-  if (usdPrice == null) return
-  // Product master prices are USD; the cart stores prices in the sale currency.
-  const price = saleCurrency.value === 'KHR' ? usdPrice * saleRate.value : usdPrice
-  const conversion = conversionForUom(product, uomId)
-  const factor = conversion ? conversion.factorToBase : 1
-  const symbol = conversion ? conversion.uomSymbol : String(product.uomSymbol || product.uom || '')
-  line.uomId = uomId
-  line.uom = symbol
-  line.factorToBase = factor
-  line.unitPrice = roundMoney(price)
-  line.availableStock = availableStockInUom(product.quantity, factor)
-}
-
-/**
- * Scanner / manual Enter: resolve the code to an ACTIVE product and add it to
- * the cart. The local product cache is checked first (instant, no request);
- * on a miss the exact-barcode API is queried so products beyond the loaded
- * page still scan. Unknown codes show a warning and clear the input.
- */
-async function onScanCode(raw: string) {
-  if (returnMode.value || !canOperate.value) return
-  const code = String(raw || '').trim()
-  if (!code) return
-  const local = resolveExactBarcode(products.value, code)
-  if (local) {
-    addProduct(local)
-    search.value = ''
-    return
-  }
-  const remote = await posCommands.getProductByBarcode(code)
-  if (remote) {
-    addProduct(remote)
-    // Cache the record so UOM switching / line edits can resolve it later.
-    void store.fetchOne('products', String(remote.id))
-  }
-  else {
-    toast.add({ title: t('app.pos.barcodeNotFound', { code }), color: 'warning' })
-  }
-  search.value = ''
-}
-
-function onSearchEnter() {
-  void onScanCode(search.value)
-}
-
-// USB/HID scanner: captures scans anywhere on the cart screen (when focus is
-// not in an editable field) so products can be added without touching the UI.
-usePosScanner({
-  enabled: () => step.value === 'cart' && canOperate.value && !returnMode.value,
-  onScan: (code) => {
-    void onScanCode(code)
-  },
-})
 
 function changeQty(productId: string, delta: number) {
   const line = cart.value.find(item => item.productId === productId)
@@ -445,16 +374,22 @@ function changeQty(productId: string, delta: number) {
   line.quantity = next
 }
 
+/** Sold-by-area line: when both H and W (metres) are set, quantity = m². */
+function updateDimensions(productId: string, height?: number, width?: number) {
+  const line = cart.value.find(item => item.productId === productId)
+  if (!line) return
+  line.height = height
+  line.width = width
+  const area = lineAreaM2(line)
+  line.areaM2 = area ?? undefined
+  // Area lines bill by m²; a cleared pair returns to a plain 1-unit count.
+  line.quantity = area ?? 1
+}
+
 function updatePrice(productId: string, unitPrice: number) {
   const line = cart.value.find(item => item.productId === productId)
   if (!line) return
   line.unitPrice = Math.max(0, roundMoney(unitPrice))
-}
-
-function updateDiscount(productId: string, discountPercent: number) {
-  const line = cart.value.find(item => item.productId === productId)
-  if (!line) return
-  line.discountPercent = Math.min(100, Math.max(0, Number(discountPercent) || 0))
 }
 
 function removeLine(productId: string) {
@@ -478,11 +413,14 @@ function clearCart() {
   step.value = 'cart'
 }
 
-function goNext() {
+async function goNext() {
   if (!cart.value.length) return
-  void store.fetchList('customers')
-  void store.fetchList('customerDebts')
-  void store.fetchList('sales')
+  await Promise.all([
+    store.fetchList('customers'),
+    store.fetchList('customerDebts'),
+    store.fetchList('sales'),
+  ])
+  applyDefaultCustomer()
   step.value = 'checkout'
 }
 
@@ -520,7 +458,7 @@ watch(paymentMethod, (method) => {
 /** Walk-in customers cannot take debt (spec §5.11): switching to Credit
  *  without a registered customer is blocked with a hint. */
 watch(isCredit, (credit) => {
-  if (credit && !customerId.value) {
+  if (credit && (!customerId.value || isWalkInSelected.value)) {
     toast.add({ title: t('app.pos.creditRequiresCustomer'), color: 'warning' })
     paymentMethod.value = 'Cash'
   }
@@ -529,7 +467,7 @@ watch(isCredit, (credit) => {
 /* ------------------------------ return mode ------------------------------ */
 
 /** Load an original invoice into the POS as a return: preload the returnable
- *  lines (original UOM, price, discount, currency/rate, customer) and record
+ *  lines (original price, currency/rate, customer) and record
  *  a Sale Return on Submit — never a new sale. */
 async function loadReturnSale(saleId: string) {
   returnLoading.value = true
@@ -636,7 +574,7 @@ async function completeReturn() {
 /* ------------------------------- edit mode ------------------------------- */
 
 /** Load an existing invoice into the POS for editing: original lines, prices,
- *  discounts, UOM, currency/rate and customer. Submit re-saves via PATCH. */
+ *  currency/rate and customer. Submit re-saves via PATCH. */
 async function loadEditSale(saleId: string) {
   editLoading.value = true
   try {
@@ -649,14 +587,6 @@ async function loadEditSale(saleId: string) {
     customerName.value = sale.customerName
     editInvoiceNo.value = sale.invoiceNo
     cart.value = saleEditCartLines(sale, productById)
-    // Restore the saved checkout values so an edit never zeroes them. Header
-    // discount = sale total discount minus the per-line discounts already on
-    // the cart (the POS only edits line discounts).
-    const lineDiscounts = roundMoney(sale.items.reduce(
-      (sum, item) => sum + Number(item.discountAmount || 0),
-      0,
-    ))
-    editHeaderDiscount.value = roundMoney(Math.max(0, Number(sale.discount || 0) - lineDiscounts))
     editNote.value = sale.note || ''
     paymentMethod.value = SALE_METHOD_TO_UI[sale.paymentMethod] || 'Cash'
     deliveryPrice.value = Number(sale.deliveryPrice || 0)
@@ -688,7 +618,6 @@ function exitEditMode() {
   editMode.value = false
   editSaleId.value = ''
   editInvoiceNo.value = ''
-  editHeaderDiscount.value = 0
   editNote.value = ''
   cart.value = []
   customerId.value = undefined
@@ -709,11 +638,6 @@ async function loadViewSale(saleId: string) {
     customerName.value = sale.customerName
     viewInvoiceNo.value = sale.invoiceNo
     cart.value = saleEditCartLines(sale, productById)
-    const lineDiscounts = roundMoney(sale.items.reduce(
-      (sum, item) => sum + Number(item.discountAmount || 0),
-      0,
-    ))
-    editHeaderDiscount.value = roundMoney(Math.max(0, Number(sale.discount || 0) - lineDiscounts))
     editNote.value = sale.note || ''
     paymentMethod.value = SALE_METHOD_TO_UI[sale.paymentMethod] || 'Cash'
     deliveryPrice.value = Number(sale.deliveryPrice || 0)
@@ -745,13 +669,24 @@ async function exitViewMode() {
   viewMode.value = false
   viewSaleId.value = ''
   viewInvoiceNo.value = ''
-  editHeaderDiscount.value = 0
   editNote.value = ''
   cart.value = []
   customerId.value = undefined
   customerName.value = ''
   step.value = 'cart'
   await navigateTo('/reports/sales')
+}
+
+/** View-only invoice → edit mode, reusing the already-loaded lines/prices. */
+function editFromView() {
+  if (!viewSaleId.value || !canOperate.value) return
+  editMode.value = true
+  editSaleId.value = viewSaleId.value
+  editInvoiceNo.value = viewInvoiceNo.value
+  viewMode.value = false
+  viewSaleId.value = ''
+  viewInvoiceNo.value = ''
+  step.value = 'cart'
 }
 
 /** Save the edited invoice (reverse + reapply on the backend). */
@@ -770,17 +705,12 @@ async function saveEditSale() {
       items: cart.value.map(line => ({
         productId: line.productId,
         quantity: line.quantity,
+        height: line.height,
+        width: line.width,
         unitPrice: line.unitPrice,
-        discountPercent: line.discountPercent,
-        uomId: line.uomId || undefined,
-        uomSymbol: line.uom || undefined,
-        factorToBase: line.factorToBase || 1,
       })),
       paymentMethod: paymentMethod.value,
       paidAmount: paidAmount.value,
-      // Header-level discount only — line discounts ride on the items, so
-      // sending the line total here would double-discount the sale.
-      discount: editHeaderDiscount.value,
       note: editNote.value || null,
       deliveryPrice: appliedDeliveryPrice.value,
       currency: saleCurrency.value,
@@ -854,19 +784,13 @@ async function completeSale() {
       items: cart.value.map(line => ({
         productId: line.productId,
         quantity: line.quantity,
+        height: line.height,
+        width: line.width,
         // Line prices are already stored in the sale currency.
         unitPrice: line.unitPrice,
-        discountPercent: line.discountPercent,
-        uomId: line.uomId || undefined,
-        uomSymbol: line.uom || undefined,
-        factorToBase: line.factorToBase || 1,
       })),
       paymentMethod: paymentMethod.value,
       paidAmount: paidAmount.value,
-      // POS discounts are per-line and ride on `items[].discountPercent`;
-      // there is no header discount on a new sale, so never resend the line
-      // discount total here (it would be applied twice by the backend).
-      discount: 0,
       deliveryPrice: appliedDeliveryPrice.value,
       deposit: depositInput.value,
       includedDebtIds: includedDebtIds.value,
@@ -886,12 +810,11 @@ async function completeSale() {
       const receipt = await posCommands.getSaleReceipt(lastSaleId.value)
       printLines = receipt.items.map(item => ({
         name: item.name,
-        uom: item.uom,
         quantity: item.quantity,
+        height: item.height,
+        width: item.width,
+        areaM2: item.areaM2,
         unitPrice: item.unitPrice,
-        discountPercent: item.unitPrice > 0 && item.quantity > 0
-          ? Math.round((item.discount / (item.unitPrice * item.quantity)) * 10000) / 100
-          : 0,
       }))
     }
     catch {
@@ -910,6 +833,12 @@ async function completeSale() {
       previousDebtAmount: previousDebtTotal.value,
       depositAmount: paidAmount.value,
       outstandingAmount: totalOutstanding.value,
+      logoUrl: shopLogoUrl.value || undefined,
+      businessName: shopName.value,
+      businessAddress: shopAddress.value || undefined,
+      businessPhone: shopPhone.value || undefined,
+      customerAddress: customerLocation.value || undefined,
+      customerPhone: customerPhone.value || undefined,
     }
     toast.add({
       title: `${t('app.pos.saleCompleted')} · ${lastSaleNo.value}`,
@@ -1025,7 +954,17 @@ async function completeSale() {
       <span>{{ t('app.pos.viewMode') }}</span>
       <span v-if="viewInvoiceNo" class="text-muted">· {{ viewInvoiceNo }}</span>
       <UButton
+        v-if="canOperate"
         class="ms-auto"
+        color="primary"
+        variant="soft"
+        size="xs"
+        icon="i-lucide-pencil"
+        :label="t('app.reports.edit')"
+        @click="editFromView"
+      />
+      <UButton
+        :class="canOperate ? '' : 'ms-auto'"
         color="neutral"
         variant="ghost"
         size="xs"
@@ -1065,18 +1004,15 @@ async function completeSale() {
         :currency="currency"
         :disabled="!canOperate || returnMode"
         @add="addProduct"
-        @search-enter="onSearchEnter"
       />
       <PosCartPanel
         :cart="cart"
         :sale-currency="saleCurrency"
         :disabled="!canOperate"
-        :can-discount="canDiscount"
         :return-mode="returnMode"
         @change-qty="changeQty"
-        @change-uom="changeUom"
+        @update-dimensions="updateDimensions"
         @update-price="updatePrice"
-        @update-discount="updateDiscount"
         @update-sale-currency="onSaleCurrencyRequested"
         @remove="removeLine"
         @clear="clearCart"

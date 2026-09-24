@@ -1,6 +1,6 @@
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, deactivate_then_delete, login
+from tests.utils import admin_headers, create_user_with_role, deactivate_then_delete, login
 
 VIEWER_EMAIL = "viewer@example.com"
 VIEWER_PASSWORD = "viewerpass1"
@@ -84,7 +84,7 @@ async def test_category_delete_blocked_when_products_exist(client):
     ).json()["data"]
     product = await client.post(
         "/api/v1/products",
-        json={"sku": "SNK-001", "name": "Chips", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "2.50"},
+        json={"sku": "SNK-001", "name": "Chips", "category_id": category["id"], "selling_price": "2.50"},
         headers=headers,
     )
     assert product.status_code == 201, product.text

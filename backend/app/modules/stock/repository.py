@@ -7,14 +7,14 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.image.service import resolve_media_url
-from app.modules.stock.models import BatchStockBalance, Product, StockBalance, StockMovement
+from app.modules.stock.models import Product, StockBalance, StockMovement
 
 
 # Movement-kind grouping for the stock read model (spec section 2.1.5):
-# Stock In (inbound), Stock Out (non-damage outbound), Damage (damage + expiry).
+# Stock In (inbound), Stock Out (non-damage outbound), Damage.
 STOCK_IN_TYPES = ("STOCK_IN", "SALE_RETURN", "ADJUSTMENT_IN")
 STOCK_OUT_TYPES = ("SALE", "PURCHASE_RETURN", "ADJUSTMENT_OUT")
-DAMAGE_TYPES = ("DAMAGE", "EXPIRE")
+DAMAGE_TYPES = ("DAMAGE",)
 
 
 def _product_aggregates(product_id: uuid.UUID, grouped: dict) -> dict:
@@ -24,13 +24,11 @@ def _product_aggregates(product_id: uuid.UUID, grouped: dict) -> dict:
             "stock_in_qty": Decimal("0"),
             "stock_out_qty": Decimal("0"),
             "damage_qty": Decimal("0"),
-            "expiry_date": None,
         }
     return {
         "stock_in_qty": Decimal(row["stock_in_qty"]).quantize(Decimal("0.0001")),
         "stock_out_qty": Decimal(row["stock_out_qty"]).quantize(Decimal("0.0001")),
         "damage_qty": Decimal(row["damage_qty"]).quantize(Decimal("0.0001")),
-        "expiry_date": row.get("expiry_date"),
     }
 
 
@@ -39,14 +37,9 @@ def product_to_out(product: Product, *, grouped: dict | None = None) -> dict:
     data = {
         "id": product.id,
         "sku": product.sku,
-        "barcode": product.barcode,
         "name": product.name,
         "category_id": product.category_id,
         "category_name": product.category_ref.name if product.category_ref else None,
-        "uom_id": product.uom_id,
-        "uom_code": product.uom_ref.code if product.uom_ref else None,
-        "uom_name": product.uom_ref.name if product.uom_ref else None,
-        "uom_symbol": product.uom_ref.symbol if product.uom_ref else None,
         "brand_id": product.brand_id,
         "brand_name": product.brand_ref.name if product.brand_ref else None,
         "supplier_id": product.supplier_id,
@@ -54,17 +47,10 @@ def product_to_out(product: Product, *, grouped: dict | None = None) -> dict:
         "cost_price": product.cost_price,
         "selling_price": product.selling_price,
         "minimum_stock": product.minimum_stock,
-        "expiry_tracking": product.expiry_tracking,
-        # Batch/lot tracking switch (spec: batch management).
-        "track_batch": product.track_batch,
-        "fifo": product.fifo,
         "image_object_key": product.image_object_key,
         "image_url": resolve_media_url(product.image_object_key),
         "status": product.status,
         "note": product.note,
-        # Convert-UOM rows (spec 4.2); snake_case + the camelCase key the UI reads.
-        "uom_conversions": product.uom_conversions or [],
-        "uomConversions": product.uom_conversions or [],
         "quantity": product.balance.quantity if product.balance else Decimal("0"),
         "average_cost": product.balance.average_cost if product.balance else Decimal("0.00"),
         "created_at": product.created_at,
@@ -78,7 +64,6 @@ def _product_order_by(sort: str | None) -> tuple:
     Unknown fields fall back to the stable default: name, id."""
     columns = {
         "name": Product.name,
-        "barcode": Product.barcode,
         "status": Product.status,
         "cost_price": Product.cost_price,
         "selling_price": Product.selling_price,
@@ -104,9 +89,8 @@ class ProductRepository:
         count_stmt = select(func.count()).select_from(Product)
         if q:
             pattern = f"%{q.strip()}%"
-            # Barcode-first operational search: barcode, then name, then the
-            # legacy optional sku. A full barcode search hits the unique index.
-            condition = Product.barcode.ilike(pattern) | Product.name.ilike(pattern) | Product.sku.ilike(pattern)
+            # Name-first search plus the optional internal sku code.
+            condition = Product.name.ilike(pattern) | Product.sku.ilike(pattern)
             stmt = stmt.where(condition)
             count_stmt = count_stmt.where(condition)
         if category_id is not None:
@@ -130,10 +114,6 @@ class ProductRepository:
 
     async def get_by_sku(self, sku: str) -> Product | None:
         result = await self.session.execute(select(Product).where(Product.sku == sku))
-        return result.scalar_one_or_none()
-
-    async def get_by_barcode(self, barcode: str) -> Product | None:
-        result = await self.session.execute(select(Product).where(Product.barcode == barcode))
         return result.scalar_one_or_none()
 
     async def ensure_balance(self, product_id: uuid.UUID) -> StockBalance:
@@ -191,22 +171,11 @@ class ProductRepository:
         )
         return int(result.scalar_one())
 
-    async def count_batches(self, product_id: uuid.UUID) -> int:
-        result = await self.session.execute(
-            select(func.count())
-            .select_from(BatchStockBalance)
-            .where(BatchStockBalance.product_id == product_id)
-        )
-        return int(result.scalar_one())
-
     async def aggregate_movements(self, product_ids: list[uuid.UUID]) -> dict:
         """Per-product stock read-model aggregates.
 
-        Returns {product_id: {stock_in_qty, stock_out_qty, damage_qty,
-        expiry_date}}. stock_in/out/damage derive from immutable
-        stock_movements; expiry_date is the NEAREST live-batch expiry (spec:
-        earliest expiry_date of a lot with remaining_qty > 0 that has not
-        expired; null when no such lot exists).
+        Returns {product_id: {stock_in_qty, stock_out_qty, damage_qty}}.
+        stock_in/out/damage derive from the immutable stock_movements ledger.
         """
         if not product_ids:
             return {}
@@ -247,40 +216,11 @@ class ProductRepository:
             .where(StockMovement.product_id.in_(product_ids))
             .group_by(StockMovement.product_id)
         )
-        aggregates = {
+        return {
             row.product_id: {
                 "stock_in_qty": row.stock_in_qty,
                 "stock_out_qty": row.stock_out_qty,
                 "damage_qty": row.damage_qty,
-                "expiry_date": None,
             }
             for row in movement_rows
         }
-        # Nearest expiry from the authoritative per-batch ledger, not from
-        # historical movements: only live lots (remaining > 0, not yet past
-        # their expiry date) participate, per the nearest-expiry spec.
-        today = func.current_date()
-        expiry_rows = await self.session.execute(
-            select(
-                BatchStockBalance.product_id,
-                func.min(BatchStockBalance.expiry_date).label("nearest_expiry"),
-            )
-            .where(
-                BatchStockBalance.product_id.in_(product_ids),
-                BatchStockBalance.remaining_quantity > 0,
-                BatchStockBalance.expiry_date.is_not(None),
-                BatchStockBalance.expiry_date >= today,
-            )
-            .group_by(BatchStockBalance.product_id)
-        )
-        for row in expiry_rows:
-            if row.product_id in aggregates:
-                aggregates[row.product_id]["expiry_date"] = row.nearest_expiry
-            else:
-                aggregates[row.product_id] = {
-                    "stock_in_qty": Decimal("0"),
-                    "stock_out_qty": Decimal("0"),
-                    "damage_qty": Decimal("0"),
-                    "expiry_date": row.nearest_expiry,
-                }
-        return aggregates

@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from tests.modules.pos.helpers import balance_of, make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import admin_headers
 
 
 async def _product_row(client, headers, product_id: str) -> dict:
@@ -62,73 +62,6 @@ async def test_product_list_exposes_stock_aggregates(client):
     assert Decimal(rows[0]["damage_qty"]) == Decimal("1.0000")
     # The API-mediated image URL field is part of the product DTO.
     assert "image_url" in rows[0]
-    assert "expiry_date" in rows[0]
-
-
-@pytest.mark.asyncio
-async def test_product_list_exposes_nearest_expiry_date(client):
-    """Expire Date on the stock list is the soonest lot expiry from movements."""
-    headers = await admin_headers(client)
-    tag = uuid.uuid4().hex[:6]
-    category = (
-        await client.post(
-            "/api/v1/categories",
-            json={"code": f"C-EXP-{tag}", "name": f"Cat Exp {tag}"},
-            headers=headers,
-        )
-    ).json()["data"]
-    product = (
-        await client.post(
-            "/api/v1/products",
-            json={
-                "sku": f"EXP-{tag}",
-                "name": f"Expiry Widget {tag}",
-                "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
-                "selling_price": "5.00",
-                "expiry_tracking": True,
-            },
-            headers=headers,
-        )
-    ).json()["data"]
-    pid = product["id"]
-
-    first = await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": "20.00",
-            "items": [{
-                "product_id": pid,
-                "quantity": "4",
-                "unit_cost": "2.00",
-                "expiry_date": "2027-06-01",
-            }],
-        },
-        headers=headers,
-    )
-    assert first.status_code == 201, first.text
-
-    second = await client.post(
-        "/api/v1/stock/in",
-        json={
-            "paid_amount": "10.00",
-            "items": [{
-                "product_id": pid,
-                "quantity": "2",
-                "unit_cost": "2.00",
-                "expiry_date": "2026-12-15",
-            }],
-        },
-        headers=headers,
-    )
-    assert second.status_code == 201, second.text
-
-    row = await _product_row(client, headers, pid)
-    assert row["expiry_date"] == "2026-12-15"
-
-    listing = await client.get(f"/api/v1/products?q=EXP-{tag}", headers=headers)
-    assert listing.status_code == 200, listing.text
-    assert listing.json()["data"][0]["expiry_date"] == "2026-12-15"
 
 
 @pytest.mark.asyncio

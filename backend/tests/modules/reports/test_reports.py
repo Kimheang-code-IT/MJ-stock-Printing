@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, login
 
 SALES_ONLY_EMAIL = "sales-clerk@example.com"
 SALES_ONLY_PASSWORD = "clerkpass1"
@@ -45,7 +45,7 @@ async def _seed(client, headers):
     product = (
         await client.post(
             "/api/v1/products",
-            json={"sku": f"REP-{tag}", "name": f"Rep Widget {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "10.00"},
+            json={"sku": f"REP-{tag}", "name": f"Rep Widget {tag}", "category_id": category["id"], "selling_price": "10.00"},
             headers=headers,
         )
     ).json()["data"]
@@ -181,7 +181,7 @@ async def test_sales_report_metrics_and_filters(client):
 
 @pytest.mark.asyncio
 async def test_sales_report_carries_saved_checkout_header(client):
-    """Grouped report rows expose the SAVED sale header (subtotal, discount,
+    """Grouped report rows expose the SAVED sale header (subtotal,
     delivery, grand total, paid, debt, payment status, currency) so the SPA
     shows the real checkout values instead of zeros."""
     headers = await admin_headers(client)
@@ -195,7 +195,6 @@ async def test_sales_report_carries_saved_checkout_header(client):
     # Cash sale: 3 × 10 = 30, fully paid (amount_received 100 → change, paid 30).
     cash = rows["CASH"]
     assert Decimal(cash["subtotal"]) == Decimal("30.00")
-    assert Decimal(cash["sale_discount"]) == Decimal("0.00")
     assert Decimal(cash["delivery_price"]) == Decimal("0.00")
     assert Decimal(cash["grand_total"]) == Decimal("30.00")
     assert Decimal(cash["paid_amount"]) == Decimal("30.00")
@@ -214,8 +213,8 @@ async def test_sales_report_carries_saved_checkout_header(client):
 
 
 @pytest.mark.asyncio
-async def test_sales_report_saved_discount_delivery_and_note(client):
-    """Header discount, delivery fee and note survive into the report row."""
+async def test_sales_report_saved_delivery_and_note(client):
+    """Delivery fee and note survive into the report row."""
     import uuid as _uuid
 
     headers = await admin_headers(client)
@@ -228,7 +227,7 @@ async def test_sales_report_saved_discount_delivery_and_note(client):
     product = (
         await client.post(
             "/api/v1/products",
-            json={"sku": f"REPHDR-{tag}", "name": f"Rep Hdr {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "10.00"},
+            json={"sku": f"REPHDR-{tag}", "name": f"Rep Hdr {tag}", "category_id": category["id"], "selling_price": "10.00"},
             headers=headers,
         )
     ).json()["data"]
@@ -244,7 +243,6 @@ async def test_sales_report_saved_discount_delivery_and_note(client):
         json={
             "payment_method": "CASH",
             "amount_received": "100.00",
-            "discount": "2.00",
             "delivery_price": "1.50",
             "note": "ring the bell",
             "items": [{"product_id": product["id"], "quantity": "1"}],
@@ -253,20 +251,18 @@ async def test_sales_report_saved_discount_delivery_and_note(client):
     )
     assert sale.status_code == 201, sale.text
     sale = sale.json()["data"]
-    # 10 subtotal − 2 discount + 1.50 delivery = 9.50 grand total.
+    # 10 subtotal + 1.50 delivery = 11.50 grand total.
     assert Decimal(sale["subtotal"]) == Decimal("10.00")
-    assert Decimal(sale["discount_amount"]) == Decimal("2.00")
     assert Decimal(sale["delivery_price"]) == Decimal("1.50")
-    assert Decimal(sale["grand_total"]) == Decimal("9.50")
+    assert Decimal(sale["grand_total"]) == Decimal("11.50")
 
     response = await client.get(f"/api/v1/reports/sales?q={sale['invoice_no']}", headers=headers)
     assert response.status_code == 200, response.text
     row = response.json()["data"][0]
     assert Decimal(row["subtotal"]) == Decimal("10.00")
-    assert Decimal(row["sale_discount"]) == Decimal("2.00")
     assert Decimal(row["delivery_price"]) == Decimal("1.50")
-    assert Decimal(row["grand_total"]) == Decimal("9.50")
-    assert Decimal(row["paid_amount"]) == Decimal("9.50")
+    assert Decimal(row["grand_total"]) == Decimal("11.50")
+    assert Decimal(row["paid_amount"]) == Decimal("11.50")
     assert row["note"] == "ring the bell"
 
 
@@ -285,7 +281,7 @@ async def test_sales_report_khr_bank_qr_saved_currency(client):
     product = (
         await client.post(
             "/api/v1/products",
-            json={"sku": f"REPKQ-{tag}", "name": f"Rep KQ {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "1.00"},
+            json={"sku": f"REPKQ-{tag}", "name": f"Rep KQ {tag}", "category_id": category["id"], "selling_price": "1.00"},
             headers=headers,
         )
     ).json()["data"]
@@ -337,7 +333,7 @@ async def test_sales_report_carries_debt_due_date(client):
     product = (
         await client.post(
             "/api/v1/products",
-            json={"sku": f"REPDD-{tag}", "name": f"Rep Due {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "5.00"},
+            json={"sku": f"REPDD-{tag}", "name": f"Rep Due {tag}", "category_id": category["id"], "selling_price": "5.00"},
             headers=headers,
         )
     ).json()["data"]
@@ -376,20 +372,12 @@ async def test_sales_report_carries_debt_due_date(client):
 
 
 @pytest.mark.asyncio
-async def test_sales_report_cost_applies_uom_factor(client):
-    """COGS must be base-unit cost × quantity × factor_to_base, not the raw
-    entered-UOM quantity (spec §2.1.10). Regression for the understated cost."""
+async def test_sales_report_cost_uses_unit_cost_times_quantity(client):
+    """COGS = unit cost × sold quantity (single stock unit; spec §2.1.10)."""
     import uuid as _uuid
 
     headers = await admin_headers(client)
     tag = _uuid.uuid4().hex[:6]
-    pack = (
-        await client.post(
-            "/api/v1/uoms",
-            json={"code": f"PKT{tag[:4]}", "name": "Pack", "symbol": "pk"},
-            headers=headers,
-        )
-    ).json()["data"]
     category = (
         await client.post(
             "/api/v1/categories", json={"code": f"CF-{tag}", "name": "Factor Cat"}, headers=headers
@@ -400,14 +388,9 @@ async def test_sales_report_cost_applies_uom_factor(client):
             "/api/v1/products",
             json={
                 "sku": f"CF-{tag}",
-                "name": f"Factor Widget {tag}",
+                "name": f"Cost Widget {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "12.00",
-                "uom_conversions": [
-                    {"uom_id": str(DEFAULT_UOM_ID), "factor_to_base": "1", "sale_price": "12.00", "is_default_sale": True},
-                    {"uom_id": pack["id"], "factor_to_base": "10", "sale_price": "110.00", "is_default_sale": False},
-                ],
             },
             headers=headers,
         )
@@ -418,41 +401,32 @@ async def test_sales_report_cost_applies_uom_factor(client):
         json={
             "paid_amount": "200.00",
             "items": [
-                {
-                    "product_id": product["id"],
-                    "uom_id": pack["id"],
-                    "factor_to_base": "10",
-                    "quantity": "2",
-                    "unit_cost": "100.00",
-                }
+                {"product_id": product["id"], "quantity": "20", "unit_cost": "10.00"}
             ],
         },
         headers=headers,
     )
-    assert stock_in.status_code == 201, stock_in.text  # 20 base @ 10.00
+    assert stock_in.status_code == 201, stock_in.text  # 20 units @ 10.00
 
     sale = await client.post(
         "/api/v1/pos/sales",
         json={
             "payment_method": "CASH",
             "amount_received": "200.00",
-            "items": [
-                {"product_id": product["id"], "quantity": "1", "uom_id": pack["id"], "factor_to_base": "10"}
-            ],
+            "items": [{"product_id": product["id"], "quantity": "2"}],
         },
         headers=headers,
     )
     assert sale.status_code == 201, sale.text
-    assert Decimal(sale.json()["data"]["items"][0]["factor_to_base"]) == Decimal("10")
 
     report = await client.get(f"/api/v1/reports/sales?product_id={product['id']}", headers=headers)
     assert report.status_code == 200, report.text
     row = report.json()["data"][0]
-    assert Decimal(row["quantity"]) == Decimal("1")
-    assert Decimal(row["sales_amount"]) == Decimal("110.00")
-    # True COGS = 10.00/base × 10 base units = 100.00 (not 10.00).
-    assert Decimal(row["cost"]) == Decimal("100.00")
-    assert Decimal(row["gross_profit"]) == Decimal("10.00")
+    assert Decimal(row["quantity"]) == Decimal("2")
+    assert Decimal(row["sales_amount"]) == Decimal("24.00")
+    # COGS = 10.00/unit × 2 units = 20.00; gross profit = 24.00 - 20.00.
+    assert Decimal(row["cost"]) == Decimal("20.00")
+    assert Decimal(row["gross_profit"]) == Decimal("4.00")
 
 
 @pytest.mark.asyncio
@@ -756,7 +730,6 @@ async def test_debt_reports_currency_filter(client):
                 "sku": f"REPC-{tag}",
                 "name": f"Rep Cur {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "10.00",
             },
             headers=headers,
@@ -886,8 +859,7 @@ async def test_finance_report_reconciles_with_transactions(client, finance_basel
     assert _delta(finance_baseline, data, "total_supplier_debt") == Decimal("15.00")
     assert _delta(finance_baseline, data, "cost_of_goods_sold") == Decimal("8.00")
     assert _delta(finance_baseline, data, "stock_damage_loss") == Decimal("2.00")
-    assert _delta(finance_baseline, data, "stock_expire_loss") == Decimal("0.00")
-    # Gross profit = 40 - 8 = 32; Net = 32 - 2 damage - 0 expiry - 5 supplier
+    # Gross profit = 40 - 8 = 32; Net = 32 - 2 damage - 5 supplier
     # payment = 25 (the purchase paid 5 at receipt, leaving a 15 debt).
     assert _delta(finance_baseline, data, "gross_profit") == Decimal("32.00")
     assert _delta(finance_baseline, data, "supplier_payments") == Decimal("5.00")
@@ -958,7 +930,7 @@ async def test_sales_report_rows_carry_document_currency(client):
     product = (
         await client.post(
             "/api/v1/products",
-            json={"sku": f"REPCUR-{tag}", "name": f"Rep Cur {tag}", "category_id": category["id"], "uom_id": str(DEFAULT_UOM_ID), "selling_price": "1.00"},
+            json={"sku": f"REPCUR-{tag}", "name": f"Rep Cur {tag}", "category_id": category["id"], "selling_price": "1.00"},
             headers=headers,
         )
     ).json()["data"]
@@ -1076,7 +1048,6 @@ async def test_cross_currency_cogs_is_normalized_to_sale_currency(client):
                     "sku": f"FX-{tag}-{suffix}",
                     "name": f"FX Widget {tag} {suffix}",
                     "category_id": category["id"],
-                    "uom_id": str(DEFAULT_UOM_ID),
                     "selling_price": selling_price,
                 },
                 headers=headers,

@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import type { AppRecord } from '~/config/admin-seed'
 import type { ModuleTable } from '~/config/modules'
-import type { DocumentTabSchema } from '~/types/stock-pos/common'
+import type { DocumentTabSchema } from '~/types/mj/common'
 import { useDeliveryCommands } from '~/repositories/index'
 import { collectionOptionsEndpoint } from '~/utils/module/document-tabs'
 import { formatDate } from '~/utils/format/format-service'
 import {
-  invoiceDeliveryStatusLabelKey,
   normalizeDeliverableInvoice,
   noteSales,
   type DeliverableInvoice,
@@ -26,7 +25,7 @@ import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
  * - "Invoices to deliver" line table: each row adds ONE invoice — the
  *   picker offers only the selected customer's deliverable invoices
  *   (same-customer rule, searchable by invoice no), auto-fills the row's
- *   Date + Status, and blocks duplicate selection. Multiple invoices of the
+ *   invoice Date, and blocks duplicate selection. Multiple invoices of the
  *   SAME customer can be added as rows. Every selected invoice expands to
  *   its deliverable item lines (full remaining qty) on submit — the item
  *   level delivery-note API contract (saleId / saleItemId / productId /
@@ -56,7 +55,7 @@ const props = withDefaults(defineProps<{
   canConfirm: true,
   canUpdate: true,
   printOnCreate: true,
-  shopName: 'Yoeun Sokhon Pharmacy',
+  shopName: 'MJ Printing',
   editNote: null,
 })
 
@@ -114,7 +113,6 @@ const noteInvoices = computed<DeliverableInvoice[]>(() => {
         productId: String(item.productId || ''),
         product: String(item.product || ''),
         sku: '',
-        uomSymbol: String(item.uomSymbol || ''),
         qtyOrdered: Number(item.qtyOrdered ?? 0),
         qtyRemaining: Number(item.qtyToDeliver ?? 0),
       }))
@@ -151,7 +149,7 @@ function applyEditNote(note: AppRecord) {
   model.note = String(note.note || '')
   model.driverName = String(note.driverName || '')
   model.vehicleNo = String(note.vehicleNo || '')
-  model.lines = noteSales(note).map(link => ({ saleId: link.saleId, invoiceDate: '', invoiceStatus: '' }))
+  model.lines = noteSales(note).map(link => ({ saleId: link.saleId, invoiceDate: '' }))
 }
 
 onMounted(async () => {
@@ -172,7 +170,7 @@ onMounted(async () => {
       const invoice = invoiceById.value.get(preselect)
       if (invoice) {
         model.customerId = invoice.customerId
-        model.lines = [{ saleId: preselect, invoiceDate: '', invoiceStatus: '' }]
+        model.lines = [{ saleId: preselect, invoiceDate: '' }]
       }
       else toast.add({ title: t('app.delivery.noDeliverableSales'), color: 'warning' })
     }
@@ -216,9 +214,8 @@ const linesTable = computed<ModuleTable>(() => ({
       width: 'w-80 min-w-64',
       optionItems: row => invoiceOptionsFor(row),
     },
-    // Auto-filled snapshots of the selected invoice (display only).
+    // Auto-filled snapshot of the selected invoice (display only).
     { key: 'invoiceDate', label: t('app.fields.date'), type: 'text', computed: true, width: 'w-32 min-w-28' },
-    { key: 'invoiceStatus', label: t('app.fields.status'), type: 'text', computed: true, width: 'w-36 min-w-32' },
   ],
 }))
 
@@ -317,7 +314,6 @@ watch(() => model.lines, (rows) => {
     const row = {
       saleId,
       invoiceDate: formatDate(invoice.date),
-      invoiceStatus: t(invoiceDeliveryStatusLabelKey(invoice.deliveryStatus)),
     }
     if (JSON.stringify(row) !== JSON.stringify(raw)) changed = true
     next.push(row)

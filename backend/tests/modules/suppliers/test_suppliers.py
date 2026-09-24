@@ -1,4 +1,4 @@
-from tests.utils import DEFAULT_UOM_ID, admin_headers, deactivate_then_delete
+from tests.utils import admin_headers, deactivate_then_delete
 
 
 async def test_supplier_crud_with_auto_code(client):
@@ -51,7 +51,6 @@ async def test_supplier_delete_blocked_by_purchase_history_then_deactivate(clien
                 "sku": "SUPH-1",
                 "name": "Supplier History Product",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "5.00",
             },
             headers=headers,

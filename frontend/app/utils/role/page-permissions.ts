@@ -36,7 +36,6 @@ const PAGE_ROUTES: Readonly<Record<string, string>> = {
   pos: '/pos',
   delivery: '/delivery-notes',
   categories: '/setup/categories',
-  uoms: '/setup/uoms',
   brands: '/setup/brands',
   suppliers: '/setup/suppliers',
   customers: '/setup/customers',

@@ -15,7 +15,7 @@ import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-logger = logging.getLogger("stock_pos.export")
+logger = logging.getLogger("mj.export")
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 PDF_MEDIA_TYPE = "application/pdf"

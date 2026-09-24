@@ -3,7 +3,7 @@
  * Active border uses default grey (`ring-default`), not inverted/black.
  */
 
-import type { AppFontSize } from '~/types/stock-pos/settings'
+import type { AppFontSize } from '~/types/mj/settings'
 
 const selectChrome = 'rounded-sm bg-elevated/70 font-medium text-highlighted'
 const selectIdle = `${selectChrome} ring-0`

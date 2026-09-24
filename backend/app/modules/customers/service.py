@@ -15,7 +15,7 @@ from app.shared.audit.service import record_audit
 from app.shared.documents import allocate_document_number
 from app.shared.lifecycle import assert_inactive_for_delete
 
-logger = logging.getLogger("stock_pos.customers")
+logger = logging.getLogger("mj.customers")
 
 
 class CustomerService:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DocumentTabSchema } from '~/types/stock-pos/common'
+import type { DocumentTabSchema } from '~/types/mj/common'
 import { moduleDocumentRecordKey } from '~/utils/module/document-tabs'
 import { documentFormItemKey, documentFormSectionItems, isFullWidthField } from '~/utils/module/form-layout'
 
@@ -28,12 +28,7 @@ const wideForm = computed(() =>
       section.fields.some(field =>
         field.type === 'notification-rules'
         || field.type === 'line-table'
-        || field.type === 'uom-conversions'
         || field.type === 'related-records'
-        || field.type === 'batches'
-        || field.type === 'product-batches'
-        || field.type === 'product-movements'
-        || field.type === 'product-barcode'
         || field.type === 'party-sales-history'
         || field.type === 'party-purchase-history',
       ),

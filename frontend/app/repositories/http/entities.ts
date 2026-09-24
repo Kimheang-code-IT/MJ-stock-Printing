@@ -1,6 +1,6 @@
 import type { AppRecord } from '~/config/admin-seed'
-import type { ApiMeta, ApiResponse } from '~/types/stock-pos/common'
-import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
+import type { ApiMeta, ApiResponse } from '~/types/mj/common'
+import type { AppRolePermissionRow } from '~/types/mj/entities'
 import type {
   DashboardSummary,
   EntityListQuery,
@@ -11,10 +11,8 @@ import type {
   FinanceSummary,
   PosCommandRepository,
   PosCompleteSaleInput,
-  ProductBatchRow,
   ProductCostHistoryRow,
   ProductHistoryRow,
-  ProductSalePriceRow,
   SaleDetail,
   SaleReceipt,
   SearchRepository,
@@ -172,53 +170,21 @@ function adaptProductOut(row: Record<string, unknown>): Record<string, unknown> 
     sku: row.sku ?? row.code ?? '',
     categoryId: asRecordId(row.categoryId ?? row.category_id) || null,
     brandId: asRecordId(row.brandId ?? row.brand_id) || null,
-    uomId: asRecordId(row.uomId ?? row.uom_id) || null,
     supplierId: asRecordId(row.supplierId ?? row.supplier_id) || null,
     category: row.category ?? row.category_name ?? '',
     brand: row.brand ?? row.brand_name ?? '',
     supplier: row.supplier ?? row.supplier_name ?? '',
-    uom: row.uom ?? row.uom_name ?? '',
-    uomSymbol: row.uomSymbol ?? row.uom_symbol ?? '',
     costPrice: row.costPrice ?? row.cost_price,
     salePrice: row.salePrice ?? row.selling_price,
     minimumStock: row.minimumStock ?? row.minimum_stock,
-    expiryTracking: row.expiryTracking ?? row.expiry_tracking ?? false,
-    trackBatch: row.trackBatch ?? row.track_batch ?? (row.expiryTracking ?? row.expiry_tracking ?? false) === true,
-    trackExpiry: row.trackExpiry ?? row.track_expiry ?? row.expiryTracking ?? row.expiry_tracking ?? false,
-    fifo: row.fifo ?? false,
     stockInQty: row.stockInQty ?? row.stock_in_qty,
     stockOutQty: row.stockOutQty ?? row.stock_out_qty,
     damageQty: row.damageQty ?? row.damage_qty,
     imageUrl: row.imageUrl ?? row.image_url ?? null,
     imageObjectKey: row.imageObjectKey ?? row.image_object_key ?? null,
-    // Nearest lot expiry for the Stock list column (before Status).
-    expiryDate: row.expiryDate ?? row.expiry_date ?? null,
     // UI status dialect (module filters use Active/Inactive).
     status: row.status === 'ACTIVE' ? 'Active' : row.status === 'INACTIVE' ? 'Inactive' : row.status,
-    // Pricing rows normalized to the UI camelCase dialect (spec §2.1.3):
-    // { uomId, uomSymbol, convertUomId, convertUomSymbol, factorToBase,
-    //   salePrice, isDefaultSale, costPrice }.
-    uomConversions: adaptUomConversionsOut(row.uomConversions ?? row.uom_conversions),
   }
-}
-
-/** Backend Pricing rows (snake or camel) → the UI camelCase row shape. */
-function adaptUomConversionsOut(value: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(value)) return []
-  return value
-    .filter(row => row && typeof row === 'object')
-    .map((row: Record<string, unknown>) => ({
-      uomId: asRecordId(row.uomId ?? row.uom_id),
-      uomSymbol: row.uomSymbol ?? row.uom_symbol ?? '',
-      convertUomId: asRecordId(row.convertUomId ?? row.convert_uom_id) || null,
-      convertUomSymbol: row.convertUomSymbol ?? row.convert_uom_symbol ?? '',
-      factorToBase: Number(row.factorToBase ?? row.factor_to_base ?? 1),
-      salePrice: Number(row.salePrice ?? row.sale_price ?? 0),
-      isDefaultSale: row.isDefaultSale === true || row.is_default_sale === true,
-      costPrice: row.costPrice != null || row.cost_price != null
-        ? Number(row.costPrice ?? row.cost_price)
-        : null,
-    }))
 }
 
 /**
@@ -231,24 +197,19 @@ function adaptProductIn(input: Record<string, unknown>): Record<string, unknown>
   const text = (value: unknown): string => String(value ?? '').trim()
   const sku = text(input.sku ?? input.code)
   if (sku) output.sku = sku
-  else if (input.id == null && (input.name != null || input.barcode != null)) {
+  else if (input.id == null && input.name != null) {
     // Unique-enough fallback: normalized name + timestamp (server re-checks).
-    const base = (text(input.name) || text(input.barcode) || 'PRD')
+    const base = (text(input.name) || 'PRD')
       .toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
     output.sku = `${base || 'PRD'}-${Date.now().toString(36).toUpperCase()}`
   }
   if (input.name != null) output.name = text(input.name)
-  if (input.barcode != null) output.barcode = text(input.barcode) || null
   if (input.categoryId != null) output.category_id = asRecordId(input.categoryId) || null
   if (input.brandId != null) output.brand_id = asRecordId(input.brandId) || null
-  if (input.uomId != null) output.uom_id = asRecordId(input.uomId) || null
   if (input.supplierId != null) output.supplier_id = asRecordId(input.supplierId) || null
   if (input.costPrice != null) output.cost_price = Number(input.costPrice)
   if (input.salePrice != null) output.salePrice = Number(input.salePrice)
   if (input.minimumStock != null) output.minimum_stock = Number(input.minimumStock)
-  if (input.expiryTracking != null) output.expiry_tracking = Boolean(input.expiryTracking)
-  if (input.trackBatch != null) output.track_batch = Boolean(input.trackBatch)
-  if (input.fifo != null) output.fifo = Boolean(input.fifo)
   if (input.note != null) output.note = input.note
   // imageObjectKey is the stored object key; the form's image field (imageUrl)
   // holds the uploaded key or the resolved media URL. data:/http: URLs are
@@ -265,10 +226,6 @@ function adaptProductIn(input: Record<string, unknown>): Record<string, unknown>
   if (input.status != null) {
     const status = text(input.status).toUpperCase()
     output.status = status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE'
-  }
-  if (Array.isArray(input.uomConversions)) {
-    // normalize_uom_conversions on the backend accepts the camelCase rows.
-    output.uom_conversions = input.uomConversions
   }
   return output
 }
@@ -312,7 +269,7 @@ function adaptEntityOut(collection: ApiCollection, row: Record<string, unknown>)
   if (collection === 'roles') return adaptRoleOut(row)
   if (collection === 'auditLogs') return adaptAuditLogOut(row)
   if (collection === 'products') return adaptProductOut(row)
-  if (collection === 'categories' || collection === 'uoms' || collection === 'brands') {
+  if (collection === 'categories' || collection === 'brands') {
     return { ...row, status: statusToUiDialect(row.status) }
   }
   if (collection === 'customers' || collection === 'suppliers') return adaptPartyLocationOut(row)
@@ -402,13 +359,20 @@ function adaptDeliveryNoteOut(row: Record<string, unknown>): Record<string, unkn
     deliveryNo: row.deliveryNo ?? row.delivery_no ?? '',
     customerId: asRecordId(row.customerId ?? row.customer_id) || null,
     customer: row.customer ?? row.customer_name ?? '',
-    // Linked invoices: [{ saleId, invoiceNo }] + joined display keys.
+    // Linked invoices: [{ saleId, invoiceNo, saleDate }] + joined display keys.
     sales: links.map(link => ({
       saleId: asRecordId(link.saleId ?? link.sale_id),
       invoiceNo: String(link.invoice_no ?? link.invoiceNo ?? ''),
+      saleDate: link.saleDate ?? link.sale_date ?? null,
     })),
     invoiceNos,
     invoiceNo: invoiceNos.join(', '),
+    // Delivery list Invoice Date = earliest linked invoice sale date.
+    invoiceDate: links
+      .map(link => link.saleDate ?? link.sale_date)
+      .filter(Boolean)
+      .map(value => String(value))
+      .sort()[0] ?? null,
     saleId: invoiceNos.length === 1 ? String(links[0]?.sale_id ?? links[0]?.saleId ?? '') : '',
     deliveryPhone: row.deliveryPhone ?? row.delivery_phone ?? '',
     deliveryLocation: row.deliveryLocation ?? row.delivery_location ?? '',
@@ -430,7 +394,6 @@ function adaptDeliveryNoteOut(row: Record<string, unknown>): Record<string, unkn
       saleItemId: asRecordId(line.saleItemId ?? line.sale_item_id),
       productId: asRecordId(line.productId ?? line.product_id),
       product: String(line.product ?? line.product_name ?? ''),
-      uomSymbol: String(line.uomSymbol ?? line.uom_symbol ?? ''),
       qtyOrdered: q4(line.qtyOrdered ?? line.qty_ordered),
       qtyToDeliver: q4(line.qtyToDeliver ?? line.qty_to_deliver),
       qtyDelivered: q4(line.qtyDelivered ?? line.qty_delivered),
@@ -449,7 +412,6 @@ function adaptStockMovementOut(row: Record<string, unknown>): Record<string, unk
     ADJUSTMENT_IN: 'Adjustment Increase',
     ADJUSTMENT_OUT: 'Adjustment Decrease',
     DAMAGE: 'Damage',
-    EXPIRE: 'Expiry',
   }
   return {
     ...row,
@@ -457,7 +419,6 @@ function adaptStockMovementOut(row: Record<string, unknown>): Record<string, unk
     productId: asRecordId(row.productId ?? row.product_id),
     product: row.product ?? row.product_name ?? '',
     productName: row.productName ?? row.product_name ?? '',
-    barcode: row.barcode ?? row.product_barcode ?? '',
     type: labels[movementType] ?? movementType,
     movementType,
     quantity: Number(row.quantity ?? row.quantity_delta ?? 0),
@@ -465,23 +426,13 @@ function adaptStockMovementOut(row: Record<string, unknown>): Record<string, unk
     // Backend MovementOut projects the signed delta into qty_in / qty_out.
     qtyIn: Number(row.qty_in ?? row.qtyIn ?? 0),
     qtyOut: Number(row.qty_out ?? row.qtyOut ?? 0),
-    // Batch traceability (spec: movements expose the lot the change hit).
-    batchNo: row.batchNo ?? row.batch_no ?? null,
-    expiryDate: row.expiryDate ?? row.expiry_date ?? null,
     // Source business document number (PIN / INV / SRT / PRT / ADJ / DMG / EXP).
     documentNo: String(row.document_no ?? row.documentNo ?? row.reference ?? ''),
-    // Line-unit + cost snapshots (display only; ledger stays base-UOM).
-    unit: row.unit ?? row.uom_symbol ?? '',
     unitCost: row.unit_cost ?? row.unitCost ?? null,
-    // Entered-UOM display (Damage / Expiry / Purchase Return lines).
-    enteredUom: row.entered_uom_symbol ?? row.enteredUomSymbol ?? null,
-    enteredQty: row.entered_quantity ?? row.enteredQty ?? null,
     balanceBefore: Number(row.balance_before ?? row.balanceBefore ?? 0),
     balanceAfter: Number(row.balance_after ?? row.balanceAfter ?? null),
     reference: row.reference ?? row.document_no ?? '',
     referenceType: row.referenceType ?? row.reference_type ?? '',
-    uom: row.uom ?? row.uom_symbol ?? '',
-    uomSymbol: row.uomSymbol ?? row.uom_symbol ?? '',
     user: row.user ?? row.created_by_name ?? '',
     date: row.date ?? row.created_at ?? null,
     createdAt: row.createdAt ?? row.created_at ?? null,
@@ -626,14 +577,13 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
     invoiceNo: String(row.invoice_no ?? row.invoiceNo ?? ''),
     customer: String(row.customer_name ?? row.customer ?? ''),
     product: String(row.product_name ?? row.product ?? ''),
-    // Batch traceability (spec §12): the lots that fed this sold line.
-    batchNo: row.batch_no ?? row.batchNo ?? null,
-    expiryDate: row.expiry_date ?? row.expiryDate ?? null,
     quantity: q4(row.quantity),
     returnedQuantity: q4(row.returned_quantity ?? row.returnedQuantity),
     returnableQuantity: q4(row.returnable_quantity ?? row.returnableQuantity),
+    height: row.height == null ? null : q4(row.height),
+    width: row.width == null ? null : q4(row.width),
+    areaM2: row.area_m2 == null ? null : q4(row.area_m2),
     price: q2(row.selling_price ?? row.sellingPrice),
-    discount: q2(row.discount_amount ?? row.discountAmount),
     total: q2(row.sales_amount ?? row.salesAmount),
     returnAmount: q2(row.return_amount ?? row.returnAmount),
     debtAmount: q2(row.debt_amount ?? row.debtAmount),
@@ -642,7 +592,6 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
     // Saved sale header (repeated per line): authoritative checkout values so
     // the report never recomputes from current prices.
     saleSubtotal: q2(row.subtotal ?? row.saleSubtotal),
-    saleDiscount: q2(row.sale_discount ?? row.saleDiscount),
     deliveryPrice: q2(row.delivery_price ?? row.deliveryPrice),
     grandTotal: q2(row.grand_total ?? row.grandTotal),
     paidAmount: q2(row.paid_amount ?? row.paidAmount),
@@ -661,7 +610,7 @@ function adaptSalesReportLine(row: Record<string, unknown>): Record<string, unkn
  * Sales Report table AND the customer Return dialog share one contract.
  *
  * Rows arrive raw from the report endpoint — adapt exactly once here. The
- * saved sale header (subtotal/discount/delivery/grand_total/paid/debt) is the
+ * saved sale header (subtotal/delivery/grand_total/paid/debt) is the
  * source of truth; line sums are only a fallback for legacy rows.
  */
 function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
@@ -688,14 +637,13 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
         // Saved header values (repeat per line) + line-sum fallbacks.
         subtotal: 0,
         lineGross: 0,
-        lineDiscount: 0,
-        discount: 0,
         deliveryPrice: 0,
         total: 0,
         returnAmount: 0,
         paidAmount: 0,
         debtAmount: 0,
         remaining: 0,
+        areaM2: 0,
         paymentStatus: line.paymentStatus,
         paymentMethod: '',
         cashier: '',
@@ -707,21 +655,17 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
       id: line.saleItemId,
       productId: line.productId,
       name: line.product,
-      uom: '',
-      // Batch allocation traceability (spec §12, internal only).
-      batchNo: line.batchNo,
-      expiryDate: line.expiryDate,
       quantity: line.quantity,
       returnedQuantity: line.returnedQuantity,
       returnableQuantity: line.returnableQuantity,
       price: line.price,
-      discount: line.discount,
       total: line.total,
     })
     doc.lineCount = items.length
-    doc.lineGross = q2(Number(doc.lineGross) + Number(line.total) + Number(line.discount))
-    doc.lineDiscount = q2(Number(doc.lineDiscount) + Number(line.discount))
+    doc.lineGross = q2(Number(doc.lineGross) + Number(line.total))
     doc.returnAmount = q2(Number(doc.returnAmount) + Number(line.returnAmount))
+    // Document m² = sum of the sold-by-area line areas (0 for count sales).
+    doc.areaM2 = q4(Number(doc.areaM2) + Number(line.areaM2 || 0))
     // Header fields repeat per line — take the first non-empty value.
     if (!doc.paymentMethod && line.paymentMethod) doc.paymentMethod = String(line.paymentMethod)
     if (!doc.cashier && line.cashier) doc.cashier = line.cashier
@@ -730,7 +674,6 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
     if (!doc.paymentStatus && line.paymentStatus) doc.paymentStatus = line.paymentStatus
     // Saved header values are identical on every line — assign directly.
     doc.subtotal = Number(line.saleSubtotal) || 0
-    doc.discount = Number(line.saleDiscount) || 0
     doc.deliveryPrice = Number(line.deliveryPrice) || 0
     doc.total = Number(line.grandTotal) || 0
     doc.paidAmount = Number(line.paidAmount) || 0
@@ -742,15 +685,10 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
   for (const doc of docs) {
     // Prefer the saved header; fall back to the line sums only when absent.
     const subtotal = Number(doc.subtotal) || Number(doc.lineGross)
-    const discount = Number(doc.discount) || Number(doc.lineDiscount)
     const deliveryPrice = Number(doc.deliveryPrice) || 0
-    const grandTotal = Number(doc.total) || q2(subtotal - discount + deliveryPrice)
+    const grandTotal = Number(doc.total) || q2(subtotal + deliveryPrice)
     const remaining = Number(doc.debtAmount) || 0
     doc.subtotal = q2(subtotal)
-    doc.discount = q2(discount)
-    // Money-formatted column aliases (isMoneyKey matches *Amount, not the
-    // bare `discount`/`remaining` keys kept for the detail dialog).
-    doc.discountAmount = q2(discount)
     doc.deliveryPrice = q2(deliveryPrice)
     doc.total = q2(grandTotal)
     doc.remaining = q2(remaining)
@@ -764,6 +702,7 @@ function groupSalesReportRows(rows: Record<string, unknown>[]): AppRecord[] {
       : (statusFromPayment || (remaining > 0
         ? (Number(doc.paidAmount) > 0 ? 'Partial' : 'Unpaid')
         : 'Paid'))
+    doc.areaM2 = Number(doc.areaM2) > 0 ? q4(doc.areaM2) : null
     doc.paymentMethodLabel = salesPaymentLabel(doc.paymentMethod)
   }
   // Newest sale first (report rows arrive newest-first already; grouping
@@ -782,12 +721,13 @@ function adaptPurchaseReportLine(row: Record<string, unknown>): Record<string, u
     supplier: String(row.supplier_name ?? row.supplier ?? ''),
     supplierId: asRecordId(row.supplier_id ?? row.supplierId) || null,
     product: String(row.product_name ?? row.product ?? ''),
-    // Batch traceability (spec §17): the lot each line was received into.
-    batchNo: row.batch_no ?? row.batchNo ?? null,
-    expiryDate: row.expiry_date ?? row.expiryDate ?? null,
     quantity: q4(row.quantity),
     returnedQuantity: q4(row.returned_quantity ?? row.returnedQuantity),
     returnableQuantity: q4(row.returnable_quantity ?? row.returnableQuantity),
+    // Sold-by-area purchase line dimensions (null for count-based lines).
+    height: row.height == null ? null : q4(row.height),
+    width: row.width == null ? null : q4(row.width),
+    areaM2: row.area_m2 == null ? null : q4(row.area_m2),
     price: q2(row.cost_price ?? row.costPrice),
     total: q2(row.total_cost ?? row.totalCost),
     remaining: q2(row.remaining_debt ?? row.remainingDebt),
@@ -796,7 +736,6 @@ function adaptPurchaseReportLine(row: Record<string, unknown>): Record<string, u
     exchangeRate: Number(row.exchange_rate ?? row.exchangeRate ?? 1) || 1,
     // Header fields the Edit form reloads (repeated per line).
     note: row.note ?? null,
-    discount: q2(row.discount_amount ?? row.discountAmount),
     tax: q2(row.tax_amount ?? row.taxAmount),
     // Tender recorded for the stock-in (Purchase Report Payment Method).
     paymentMethod: String(row.payment_method ?? row.paymentMethod ?? ''),
@@ -830,9 +769,9 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
         total: 0,
         paidAmount: 0,
         remaining: 0,
+        areaM2: 0,
         status: 'Completed',
         note: line.note,
-        discount: line.discount,
         tax: line.tax,
         paymentMethod: line.paymentMethod,
       }
@@ -843,25 +782,27 @@ function groupPurchaseReportRows(rows: Record<string, unknown>[]): AppRecord[] {
       id: line.itemId,
       productId: line.productId,
       name: line.product,
-      uom: '',
-      // Batch traceability (spec §17).
-      batchNo: line.batchNo,
-      expiryDate: line.expiryDate,
       quantity: line.quantity,
       returnedQuantity: line.returnedQuantity,
       returnableQuantity: line.returnableQuantity,
+      height: line.height,
+      width: line.width,
+      areaM2: line.areaM2,
       price: line.price,
       total: line.total,
     })
     doc.lineCount = items.length
     doc.total = q2(Number(doc.total) + Number(line.total))
     doc.remaining = Math.max(Number(doc.remaining), Number(line.remaining))
+    // Document m² = sum of the sold-by-area line areas (0 for count purchases).
+    doc.areaM2 = q4(Number(doc.areaM2) + Number(line.areaM2 || 0))
     if (!doc.supplier && line.supplier) doc.supplier = line.supplier
     if (!doc.paymentMethod && line.paymentMethod) doc.paymentMethod = line.paymentMethod
   }
   return [...byTx.values()].map((doc) => {
     doc.paidAmount = q2(Number(doc.total) - Number(doc.remaining))
     doc.status = Number(doc.remaining) > 0 ? 'Partial' : 'Completed'
+    doc.areaM2 = Number(doc.areaM2) > 0 ? q4(doc.areaM2) : null
     doc.paymentMethodLabel = salesPaymentLabel(doc.paymentMethod)
     return doc as AppRecord
   })
@@ -974,11 +915,9 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     return (items || []).map(item => ({
       product_id: item.productId,
       quantity: item.quantity,
+      ...(item.height != null ? { height: item.height } : {}),
+      ...(item.width != null ? { width: item.width } : {}),
       ...(item.unitPrice != null ? { unit_price: item.unitPrice } : {}),
-      ...(item.discountPercent != null ? { discount_percent: item.discountPercent } : {}),
-      ...(item.uomId ? { uom_id: item.uomId } : {}),
-      ...(item.uomSymbol ? { uom_symbol: item.uomSymbol } : {}),
-      ...(item.factorToBase != null ? { factor_to_base: item.factorToBase } : {}),
     }))
   }
 
@@ -988,7 +927,6 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       items: saleItemsBody(input.items),
       payment_method: canonicalPaymentMethod(input.paymentMethod),
       amount_received: input.paidAmount,
-      discount: input.discount ?? 0,
       note: input.note ?? null,
       included_debt_ids: input.includedDebtIds ?? [],
       delivery_price: input.deliveryPrice ?? 0,
@@ -1015,7 +953,6 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       ApiEndpoints.SALE_DETAIL(saleId),
       {
         items: saleItemsBody(rest.items),
-        discount: rest.discount ?? 0,
         delivery_price: rest.deliveryPrice ?? 0,
         note: rest.note ?? null,
         currency: rest.currency ?? 'USD',
@@ -1026,10 +963,9 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
 
   /**
    * Complete purchase (Stock In): ONE POST /stock/in carrying every product
-   * line. The server converts each line to the base UOM, stores all items on
-   * the stock-in document, creates the supplier debt for any unpaid balance
-   * and the payment row, appends movements, allocates the STI number and
-   * audits — all in one transaction.
+   * line. The server stores all items on the stock-in document, creates the
+   * supplier debt for any unpaid balance and the payment row, appends
+   * movements, allocates the STI number and audits — all in one transaction.
    */
   async function createPurchase(input: Parameters<PosCommandRepository['createPurchase']>[0]): Promise<AppRecord> {
     const paymentMethod = canonicalPaymentMethod(input.paymentMethod ?? 'Cash')
@@ -1037,7 +973,6 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       ...(input.supplierId ? { supplier_id: input.supplierId } : {}),
       paid_amount: Math.max(0, Number(input.paidAmount ?? 0)),
       payment_method: paymentMethod === 'CUSTOMER_DEBT' ? 'CASH' : paymentMethod,
-      discount_amount: Math.max(0, Number(input.discountAmount ?? 0)),
       tax_amount: Math.max(0, Number(input.taxAmount ?? 0)),
       currency: input.currency ?? 'USD',
       exchange_rate: input.exchangeRate ?? 1,
@@ -1047,11 +982,8 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
         product_id: line.productId,
         quantity: Number(line.quantity || 0),
         ...(line.unitCost != null ? { unit_cost: Number(line.unitCost) } : {}),
-        ...(line.batchNo ? { batch_no: line.batchNo } : {}),
-        ...(line.expiryDate ? { expiry_date: line.expiryDate } : {}),
-        ...(line.uomId ? { uom_id: line.uomId } : {}),
-        ...(line.uomSymbol ? { uom_symbol: line.uomSymbol } : {}),
-        ...(line.factorToBase != null ? { factor_to_base: line.factorToBase } : {}),
+        ...(Number(line.height) > 0 ? { height: Number(line.height) } : {}),
+        ...(Number(line.width) > 0 ? { width: Number(line.width) } : {}),
       })),
     })) as AppRecord
   }
@@ -1060,7 +992,6 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     return unwrap<Record<string, unknown>>(await api.patch<unknown>(
       ApiEndpoints.STOCK_IN_DOC(input.stockInId),
       {
-        discount_amount: Math.max(0, Number(input.discountAmount ?? 0)),
         tax_amount: Math.max(0, Number(input.taxAmount ?? 0)),
         currency: input.currency ?? 'USD',
         exchange_rate: input.exchangeRate ?? 1,
@@ -1071,11 +1002,8 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
           product_id: line.productId,
           quantity: Number(line.quantity || 0),
           ...(line.unitCost != null ? { unit_cost: Number(line.unitCost) } : {}),
-          ...(line.batchNo ? { batch_no: line.batchNo } : {}),
-          ...(line.expiryDate ? { expiry_date: line.expiryDate } : {}),
-          ...(line.uomId ? { uom_id: line.uomId } : {}),
-          ...(line.uomSymbol ? { uom_symbol: line.uomSymbol } : {}),
-          ...(line.factorToBase != null ? { factor_to_base: line.factorToBase } : {}),
+          ...(Number(line.height) > 0 ? { height: Number(line.height) } : {}),
+          ...(Number(line.width) > 0 ? { width: Number(line.width) } : {}),
         })),
       },
     )) as AppRecord
@@ -1087,7 +1015,6 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
       stock_in: ApiEndpoints.STOCK_IN,
       adjustment: ApiEndpoints.STOCK_ADJUST,
       damage: ApiEndpoints.STOCK_DAMAGE,
-      expiry: ApiEndpoints.STOCK_EXPIRE,
     } as const
     if (input.type === 'adjustment') {
       // Adjustment is a signed delta (+/-); the quick-operation endpoint
@@ -1099,28 +1026,21 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
         note: input.note ?? null,
       })) as AppRecord
     }
-    if (input.type === 'damage' || input.type === 'expiry') {
-      // Damage/Expiry are absolute quantities and the backend expects an
-      // `items[]` envelope with a non-empty `reason`.
+    if (input.type === 'damage') {
+      // Damage is an absolute quantity and the backend expects an `items[]`
+      // envelope with a non-empty `reason`.
       const item: Record<string, unknown> = {
         product_id: input.productId,
         quantity: input.quantity,
-        reason: input.note?.trim() || (input.type === 'damage' ? 'Damaged' : 'Expired'),
-        ...(input.batchNo ? { batch_no: input.batchNo } : {}),
-        ...(input.type === 'expiry' && input.expiryDate ? { expiry_date: input.expiryDate } : {}),
-        ...(input.uomId ? { uom_id: input.uomId } : {}),
-        ...(input.uomSymbol ? { uom_symbol: input.uomSymbol } : {}),
-        ...(input.factorToBase != null ? { factor_to_base: input.factorToBase } : {}),
+        reason: input.note?.trim() || 'Damaged',
       }
-      const endpoint = input.type === 'damage' ? ApiEndpoints.STOCK_DAMAGE : ApiEndpoints.STOCK_EXPIRE
-      return unwrap<Record<string, unknown>>(await api.post<unknown>(endpoint, {
+      return unwrap<Record<string, unknown>>(await api.post<unknown>(ApiEndpoints.STOCK_DAMAGE, {
         note: input.note ?? null,
         items: [item],
       })) as AppRecord
     }
     const endpoint = endpointByType[input.type]
-    // Stock In = purchase (POST /stock/in): one line per call, qty/cost per
-    // the selected Pricing UOM (converted to base server-side); unpaid
+    // Stock In = purchase (POST /stock/in): one line per call; unpaid
     // balance becomes supplier debt in the same transaction.
     const quantity = Number(input.quantity || 0)
     const unitCost = Number(input.unitCost ?? 0)
@@ -1137,11 +1057,6 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
         product_id: input.productId,
         quantity,
         unit_cost: unitCost,
-        ...(input.batchNo ? { batch_no: input.batchNo } : {}),
-        ...(input.expiryDate ? { expiry_date: input.expiryDate } : {}),
-        ...(input.uomId ? { uom_id: input.uomId } : {}),
-        ...(input.uomSymbol ? { uom_symbol: input.uomSymbol } : {}),
-        ...(input.factorToBase != null ? { factor_to_base: input.factorToBase } : {}),
       }],
     })) as AppRecord
   }
@@ -1215,25 +1130,7 @@ export function createHttpPosCommandRepository(): PosCommandRepository {
     )) as AppRecord
   }
 
-  /** Scanner auto-add: exact barcode lookup, null when the API reports 404. */
-  async function getProductByBarcode(barcode: string): Promise<AppRecord | null> {
-    const code = String(barcode || '').trim()
-    if (!code) return null
-    try {
-      const response = await api.get<unknown>(ApiEndpoints.POS_PRODUCT_BARCODE(code), {
-        suppressErrorToast: true,
-        cancelPrevious: false,
-        requestKey: `pos-barcode:${code}`,
-      })
-      return adaptProductOut(unwrap<Record<string, unknown>>(response)) as AppRecord
-    }
-    catch {
-      // Unknown/inactive barcode (404) — the caller shows the "not found" toast.
-      return null
-    }
-  }
-
-  return { completeSale, updateSale, createPurchase, updatePurchase, createStockOperation, payCustomerDebt, paySupplierDebt, getSaleReceipt, getSale, getProductByBarcode, returnSale, returnPurchase }
+  return { completeSale, updateSale, createPurchase, updatePurchase, createStockOperation, payCustomerDebt, paySupplierDebt, getSaleReceipt, getSale, returnSale, returnPurchase }
 }
 
 /** Backend product-history row → UI camelCase (kind derived from type). */
@@ -1244,16 +1141,12 @@ function adaptProductHistoryOut(row: Record<string, unknown>, kind: StockHistory
     type: String(row.type ?? ''),
     quantity: Number(row.qty ?? row.quantity ?? 0),
     product: String(row.product ?? row.product_name ?? ''),
-    unit: String(row.unit ?? row.uom_symbol ?? ''),
     unitPrice: Number(row.unit_price ?? row.unitPrice ?? 0),
     reference: String(row.reference ?? row.document_no ?? ''),
     referenceType: String(row.reference_type ?? row.referenceType ?? ''),
     referenceId: String(row.reference_id ?? row.referenceId ?? ''),
     user: String(row.user ?? row.created_by_name ?? ''),
     note: String(row.note ?? ''),
-    // Batch traceability (spec: movements expose the lot the change hit).
-    batchNo: (row.batchNo ?? row.batch_no ?? null) as string | null,
-    expiryDate: (row.expiryDate ?? row.expiry_date ?? null) as string | null,
     kind: (row.kind as StockHistoryKind) ?? kind,
   }
 }
@@ -1272,7 +1165,6 @@ function adaptSaleDetailOut(data: Record<string, unknown>, fallbackSaleId: strin
     paymentMethod: String(data.payment_method ?? data.paymentMethod ?? ''),
     paymentStatus: String(data.payment_status ?? data.paymentStatus ?? ''),
     subtotal: Number(data.subtotal ?? 0),
-    discount: Number(data.discount_amount ?? data.discount ?? data.discountAmount ?? 0),
     deliveryPrice: Number(data.delivery_price ?? data.deliveryPrice ?? 0),
     paidAmount: Number(data.paid_amount ?? data.paidAmount ?? 0),
     debtAmount: Number(data.debt_amount ?? data.debtAmount ?? 0),
@@ -1283,19 +1175,16 @@ function adaptSaleDetailOut(data: Record<string, unknown>, fallbackSaleId: strin
     items: items.map((item) => {
       const quantity = Number(item.quantity ?? 0)
       const unitPrice = Number(item.unit_price ?? item.unitPrice ?? item.price ?? 0)
-      const factorToBase = Number(item.factor_to_base ?? item.factorToBase ?? 1)
       return {
         id: String(item.id ?? item.sale_item_id ?? ''),
         productId: String(item.product_id ?? item.productId ?? ''),
         name: String(item.product_name ?? item.name ?? ''),
-        uom: String(item.uom_symbol ?? item.uomSymbol ?? item.uom ?? ''),
-        uomId: item.uom_id != null ? String(item.uom_id) : undefined,
-        factorToBase: Number.isFinite(factorToBase) && factorToBase > 0 ? factorToBase : 1,
+        height: Number(item.height ?? 0) || undefined,
+        width: Number(item.width ?? 0) || undefined,
+        areaM2: Number(item.area_m2 ?? item.areaM2 ?? 0) || undefined,
         quantity,
         returnedQuantity: Number(item.returned_quantity ?? item.returnedQuantity ?? 0),
         unitPrice,
-        discountPercent: Number(item.discount_percent ?? item.discountPercent ?? 0),
-        discountAmount: Number(item.discount_amount ?? item.discountAmount ?? 0),
         lineTotal: Number(item.line_total ?? item.lineTotal ?? item.total ?? (unitPrice * quantity)),
       }
     }),
@@ -1317,13 +1206,13 @@ function adaptSaleReceiptOut(data: Record<string, unknown>, fallbackSaleId: stri
     items: items.map(item => ({
       name: String(item.name ?? item.product_name ?? ''),
       quantity: Number(item.quantity ?? item.qty ?? 0),
-      uom: String(item.uom_symbol ?? item.uom ?? ''),
+      height: Number(item.height ?? 0) || undefined,
+      width: Number(item.width ?? 0) || undefined,
+      areaM2: Number(item.area_m2 ?? item.areaM2 ?? 0) || undefined,
       unitPrice: Number(item.unit_price ?? item.price ?? 0),
-      discount: Number(item.discount ?? 0),
       total: Number(item.total ?? item.line_total ?? 0),
     })),
     subtotal: Number(data.subtotal ?? 0),
-    discount: Number(data.discount ?? 0),
     deliveryPrice: Number(data.delivery_price ?? data.deliveryPrice ?? 0),
     deposit: Number(data.deposit ?? 0),
     total: Number(data.grand_total ?? data.total ?? 0),
@@ -1345,44 +1234,6 @@ function adaptCostHistoryOut(row: Record<string, unknown>): ProductCostHistoryRo
     documentNo: String(row.document_no ?? row.documentNo ?? ''),
   }
 }
-
-/** Backend sale-price version → UI camelCase. */
-function adaptSalePriceOut(row: Record<string, unknown>): ProductSalePriceRow {
-  const uomPrices = Array.isArray(row.uom_prices ?? row.uomPrices)
-    ? (row.uom_prices ?? row.uomPrices) as Record<string, unknown>[]
-    : []
-  return {
-    id: String(row.id ?? row.price_id ?? ''),
-    productId: String(row.product_id ?? row.productId ?? ''),
-    product: String(row.product ?? row.product_name ?? ''),
-    salePrice: Number(row.sale_price ?? row.salePrice ?? 0),
-    date: String(row.date ?? row.created_at ?? '').slice(0, 10),
-    isActive: row.is_active === true || row.isActive === true,
-    version: Number(row.version ?? 0),
-    batchNo: row.batch_no != null || row.batchNo != null
-      ? String(row.batch_no ?? row.batchNo)
-      : null,
-    purchaseDate: row.purchase_date != null || row.purchaseDate != null
-      ? String(row.purchase_date ?? row.purchaseDate).slice(0, 10)
-      : null,
-    expiryDate: row.expiry_date != null || row.expiryDate != null
-      ? String(row.expiry_date ?? row.expiryDate).slice(0, 10)
-      : null,
-    purchaseCost: row.purchase_cost != null || row.purchaseCost != null
-      ? Number(row.purchase_cost ?? row.purchaseCost)
-      : null,
-    uomPrices: uomPrices.map(uomRow => ({
-      uomId: String(uomRow.uom_id ?? uomRow.uomId ?? ''),
-      uomSymbol: uomRow.uom_symbol != null || uomRow.uomSymbol != null
-        ? String(uomRow.uom_symbol ?? uomRow.uomSymbol)
-        : null,
-      factorToBase: Number(uomRow.factor_to_base ?? uomRow.factorToBase ?? 1),
-      salePrice: Number(uomRow.sale_price ?? uomRow.salePrice ?? 0),
-      isDefaultSale: uomRow.is_default_sale === true || uomRow.isDefaultSale === true,
-    })),
-  }
-}
-
 
 /**
  * HTTP implementation of the product-scoped dialog queries. Each method hits
@@ -1432,114 +1283,6 @@ export function createHttpStockQueryRepository(): StockQueryRepository {
         items: (Array.isArray(rows) ? rows : []).map(adaptCostHistoryOut),
         meta: metaOf(response),
       }
-    },
-
-    /**
-     * Batch lots of one product, derived read-only from the immutable
-     * movement ledger (GET /stock/movements?productId=…). Batch identity =
-     * product + batch_no; expiry is the latest expiry stamped on the lot's
-     * movements; remaining = inbound − outbound; received = remaining +
-     * outflows. No batch write path exists on this surface.
-     */
-    async listProductBatches(productId, query = {}): Promise<EntityListResult<ProductBatchRow>> {
-      // Authoritative per-batch mirror (GET /stock/products/{id}/batches).
-      const scope = String(query.requestScope || 'default')
-      const response = await api.get<unknown>(ApiEndpoints.PRODUCT_BATCHES(productId), {
-        query: {
-          q: query.q,
-          status: query.status,
-          page: query.page,
-          limit: query.limit,
-        },
-        requestKey: `product-batches:${productId}:${scope}`,
-        cancelPrevious: true,
-      })
-      const rows = unwrap<Record<string, unknown>[]>(response)
-      return {
-        items: (Array.isArray(rows) ? rows : []).map((row) => {
-          const rawStatus = String(row.status ?? 'ACTIVE').toUpperCase()
-          return {
-            id: String(row.id ?? ''),
-            productId: String(row.product_id ?? row.productId ?? productId),
-            batchNo: String(row.batch_no ?? row.batchNo ?? ''),
-            expiryDate: row.expiry_date != null || row.expiryDate != null
-              ? String(row.expiry_date ?? row.expiryDate).slice(0, 10)
-              : null,
-            remainingQty: Number(row.remaining_quantity ?? row.remainingQty ?? 0),
-            receivedQty: Number(row.received_quantity ?? row.receivedQty ?? 0),
-            unitCost: Number(row.unit_cost ?? row.unitCost ?? 0),
-            supplier: String(row.supplier ?? ''),
-            purchaseNo: String(row.document_no ?? row.documentNo ?? row.purchaseNo ?? ''),
-            createdDate: String(row.created_at ?? row.createdDate ?? '').slice(0, 10),
-            status: (rawStatus === 'EXPIRED' ? 'Expired' : rawStatus === 'DEPLETED' ? 'Depleted' : 'Active') as ProductBatchRow['status'],
-            purchaseDate: row.purchase_date != null || row.purchaseDate != null
-              ? String(row.purchase_date ?? row.purchaseDate).slice(0, 10)
-              : null,
-            purchaseUom: row.purchase_uom != null || row.purchaseUom != null
-              ? String(row.purchase_uom ?? row.purchaseUom)
-              : null,
-            currency: String(row.currency ?? 'USD'),
-            salePrice: row.sale_price != null || row.salePrice != null
-              ? Number(row.sale_price ?? row.salePrice)
-              : null,
-            salePriceId: row.sale_price_id != null || row.salePriceId != null
-              ? String(row.sale_price_id ?? row.salePriceId)
-              : null,
-            pricingActive: row.pricing_active === true || row.pricingActive === true,
-          }
-        }),
-        meta: metaOf(response),
-      }
-    },
-
-    async listSalePrices(productId, query = {}): Promise<EntityListResult<ProductSalePriceRow>> {
-      const scope = String(query.requestScope || 'default')
-      const response = await api.get<unknown>(ApiEndpoints.PRODUCT_SALE_PRICES(productId), {
-        query: {
-          q: query.q,
-          start_date: query.startDate,
-          end_date: query.endDate,
-          page: query.page,
-          limit: query.limit,
-        },
-        requestKey: `product-sale-prices:${productId}:${scope}`,
-        cancelPrevious: true,
-      })
-      const rows = unwrap<Record<string, unknown>[]>(response)
-      return {
-        items: (Array.isArray(rows) ? rows : []).map(adaptSalePriceOut),
-        meta: metaOf(response),
-      }
-    },
-
-    async addSalePrice(productId, input): Promise<ProductSalePriceRow> {
-      const response = await api.post<unknown>(ApiEndpoints.PRODUCT_SALE_PRICES(productId), {
-        date: input.date,
-        sale_price: input.salePrice,
-        batch_no: input.batchNo?.trim() || null,
-        purchase_date: input.purchaseDate?.trim() || null,
-        expiry_date: input.expiryDate?.trim() || null,
-        uom_prices: input.uomPrices?.length
-          ? input.uomPrices.map(row => ({
-              uom_id: row.uomId,
-              uom_symbol: row.uomSymbol ?? null,
-              factor_to_base: row.factorToBase,
-              sale_price: row.salePrice,
-              is_default_sale: row.isDefaultSale ?? false,
-            }))
-          : null,
-      })
-      return adaptSalePriceOut(unwrap<Record<string, unknown>>(response))
-    },
-
-    async activateSalePrice(productId, priceId): Promise<ProductSalePriceRow> {
-      const response = await api.post<unknown>(ApiEndpoints.PRODUCT_SALE_PRICE_ACTIVATE(productId, priceId), {})
-      return adaptSalePriceOut(unwrap<Record<string, unknown>>(response))
-    },
-
-    async setSalePriceActive(priceId, isActive): Promise<ProductSalePriceRow> {
-      const response = await api.patch<unknown>(ApiEndpoints.SALE_PRICE(priceId), { is_active: isActive })
-      return adaptSalePriceOut(unwrap<Record<string, unknown>>(response))
     },
 
     async getMovementInvoice(movementId): Promise<SaleReceipt | null> {
@@ -1600,7 +1343,6 @@ export function createHttpFinanceRepository(): FinanceRepository {
         customerDebt: num(summary.customer_debt),
         supplierDebt: num(summary.supplier_debt),
         damageLoss: num(summary.damage_loss),
-        expiryLoss: num(summary.expiry_loss),
         pendingDeliveryNotes: num(summary.pending_delivery_notes_count),
         salesByDay: chart.map(row => ({ date: day(row.date), count: num(row.sales_count) })),
         incomeByDay: chart.map(row => ({ date: day(row.date), amount: num(row.income) })),

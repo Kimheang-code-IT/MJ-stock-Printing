@@ -17,35 +17,6 @@ def send_reset_code(self, chat_id: str, code: str) -> bool:
     return True
 
 
-@celery.task(name="app.tasks.telegram.scan_expiry_alerts", bind=True, max_retries=3, default_retry_delay=30)
-def scan_expiry_alerts(self) -> dict:
-    """Daily expiry alert sweep (spec section 3.6, use case 2).
-
-    Triggered by the in-process API scheduler; never invoked from the
-    HTTP path. Sends once per product/batch/expiry lot per alert level and
-    persists `telegram_expiry_alert_state`. Read-only with respect to stock:
-    this job never mutates balances or movements.
-    """
-    from app.core.database import SessionFactory
-    from app.modules.telegram.service import ExpiryAlertService
-
-    async def _run() -> dict:
-        async with SessionFactory() as session:
-            return await ExpiryAlertService(session).scan_and_send()
-
-    try:
-        summary = asyncio.run(_run())
-    except Exception as exc:  # transient DB/config issues — retry via celery
-        raise self.retry(exc=exc) from exc
-    if summary.get("enabled"):
-        import logging
-
-        logging.getLogger("stock_pos.telegram").info(
-            "Expiry alert sweep: %s", summary
-        )
-    return summary
-
-
 @celery.task(name="app.tasks.telegram.send_payment_invoice", bind=True, max_retries=3, default_retry_delay=5)
 def send_payment_invoice(self, payload: dict) -> int:
     """Deliver the payment/invoice text summary to verified staff (spec 3.6.2).

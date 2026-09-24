@@ -1,4 +1,4 @@
-import type { ApiResponse, FieldOption } from '~/types/stock-pos/common'
+import type { ApiResponse, FieldOption } from '~/types/mj/common'
 
 const OPTIONS_CACHE_TTL_MS = 60_000
 const optionsCache = new Map<string, {
@@ -27,7 +27,7 @@ function endpointParams(endpoint: string) {
   return new URLSearchParams(query)
 }
 
-/** Map an options endpoint (e.g. /api/v1/uoms/options) back to its collection name. */
+/** Map an options endpoint (e.g. /api/v1/categories/options) back to its collection name. */
 export function useReferenceOptions() {
   const api = useApi()
 

@@ -3,26 +3,25 @@ import { PAYMENT_METHODS } from '~/config/pos-options'
 import type { ModuleTable } from '~/config/modules'
 import type { AppRecord } from '~/config/admin-seed'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
-import { usePosCommands, useStockQueries } from '~/repositories/index'
-import type { ProductBatchRow } from '~/repositories/contracts/entities'
+import { usePosCommands } from '~/repositories/index'
 import type {
   DocumentFieldSchema,
   DocumentTabSchema,
-} from '~/types/stock-pos/common'
-import { conversionForUom, multiplyDecimalSafe } from '~/utils/stock/uom-conversions'
+} from '~/types/mj/common'
+import { multiplyDecimalSafe } from '~/utils/stock/numbers'
 import { checkoutPaidNow } from '~/utils/pos/checkout'
 import { buildPurchaseEditLines, buildPurchaseReturnLines } from '~/utils/reports/returns'
-import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
+import { apiErrorMessage, apiFieldErrors, camelCaseFieldKey, isApiErrorHandled, registerInlineFieldErrorConsumer } from '~/utils/api/errors'
 
 /**
  * New Purchase (Stock In = purchase, spec §2.1.x) — built on the same
  * reusable document components as the Stock product document:
  * DocumentAppDocumentPage + schema-driven AppDocumentForm sections + the
  * generic TableAppLineTable (per-line `lines` table with the shared
- * subtotal/discount/tax/total + paid/outstanding footer). Saving posts ONE
- * /stock/in document — line UOM conversion, supplier debt for the unpaid
- * balance, the payment row, stock movements, the document number and the
- * audit entry all happen in that single backend transaction.
+ *  subtotal/tax/total + paid/outstanding footer). Saving posts ONE
+ * /stock/in document — supplier debt for the unpaid balance, the payment row,
+ * stock movements, the document number and the audit entry all happen in that
+ * single backend transaction.
  *
  * Entry points: Purchase Report Create action, and the Stock Products row
  * action "Purchase Stock" (routes here with ?productId= preselected).
@@ -61,7 +60,6 @@ const model = reactive<Record<string, unknown>>({
   currency: 'USD',
   exchangeRate: undefined,
   note: '',
-  discount: undefined,
   tax: undefined,
   paidNow: undefined,
   // Return mode read-only header + reason.
@@ -88,6 +86,37 @@ const editPurchaseId = ref('')
 /** View-only: Purchase Report Purchase No → detail form, no edits. */
 const viewMode = ref(false)
 
+/** Inline per-field validation messages (shown on the field, never a toast). */
+const fieldErrors = reactive<Record<string, string>>({})
+function clearFieldErrors() {
+  for (const key of Object.keys(fieldErrors)) Reflect.deleteProperty(fieldErrors, key)
+}
+function clearFieldError(key: string) {
+  if (fieldErrors[key]) Reflect.deleteProperty(fieldErrors, key)
+}
+
+/** Map backend field_errors (snake_case / line keys) onto form field keys. */
+const API_ERROR_FIELD_MAP: Record<string, string> = {
+  items: 'lines',
+  lines: 'lines',
+  product_id: 'lines',
+  quantity: 'lines',
+  unit_cost: 'lines',
+  supplier_id: 'supplierId',
+  supplierId: 'supplierId',
+  exchange_rate: 'exchangeRate',
+  exchangeRate: 'exchangeRate',
+}
+function applyApiFieldErrors(error: unknown) {
+  for (const [key, message] of Object.entries(apiFieldErrors(error))) {
+    const mapped = API_ERROR_FIELD_MAP[key] || camelCaseFieldKey(key)
+    if (!fieldErrors[mapped]) fieldErrors[mapped] = message
+  }
+}
+// While this form is mounted, useApi routes validation errors here (inline).
+const releaseInlineFieldErrors = registerInlineFieldErrorConsumer()
+onBeforeUnmount(releaseInlineFieldErrors)
+
 function fieldValue(key: string): unknown {
   // Computed document totals consumed by the line-table footer.
   if (key === 'subtotal') return subtotal.value
@@ -100,6 +129,7 @@ function fieldValue(key: string): unknown {
 
 function setFieldValue(key: string, value: unknown): void {
   if (viewMode.value) return
+  clearFieldError(key)
   if (key === 'returnReason') {
     returnReason.value = String(value ?? '')
     return
@@ -144,7 +174,7 @@ onMounted(async () => {
 })
 
 /** Load an original purchase into the form as a return: preload supplier,
- *  lines, batch/expiry, UOM and unit cost; Submit records a Purchase Return. */
+ *  lines and unit cost; Submit records a Purchase Return. */
 async function loadReturnPurchase(purchaseId: string, purchaseNo: string) {
   returnLoading.value = true
   try {
@@ -211,7 +241,6 @@ async function loadEditPurchase(purchaseId: string, purchaseNo: string) {
     model.exchangeRate = Number(doc.exchangeRate || 1)
     model.transactionDate = String(doc.date || '').slice(0, 10)
     model.note = String(doc.note || '')
-    model.discount = Number(doc.discount ?? doc.discountAmount ?? 0) || undefined
     model.tax = Number(doc.tax ?? doc.taxAmount ?? 0) || undefined
     model.paymentMethod = String(doc.paymentMethodLabel || doc.paymentMethod || 'Cash') || 'Cash'
     model.paidNow = Number(doc.paidAmount ?? 0)
@@ -250,121 +279,16 @@ async function loadViewPurchase(purchaseId: string, purchaseNo: string) {
   setTitle(t('app.purchase.viewTitle'))
 }
 
+/** View-only purchase → edit mode, reusing the already-loaded lines/costs. */
+function editFromView() {
+  if (!viewMode.value) return
+  viewMode.value = false
+  editMode.value = true
+  setTitle(t('app.purchase.editTitle'))
+}
+
 function blankLine(): Record<string, unknown> {
-  return { productId: '', uomId: '', quantity: 0, unitAmount: 0, amount: 0, batchNo: '', expiryDate: '' }
-}
-
-// ------------------------------------------------------- batch picking
-
-/** Sentinel option in the Batch picker: generates the next batch no (latest
- *  batch + 1, preserving prefix and zero padding). The lot itself is only
- *  created when the purchase is submitted. */
-const NEW_BATCH = '__new__'
-
-const stockQueries = useStockQueries()
-/** Existing batch lots per product (batch cache; [] while loading). */
-const batchCache = ref(new Map<string, ProductBatchRow[]>())
-
-async function ensureBatches(productId: string): Promise<ProductBatchRow[]> {
-  const cached = batchCache.value.get(productId)
-  if (cached) return cached
-  batchCache.value.set(productId, [])
-  try {
-    const result = await stockQueries.listProductBatches(productId)
-    batchCache.value.set(productId, result.items)
-    return result.items
-  }
-  catch {
-    return []
-  }
-}
-
-/** Latest usable lot of the product (newest receipt that is not expired).
- *  This is the Batch No. default after selecting a product. */
-function latestBatch(batches: ProductBatchRow[]): ProductBatchRow | null {
-  const usable = batches.filter(batch => batch.batchNo && batch.status !== 'Expired')
-  if (!usable.length) return null
-  return [...usable].sort((a, b) => b.createdDate.localeCompare(a.createdDate))[0] ?? null
-}
-
-/** Next batch number: latest batch + 1 — increment the numeric suffix,
- *  preserving the prefix and zero padding (BATCH-001 → BATCH-002), skipping
- *  numbers already taken. No previous batch → BATCH-001. */
-function generateBatchNo(batches: ProductBatchRow[]): string {
-  const taken = new Set(batches.map(batch => batch.batchNo).filter(Boolean))
-  const latest = [...batches]
-    .filter(batch => batch.batchNo)
-    .sort((a, b) => b.createdDate.localeCompare(a.createdDate))[0]?.batchNo
-  if (!latest) return 'BATCH-001'
-  const match = latest.match(/^(.*?)(\d+)$/)
-  if (!match) return `${latest}-1`
-  const prefix = match[1]!
-  const width = match[2]!.length
-  let candidate = latest
-  let seq = Number(match[2])
-  do {
-    seq += 1
-    candidate = `${prefix}${String(seq).padStart(width, '0')}`
-  } while (taken.has(candidate))
-  return candidate
-}
-
-/** Batch picker options of a row: the product's existing lots (stocking into
- *  one preserves its identity/history), the row's generated new batch no
- *  while it is selected, and the "+ New Batch" option. */
-function batchOptionsFor(row: Record<string, unknown>): Array<{ label: string, value: string }> {
-  const productId = String(row.productId || '')
-  const product = productFor(productId)
-  if (!product || !tracksBatch(product)) return []
-  const items = (batchCache.value.get(productId) || [])
-    .filter(batch => batch.batchNo)
-    .map(batch => ({ label: batch.batchNo, value: batch.batchNo }))
-  const picked = String(row.batchNo || '')
-  if (picked && picked !== NEW_BATCH && !items.some(item => item.value === picked)) {
-    items.push({ label: picked, value: picked })
-  }
-  items.push({ label: t('app.purchase.newBatch'), value: NEW_BATCH })
-  return items
-}
-
-/** Find the live line to mutate after an async batch fetch (row objects are
- *  replaced on each deep-watch pass, so identity alone is not enough). */
-function liveLineForBatch(row: Record<string, unknown>, productId: string) {
-  const lines = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
-  if (lines.includes(row) && String(row.productId || '') === productId) return row
-  return lines.find(line =>
-    String(line.productId || '') === productId
-    && (!String(line.batchNo || '').trim() || String(line.batchNo) === NEW_BATCH))
-    || null
-}
-
-/** After selecting a product: default the Batch No. to its latest lot
- *  (+ expiry). When the product has no lots yet, invent the next batch no
- *  (BATCH-001…) so Submit is not stuck waiting for a manual batch pick. */
-async function autofillLatestBatch(row: Record<string, unknown>, productId: string) {
-  const batches = await ensureBatches(productId)
-  const live = liveLineForBatch(row, productId)
-  if (!live) return
-  if (String(live.batchNo || '').trim() && String(live.batchNo) !== NEW_BATCH) return
-  const product = productFor(productId)
-  if (!product || !tracksBatch(product)) return
-  const latest = latestBatch(batches)
-  if (latest) {
-    live.batchNo = latest.batchNo
-    if (latest.expiryDate) live.expiryDate = latest.expiryDate
-    return
-  }
-  live.batchNo = generateBatchNo(batches)
-}
-
-/** "+ New Batch" picked: resolve the generated number once the product's
- *  batches are loaded, then show it as the row's selected batch. */
-async function applyNewBatch(row: Record<string, unknown>, productId: string) {
-  const batches = await ensureBatches(productId)
-  const live = liveLineForBatch(row, productId)
-  if (!live) return
-  if (String(live.batchNo || '') !== NEW_BATCH) return
-  live.batchNo = generateBatchNo(batches)
+  return { productId: '', height: 0, width: 0, areaM2: 0, quantity: 0, unitAmount: 0, amount: 0 }
 }
 
 const supplierOptions = computed(() => store.list('suppliers').map(row => ({
@@ -391,7 +315,7 @@ function applyDefaultSupplier(product: Record<string, unknown> | null) {
 
 /** Products not already on ANOTHER line (one line per product; the backend
  *  rejects duplicates on the same stock-in document). The picker shows the
- *  product NAME only and searches it (barcode/SKU stay out of the dropdown).
+ *  product NAME only and searches it.
  *  The row's own product stays in the list so its name still resolves — the
  *  table passes a copy of the row, so identity checks would drop it. */
 function availableProductOptions(row: Record<string, unknown>) {
@@ -405,72 +329,30 @@ function availableProductOptions(row: Record<string, unknown>) {
     .map(product => ({ label: String(product.name || ''), value: String(product.id) }))
 }
 
-/** Batch tracking is per product toggle (spec §5.9 Stock Costing). */
-function tracksBatch(product: Record<string, unknown> | null): boolean {
-  if (!product) return false
-  return product.trackBatch === true
-    || (product.trackBatch == null && (product.expiryTracking === true || product.expiryTracking === 'true'))
-}
-
-function tracksExpiry(product: Record<string, unknown> | null): boolean {
-  if (!product) return false
-  return product.trackExpiry === true || product.expiryTracking === true
-    || (product.trackExpiry == null && product.expiryTracking === true)
-}
-
-/** Cost per the selected UOM from the product Pricing rows. */
-function suggestedCost(productId: string, uomId: string): number {
+/** Product cost price per unit (used to prefill an empty line cost). */
+function suggestedCost(productId: string): number {
   const product = productFor(productId)
   if (!product) return 0
-  const conversion = conversionForUom(product, uomId)
-  const suggested = conversion?.costPrice != null
-    ? conversion.costPrice
-    : multiplyDecimalSafe(Number(product.costPrice || 0), conversion?.factorToBase ?? 1)
+  const suggested = Number(product.costPrice || 0)
   return suggested > 0 ? suggested : 0
 }
 
-// Keep rows coherent: the row's UOM follows the product's default UOM (no
-// visible UOM column, but the conversion still feeds stock-in math) +
-// suggested cost when empty + batch/expiry clearing for unbatched products
-// (the generic line table cannot derive cross-column defaults itself).
+// Keep rows coherent: prefill the suggested cost when the line cost is empty
+// and the product name, plus the supplier fast-path (the generic line table
+// cannot derive cross-column defaults itself).
 watch(() => model.lines, (rows) => {
   if (viewMode.value || returnMode.value) return
   if (!Array.isArray(rows)) return
   const next = (rows as Array<Record<string, unknown>>).map((row) => {
     const product = productFor(String(row.productId || ''))
     if (!product) return row
-    // Internal UOM: the product's default/base UOM (hidden column, conversion
-    // logic preserved — ledger math happens server-side from factorToBase).
-    const nextUomId = String(product.uomId || '')
     const unitAmount = Number(row.unitAmount || 0)
-    const nextCost = unitAmount > 0 ? unitAmount : suggestedCost(String(row.productId), nextUomId)
-    const nextRow: Record<string, unknown> = { ...row, uomId: nextUomId, unitAmount: nextCost, name: String(product.name || '') }
-    // Base qty display: entered qty × factor (display only — ledger math
-    // happens server-side from factorToBase).
-    nextRow.baseQuantity = multiplyDecimalSafe(Number(row.quantity || 0), conversionForUom(product, nextUomId)?.factorToBase ?? 1)
-    // Batch/expiry columns only when the product tracks them.
-    if (!tracksBatch(product)) {
-      nextRow.batchNo = ''
-    }
-    if (!tracksExpiry(product)) nextRow.expiryDate = ''
+    const nextCost = unitAmount > 0 ? unitAmount : suggestedCost(String(row.productId))
+    const nextRow: Record<string, unknown> = { ...row, unitAmount: nextCost, name: String(product.name || '') }
 
     // Prefill supplier from the product when the header is still empty / auto.
     applyDefaultSupplier(product)
 
-    const picked = String(nextRow.batchNo || '')
-    if (tracksBatch(product) && !picked.trim()) {
-      // Deep watch cannot reliably detect productId changes (same-array
-      // mutation). Autofill whenever a batch-tracked line has no batch yet.
-      void autofillLatestBatch(nextRow, String(nextRow.productId || ''))
-    }
-    else if (picked === NEW_BATCH) {
-      void applyNewBatch(nextRow, String(nextRow.productId || ''))
-    }
-    else if (picked && tracksExpiry(product) && !String(nextRow.expiryDate || '').trim()) {
-      const lot = (batchCache.value.get(String(nextRow.productId || '')) || [])
-        .find(batch => batch.batchNo === picked)
-      if (lot?.expiryDate) nextRow.expiryDate = lot.expiryDate
-    }
     if (JSON.stringify(nextRow) !== JSON.stringify(row)) return nextRow
     return row
   })
@@ -488,8 +370,9 @@ const linesTable = computed<ModuleTable>(() => {
       fitWidth: true,
       columns: [
         { key: 'name', label: t('app.pos.product'), type: 'text', computed: true, width: 'min-w-40' },
-        { key: 'batchNo', label: t('app.stock.batchNo'), type: 'text', computed: true, width: 'w-40 min-w-32' },
-        { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date', computed: true, width: 'w-32' },
+        { key: 'height', label: t('app.pos.height'), type: 'number', computed: true, width: 'w-20 min-w-20 text-right tabular-nums' },
+        { key: 'width', label: t('app.pos.width'), type: 'number', computed: true, width: 'w-20 min-w-20 text-right tabular-nums' },
+        { key: 'areaM2', label: t('app.pos.areaM2'), type: 'number', computed: true, width: 'w-14 min-w-14 text-right tabular-nums' },
         { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number', computed: true },
         {
           key: 'quantity',
@@ -521,17 +404,12 @@ const linesTable = computed<ModuleTable>(() => {
       width: 'min-w-40',
       optionItems: row => availableProductOptions(row),
     },
-    {
-      key: 'batchNo',
-      label: t('app.stock.batchNo'),
-      type: 'select',
-      // Select-only: existing lots + "+ New Batch" (auto-generated number).
-      searchable: true,
-      width: 'w-44 min-w-36',
-      optionItems: row => batchOptionsFor(row),
-    },
-    { key: 'expiryDate', label: t('app.stock.expiryDateCol'), type: 'date', width: 'w-32' },
-    { key: 'quantity', label: t('app.fields.quantity'), type: 'number', required: true },
+    // Sold-by-area purchase: enter Height × Width (metres) and the quantity
+    // (m²) fills in automatically; otherwise type the quantity directly.
+    { key: 'height', label: t('app.pos.height'), type: 'number', width: 'w-20 min-w-20 text-right tabular-nums' },
+    { key: 'width', label: t('app.pos.width'), type: 'number', width: 'w-20 min-w-20 text-right tabular-nums' },
+    { key: 'areaM2', label: t('app.pos.areaM2'), type: 'number', computed: true, width: 'w-14 min-w-14 text-right tabular-nums' },
+    { key: 'quantity', label: t('app.fields.quantity'), type: 'number', required: true, width: 'w-24 min-w-24 text-right tabular-nums' },
     { key: 'unitAmount', label: t('app.purchase.unitCost'), type: 'number' },
     { key: 'amount', label: t('app.fields.lineTotal'), type: 'number', computed: true },
   ],
@@ -685,7 +563,7 @@ const tabs = computed<DocumentTabSchema[]>(() => {
             showPricingTotals: true,
             includeTax: true,
             showPaidRemaining: true,
-            // Discount / Tax / Paid now are edited inline in the footer.
+            // Tax / Paid now are edited inline in the footer.
             editableTotals: true,
             // USD/KHR toggle beside the table title controls the document currency.
             currencyToggle: true,
@@ -701,34 +579,22 @@ const tabs = computed<DocumentTabSchema[]>(() => {
 
 type PurchaseRow = Record<string, unknown> & {
   productId: string
-  uomId: string
   quantity: number
   unitAmount: number
-  batchNo?: string
-  expiryDate?: string
 }
 
 const lines = computed<PurchaseRow[]>(() =>
   (Array.isArray(model.lines) ? model.lines as PurchaseRow[] : []))
 
-/** Lines ready to save: product + quantity + cost are all set, and the
- *  batch/expiry requirements of the row's product are satisfied. A row still
- *  on the "+ New Batch" sentinel (generation in flight) is not ready yet. */
+/** Lines ready to save: product + quantity + cost are all set. */
 const completedLines = computed(() => lines.value.filter((row) => {
   if (!row.productId) return false
   if (!(Number(row.quantity) > 0)) return false
   if (Number(row.unitAmount) < 0) return false
-  const product = productFor(row.productId)
-  // Spec: batch no required when the product tracks batches; expiry date
-  // required when it tracks expiry (expiry implies batch).
-  if (tracksBatch(product) && (!String(row.batchNo ?? '').trim() || String(row.batchNo) === NEW_BATCH)) return false
-  if (tracksExpiry(product) && !String(row.expiryDate ?? '').trim()) return false
   return true
 }))
 
-/** Lines with a product, quantity and cost — the running purchase total. The
- *  stricter `completedLines` (below) additionally enforces batch/expiry, so an
- *  incomplete line still shows its amount in the summary instead of $0.00. */
+/** Lines with a product, quantity and cost — the running purchase total. */
 const pricedLines = computed(() => lines.value.filter((row) => {
   if (!row.productId) return false
   if (!(Number(row.quantity) > 0)) return false
@@ -741,9 +607,8 @@ const subtotal = computed(() =>
     0,
   )))
 
-const discount = computed(() => round2(Math.max(0, Number(model.discount ?? 0))))
 const tax = computed(() => round2(Math.max(0, Number(model.tax ?? 0))))
-const total = computed(() => round2(Math.max(0, subtotal.value - discount.value + tax.value)))
+const total = computed(() => round2(Math.max(0, subtotal.value + tax.value)))
 /** Untouched Paid now = pay in full (same as POS cash). Credit pays nothing. */
 const paidNow = computed(() => checkoutPaidNow(
   model.paidNow as number | undefined,
@@ -760,35 +625,21 @@ const canSave = computed(() =>
       && (model.currency !== 'KHR' || Number(model.exchangeRate || 0) > 0)))
 
 /** Human reason Submit stays blocked — shown as a toast when the user clicks. */
-function saveBlockedReason(): string | null {
+/** Validate into the inline error map; returns true when the form is valid. */
+function validate(): boolean {
+  clearFieldErrors()
   if (returnMode.value) {
-    if (!completedLines.value.length) return t('app.purchase.needLines')
-    if (!returnReason.value.trim()) return t('app.purchase.needReturnReason')
-    return null
+    if (!completedLines.value.length) fieldErrors.lines = t('app.purchase.needLines')
+    if (!returnReason.value.trim()) fieldErrors.returnReason = t('app.purchase.needReturnReason')
   }
-  if (!pricedLines.value.length) return t('app.purchase.needLines')
-  if (!completedLines.value.length) {
-    const incomplete = lines.value.find((row) => {
-      if (!row.productId || !(Number(row.quantity) > 0)) return false
-      const product = productFor(row.productId)
-      if (tracksBatch(product) && (!String(row.batchNo ?? '').trim() || String(row.batchNo) === NEW_BATCH)) return true
-      if (tracksExpiry(product) && !String(row.expiryDate ?? '').trim()) return true
-      return false
-    })
-    if (incomplete) {
-      const product = productFor(incomplete.productId)
-      if (tracksExpiry(product) && !String(incomplete.expiryDate ?? '').trim()) {
-        return t('app.purchase.needExpiry')
-      }
-      return t('app.purchase.needBatch')
+  else {
+    if (!pricedLines.value.length || !completedLines.value.length) fieldErrors.lines = t('app.purchase.needLines')
+    if (remaining.value > 0 && !model.supplierId) fieldErrors.supplierId = t('app.purchase.needSupplier')
+    if (model.currency === 'KHR' && !(Number(model.exchangeRate || 0) > 0)) {
+      fieldErrors.exchangeRate = t('app.purchase.needExchangeRate')
     }
-    return t('app.purchase.needLines')
   }
-  if (remaining.value > 0 && !model.supplierId) return t('app.purchase.needSupplier')
-  if (model.currency === 'KHR' && !(Number(model.exchangeRate || 0) > 0)) {
-    return t('app.purchase.needExchangeRate')
-  }
-  return null
+  return Object.keys(fieldErrors).length === 0
 }
 
 /** Header CTA: Submit for new purchases, Save changes for edits, Confirm for returns. */
@@ -801,21 +652,6 @@ const purchaseSaveLabel = computed(() => {
 // ---------------------------------------------------------------- submit
 
 const saving = ref(false)
-
-/** Resolve any leftover "+ New Batch" sentinels before posting. */
-async function resolvePendingBatches() {
-  const rows = Array.isArray(model.lines) ? model.lines as Array<Record<string, unknown>> : []
-  for (const row of rows) {
-    const productId = String(row.productId || '')
-    if (!productId) continue
-    if (String(row.batchNo || '') === NEW_BATCH) {
-      await applyNewBatch(row, productId)
-    }
-    else if (tracksBatch(productFor(productId)) && !String(row.batchNo || '').trim()) {
-      await autofillLatestBatch(row, productId)
-    }
-  }
-}
 
 async function saveReturn() {
   if (!canSave.value || saving.value) return
@@ -835,6 +671,7 @@ async function saveReturn() {
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
+    applyApiFieldErrors(error)
     if (!isApiErrorHandled(error)) {
       toast.add({
         title: t('app.reports.returnFailed'),
@@ -853,24 +690,15 @@ async function saveEdit() {
   if (!canSave.value || saving.value) return
   saving.value = true
   try {
-    await resolvePendingBatches()
     await posCommands.updatePurchase({
       stockInId: editPurchaseId.value,
-      lines: completedLines.value.map((row) => {
-        const product = productFor(row.productId)
-        const conversion = conversionForUom(product, String(row.uomId || ''))
-        return {
-          productId: row.productId,
-          quantity: Number(row.quantity),
-          unitCost: Number(row.unitAmount),
-          uomId: String(row.uomId || product?.uomId || '') || undefined,
-          uomSymbol: String(conversion?.uomSymbol || product?.uomSymbol || product?.uom || '') || undefined,
-          factorToBase: conversion?.factorToBase ?? 1,
-          batchNo: String(row.batchNo || '').trim() || null,
-          expiryDate: String(row.expiryDate || '').trim() || null,
-        }
-      }),
-      discountAmount: discount.value,
+      lines: completedLines.value.map(row => ({
+        productId: row.productId,
+        quantity: Number(row.quantity),
+        unitCost: Number(row.unitAmount),
+        ...(Number(row.height) > 0 ? { height: Number(row.height) } : {}),
+        ...(Number(row.width) > 0 ? { width: Number(row.width) } : {}),
+      })),
       taxAmount: tax.value,
       currency: String(model.currency || 'USD') as 'USD' | 'KHR',
       exchangeRate: Number(model.exchangeRate || 1),
@@ -883,6 +711,7 @@ async function saveEdit() {
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
+    applyApiFieldErrors(error)
     if (!isApiErrorHandled(error)) {
       toast.add({
         title: t('app.purchase.updateFailed'),
@@ -898,12 +727,7 @@ async function saveEdit() {
 
 async function save() {
   if (saving.value) return
-  await resolvePendingBatches()
-  const blocked = saveBlockedReason()
-  if (blocked) {
-    toast.add({ title: blocked, color: 'warning' })
-    return
-  }
+  if (!validate()) return
   if (returnMode.value) {
     await saveReturn()
     return
@@ -916,24 +740,16 @@ async function save() {
   saving.value = true
   try {
     await posCommands.createPurchase({
-      lines: completedLines.value.map((row) => {
-        const product = productFor(row.productId)
-        const conversion = conversionForUom(product, String(row.uomId || ''))
-        return {
-          productId: row.productId,
-          quantity: Number(row.quantity),
-          unitCost: Number(row.unitAmount),
-          uomId: String(row.uomId || product?.uomId || '') || undefined,
-          uomSymbol: String(conversion?.uomSymbol || product?.uomSymbol || product?.uom || '') || undefined,
-          factorToBase: conversion?.factorToBase ?? 1,
-          batchNo: String(row.batchNo || '').trim() || null,
-          expiryDate: String(row.expiryDate || '').trim() || null,
-        }
-      }),
+      lines: completedLines.value.map(row => ({
+        productId: row.productId,
+        quantity: Number(row.quantity),
+        unitCost: Number(row.unitAmount),
+        ...(Number(row.height) > 0 ? { height: Number(row.height) } : {}),
+        ...(Number(row.width) > 0 ? { width: Number(row.width) } : {}),
+      })),
       supplierId: String(model.supplierId || '') || null,
       paidAmount: paidNow.value,
       paymentMethod: String(model.paymentMethod || 'Cash'),
-      discountAmount: discount.value,
       taxAmount: tax.value,
       currency: String(model.currency || 'USD') as 'USD' | 'KHR',
       exchangeRate: Number(model.exchangeRate || 1),
@@ -946,6 +762,7 @@ async function save() {
     await navigateTo('/reports/purchases')
   }
   catch (error: unknown) {
+    applyApiFieldErrors(error)
     if (!isApiErrorHandled(error)) {
       toast.add({
         title: t('app.purchase.saveFailed'),
@@ -977,6 +794,15 @@ async function save() {
       <UIcon name="i-lucide-eye" class="size-4" />
       <span>{{ t('app.purchase.viewMode') }}</span>
       <span v-if="model.purchaseNo" class="text-muted">· {{ model.purchaseNo }}</span>
+      <UButton
+        class="ms-auto"
+        color="primary"
+        variant="soft"
+        size="xs"
+        icon="i-lucide-pencil"
+        :label="t('app.reports.edit')"
+        @click="editFromView"
+      />
     </div>
     <div
       v-if="editMode"
@@ -992,6 +818,7 @@ async function save() {
       :field-value="fieldValue"
       :set-field-value="setFieldValue"
       :pending="returnLoading"
+      :field-errors="fieldErrors"
       :saving="saving"
       :can-save="!viewMode"
       :confirm-save="canSave"

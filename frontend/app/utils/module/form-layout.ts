@@ -1,4 +1,4 @@
-import type { DocumentFieldSchema } from '~/types/stock-pos/common'
+import type { DocumentFieldSchema } from '~/types/mj/common'
 
 export type DocumentFormField = DocumentFieldSchema
 
@@ -15,10 +15,7 @@ export function isFullWidthField(field: DocumentFormField) {
     || field.type === 'connection-status'
     || field.type === 'alert'
     || field.type === 'line-table'
-    || field.type === 'uom-conversions'
     || field.type === 'related-records'
-    || field.type === 'batches'
-    || field.type === 'product-barcode'
 }
 
 /** Normal single-column fields that may sit to the left of an image upload. */

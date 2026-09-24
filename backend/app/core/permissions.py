@@ -9,12 +9,11 @@ SUPER_ADMIN_PERMISSION = "ALL_PAGES"
 PERMISSION_CATALOG: dict[str, tuple[str, ...]] = {
     "dashboard": ("view", "view_profit"),
     "category": ("view", "create", "update", "delete"),
-    "uom": ("view", "create", "update", "delete"),
     "brand": ("view", "create", "update", "delete"),
-    "stock": ("view", "in", "adjust", "damage", "expire"),
+    "stock": ("view", "in", "adjust", "damage"),
     "product": ("create", "update", "delete"),
     "supplier": ("view", "create", "update", "delete", "debt.pay"),
-    "pos": ("access", "discount", "debt_sale", "print"),
+    "pos": ("access", "debt_sale", "print"),
     "customer": ("view", "create", "update", "delete", "debt.pay"),
     "delivery": ("view", "create", "update", "confirm", "deliver", "cancel"),
     "report": ("sales", "purchase", "customer_debt", "supplier_debt", "finance"),
@@ -24,6 +23,7 @@ PERMISSION_CATALOG: dict[str, tuple[str, ...]] = {
     "sequence": ("view", "create", "update", "delete"),
     "audit": ("view",),
     "settings": ("view", "update"),
+    "backup": ("run", "restore"),
 }
 
 # Legacy `*.manage` codes expand to CRUD so older role rows keep working.

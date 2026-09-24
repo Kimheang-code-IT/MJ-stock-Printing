@@ -20,6 +20,8 @@ const props = withDefaults(defineProps<{
   hideAdd?: boolean
   /** Hide the trailing row-actions menu (return-mode fixed line sets). */
   hideRowActions?: boolean
+  /** Table-level validation message shown below the table (not a toast). */
+  error?: string | null
   /** When set, renders a USD/KHR toggle beside the table title; it controls
    *  the currency every money amount on the document is entered in. */
   currency?: 'USD' | 'KHR'
@@ -75,27 +77,39 @@ const tableClass = computed(() => [
   props.table.fitWidth ? 'w-full' : 'min-w-max',
 ])
 
-const moneyKeys = new Set(['unitPrice', 'unitAmount', 'discountPercent', 'taxPercent', 'discountAmount', 'discount', 'taxAmount', 'lineTotal', 'total', 'amount'])
-const numericKeys = new Set(['quantity', 'actualQuantity', 'remaining', 'netWeightKg', 'grossWeightKg', 'weightKg', 'taxRate', ...moneyKeys])
+const moneyKeys = new Set(['unitPrice', 'unitAmount', 'taxPercent', 'taxAmount', 'lineTotal', 'total', 'amount'])
+const numericKeys = new Set(['quantity', 'actualQuantity', 'remaining', 'height', 'width', 'areaM2', 'netWeightKg', 'grossWeightKg', 'weightKg', 'taxRate', ...moneyKeys])
 
-function columnCellClass(column: ModuleLineColumn) {
+function isEmptyCell(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return true
+  return typeof value === 'number' && value === 0
+}
+
+function columnCellClass(column: ModuleLineColumn, row?: Record<string, unknown>) {
   // Explicit per-column width override wins (schema opt-in).
-  if (column.width) return column.width
-  if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') return 'w-36 min-w-28'
-  if (column.key === 'productId' || column.key === 'productName') return 'w-72 min-w-56'
-  if (column.key === 'quantity' || column.key === 'actualQuantity' || column.key === 'remaining') return 'w-20 min-w-20 text-right tabular-nums'
-  if (column.key === 'unit') return 'w-24 min-w-24'
-  if (column.key === 'discountPercent' || column.key === 'taxPercent' || column.key === 'taxRate') return 'w-24 min-w-24 text-right tabular-nums'
-  if (column.key === 'netWeightKg' || column.key === 'grossWeightKg' || column.key === 'weightKg') {
-    return column.inlineFields?.length ? 'w-36 min-w-32 text-right tabular-nums' : 'w-28 min-w-24 text-right tabular-nums'
+  let base = 'min-w-28'
+  if (column.width) base = column.width
+  else if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') base = 'w-36 min-w-28'
+  else if (column.key === 'productId' || column.key === 'productName') base = 'w-72 min-w-56'
+  else if (column.key === 'quantity' || column.key === 'actualQuantity' || column.key === 'remaining') base = 'w-20 min-w-20 text-right tabular-nums'
+  else if (column.key === 'unit') base = 'w-24 min-w-24'
+  else if (column.key === 'taxPercent' || column.key === 'taxRate') base = 'w-24 min-w-24 text-right tabular-nums'
+  else if (column.key === 'netWeightKg' || column.key === 'grossWeightKg' || column.key === 'weightKg') {
+    base = column.inlineFields?.length ? 'w-36 min-w-32 text-right tabular-nums' : 'w-28 min-w-24 text-right tabular-nums'
   }
-  if (moneyKeys.has(column.key)) return column.inlineFields?.length ? 'w-44 min-w-40 text-right tabular-nums' : 'w-32 min-w-28 text-right tabular-nums'
-  if (column.key === 'containerRequirement' || column.key === 'containerRequirementId' || column.key === 'containerType' || column.key === 'feeType') return 'w-36 min-w-28'
-  if (column.key === 'sealNo' || column.key === 'status') return 'w-28 min-w-24'
-  if (column.key === 'placeRole') return 'w-44 min-w-40'
-  if (column.key === 'place' || column.key === 'notes') return 'min-w-40'
-  if (column.key === 'plannedActual') return 'w-40 min-w-36'
-  return 'min-w-28'
+  else if (moneyKeys.has(column.key)) base = column.inlineFields?.length ? 'w-44 min-w-40 text-right tabular-nums' : 'w-32 min-w-28 text-right tabular-nums'
+  else if (column.key === 'containerRequirement' || column.key === 'containerRequirementId' || column.key === 'containerType' || column.key === 'feeType') base = 'w-36 min-w-28'
+  else if (column.key === 'sealNo' || column.key === 'status') base = 'w-28 min-w-24'
+  else if (column.key === 'placeRole') base = 'w-44 min-w-40'
+  else if (column.key === 'place' || column.key === 'notes') base = 'min-w-40'
+  else if (column.key === 'plannedActual') base = 'w-40 min-w-36'
+
+  // Required cell left empty → inline red ring, only after a validation
+  // attempt (the table-level `error` is set), so a fresh form stays clean.
+  if (row && props.error && column.required && isEmptyCell(row[column.key])) {
+    return `${base} ring-2 ring-inset ring-error bg-error/5`
+  }
+  return base
 }
 
 function displayValue(column: ModuleLineColumn, value: unknown, row?: Record<string, unknown>) {
@@ -108,6 +122,8 @@ function displayValue(column: ModuleLineColumn, value: unknown, row?: Record<str
     }
   }
   if (value === undefined || value === null || value === '') return '—'
+  // Area column: a plain count line has no area → show a dash, not "0".
+  if (column.key === 'areaM2' && Number(value) === 0) return '—'
   if (column.type === 'number') {
     const number = Number(value)
     if (!Number.isFinite(number)) return String(value)
@@ -148,7 +164,7 @@ function inlineNumberFieldsCell(column: ModuleLineColumn, row: Record<string, un
     .map(field => formatInlineNumber(row[field.key]))
     .join(' / ')
   const main = h('span', {
-    class: [columnCellClass(column), 'block truncate tabular-nums text-xs'],
+    class: [columnCellClass(column, row), 'block truncate tabular-nums text-xs'],
     title: summary,
   }, summary || '—')
   if (!inlineFields.length) return main
@@ -175,7 +191,7 @@ function inlineNumberFieldsCell(column: ModuleLineColumn, row: Record<string, un
 function inlineMoneyCell(column: ModuleLineColumn, row: Record<string, unknown>, index: number) {
   const inlineFields = column.inlineFields || []
   const main = h('span', {
-    class: [columnCellClass(column), 'block truncate text-xs'],
+    class: [columnCellClass(column, row), 'block truncate text-xs'],
     title: String(row[column.key] ?? ''),
   }, displayValue(column, row[column.key], row))
   if (!inlineFields.length) return main
@@ -231,24 +247,34 @@ function updateCell(index: number, key: string, value: unknown) {
   if (props.table.key === 'feeLines') {
     const row = next[index]
     if (!row) return
-    const amount = Math.max(0, Number(row.quantity || 0) * Number(row.unitAmount || 0) - Number(row.discount || 0))
+    const amount = Math.max(0, Number(row.quantity || 0) * Number(row.unitAmount || 0))
     next[index] = { ...row, amount: amount + Number(row.taxAmount || 0) }
   }
   if (props.table.key === 'pricingLines') {
     const row = next[index]
     if (!row) return
     const subtotal = Number(row.quantity || 0) * Number(row.unitPrice || 0)
-    const discount = Number(row.discountAmount || 0)
-    const taxable = Math.max(0, subtotal - discount)
     const tax = Number(row.taxAmount || 0)
-    next[index] = { ...row, lineTotal: Number((taxable + tax).toFixed(2)) }
+    next[index] = { ...row, lineTotal: Number((subtotal + tax).toFixed(2)) }
   }
   if (props.table.key === 'lines') {
     const row = next[index]
     if (!row) return
-    const taxable = Math.max(0, Number(row.quantity || 0) * Number(row.unitAmount || 0) - Number(row.discount || 0))
-    const tax = Number(row.taxAmount || row.tax || 0)
-    next[index] = { ...row, amount: Number((taxable + tax).toFixed(2)) }
+    // Sold-by-area line (purchase/sale): Height × Width (metres) becomes the
+    // quantity (m²). Only rows that actually carry dimension keys are affected,
+    // so delivery-note lines (no height/width) are untouched.
+    let line = row
+    if ('height' in row || 'width' in row) {
+      const height = Number(row.height || 0)
+      const width = Number(row.width || 0)
+      if (height > 0 && width > 0) {
+        const area = Number((height * width).toFixed(4))
+        line = { ...row, areaM2: area, quantity: area }
+      }
+    }
+    const taxable = Math.max(0, Number(line.quantity || 0) * Number(line.unitAmount || 0))
+    const tax = Number(line.taxAmount || line.tax || 0)
+    next[index] = { ...line, amount: Number((taxable + tax).toFixed(2)) }
   }
 
   rows.value = next
@@ -362,7 +388,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           })
         }
         if (column.type === 'select') {
-          // optionItems may be a per-row resolver (e.g. a row's product UOMs).
+          // optionItems may be a per-row resolver (e.g. options from the row's product).
           const resolvedItems = typeof column.optionItems === 'function'
             ? column.optionItems(row.original)
             : column.optionItems
@@ -378,7 +404,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
               'labelKey': 'label',
               'disabled': props.disabled || column.computed,
               'size': cellSize.value,
-              'class': ['w-full', columnCellClass(column)],
+              'class': ['w-full', columnCellClass(column, row.original)],
               'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
             })
           }
@@ -419,7 +445,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'granularity': dateGranularity,
             'disabled': props.disabled || column.computed,
             'size': cellSize.value,
-            'class': `w-full ${columnCellClass(column)}`,
+            'class': `w-full ${columnCellClass(column, row.original)}`,
             'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
           })
         }
@@ -541,6 +567,7 @@ class="hidden"
         :class="tableClass"
 :ui="tableUi" />
     </div>
+    <p v-if="error" class="text-sm text-error">{{ error }}</p>
   </section>
 </template>
 

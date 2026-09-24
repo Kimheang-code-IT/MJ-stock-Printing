@@ -10,7 +10,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers
+from tests.utils import admin_headers
 
 
 async def _make_product(client, headers, *, sku: str, name: str) -> dict:
@@ -26,7 +26,6 @@ async def _make_product(client, headers, *, sku: str, name: str) -> dict:
             "sku": sku,
             "name": name,
             "category_id": category["id"],
-            "uom_id": str(DEFAULT_UOM_ID),
             "selling_price": "10.00",
         },
         headers=headers,

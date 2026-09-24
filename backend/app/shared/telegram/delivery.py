@@ -5,7 +5,7 @@ import logging
 
 from app.core.config import settings
 
-logger = logging.getLogger("stock_pos.telegram")
+logger = logging.getLogger("mj.telegram")
 
 _RESET_TITLES = {
     "en": "Password Reset Code",

@@ -4,7 +4,7 @@ from kombu import Queue
 from app.core.config import settings
 
 celery = Celery(
-    "stock_pos",
+    "mj",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
 )

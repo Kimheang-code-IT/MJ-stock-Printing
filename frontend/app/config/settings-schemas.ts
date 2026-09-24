@@ -1,4 +1,4 @@
-import type { DocumentTabSchema } from '~/types/stock-pos/common'
+import type { DocumentTabSchema } from '~/types/mj/common'
 import {
   CURRENCY_OPTIONS,
   DATE_FORMAT_OPTIONS,
@@ -158,27 +158,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
     ],
   },
   {
-    id: 'stock',
-    labelKey: 'core.settings.tabs.stock',
-    sections: [
-      {
-        id: 'stock-alerts',
-        titleKey: 'core.settings.stockAlertsTitle',
-        fields: [
-          { key: 'stock.expiryAlert1Days', labelKey: 'core.settings.expiryAlert1Days', type: 'number', helpKey: 'core.fieldHelp.expiryAlert1Days' },
-          { key: 'stock.expiryAlert2Days', labelKey: 'core.settings.expiryAlert2Days', type: 'number', helpKey: 'core.fieldHelp.expiryAlert2Days' },
-        ],
-      },
-      {
-        id: 'stock-telegram-alerts',
-        titleKey: 'core.settings.telegramAlertsTitle',
-        fields: [
-          { key: 'stock.telegramExpiryAlertsEnabled', labelKey: 'core.settings.enableExpiryAlerts', type: 'boolean', helpKey: 'core.fieldHelp.expiryAlertsToggle' },
-        ],
-      },
-    ],
-  },
-  {
     id: 'telegram',
     labelKey: 'core.settings.tabs.telegram',
     sections: [
@@ -196,7 +175,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
         id: 'telegram-notifications',
         titleKey: 'core.settings.telegramNotificationsTitle',
         fields: [
-          { key: 'telegram.expiryAlertsEnabled', labelKey: 'core.settings.expiryNotifications', type: 'boolean' },
           { key: 'telegram.saleNotificationsEnabled', labelKey: 'core.settings.saleNotifications', type: 'boolean' },
           { key: 'telegram.purchaseNotificationsEnabled', labelKey: 'core.settings.purchaseNotifications', type: 'boolean' },
           { key: 'telegram.dailySummaryEnabled', labelKey: 'core.settings.dailySummary', type: 'boolean' },
@@ -252,6 +230,42 @@ export const appConfigTabs: DocumentTabSchema[] = [
     ],
   },
   {
+    id: 'backup',
+    labelKey: 'core.settings.tabs.backup',
+    sections: [
+      {
+        id: 'backup',
+        titleKey: 'core.settings.tabs.backup',
+        fields: [
+          { key: 'backup.enabled', labelKey: 'core.settings.backupEnabled', type: 'boolean' },
+          {
+            key: 'backup.intervalHours',
+            labelKey: 'core.settings.backupInterval',
+            type: 'select',
+            options: [
+              { label: 'Every 1 hour', value: '1' },
+              { label: 'Every 3 hours', value: '3' },
+              { label: 'Every 6 hours', value: '6' },
+              { label: 'Every 12 hours', value: '12' },
+              { label: 'Every 24 hours', value: '24' },
+            ],
+          },
+          { key: 'backup.spreadsheetId', labelKey: 'core.settings.backupSpreadsheetId', type: 'text' },
+          {
+            key: 'backup.serviceAccountJson',
+            labelKey: 'core.settings.backupServiceAccount',
+            type: 'secret',
+            helpKey: 'core.fieldHelp.backupServiceAccount',
+            colSpan: 2,
+          },
+          { key: 'backup.lastRunAt', labelKey: 'core.settings.backupLastRun', type: 'text', readOnly: true },
+          { key: 'backup.lastStatus', labelKey: 'core.settings.backupLastStatus', type: 'text', readOnly: true },
+          { key: 'backup.lastMessage', labelKey: 'core.settings.backupLastMessage', type: 'text', readOnly: true, colSpan: 2 },
+        ],
+      },
+    ],
+  },
+  {
     id: 'system',
     labelKey: 'core.settings.tabs.system',
     sections: [
@@ -277,7 +291,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
   },
 ]
 
-const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'stock', 'telegram', 'security'])
+const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'stock', 'telegram', 'security', 'backup'])
 const SETTINGS_FIELD_HELP: Record<string, string> = {
   'localization.timezone': 'core.fieldHelp.timezone',
   'localization.dateFormat': 'core.fieldHelp.dateFormat',
@@ -290,9 +304,7 @@ const SETTINGS_FIELD_HELP: Record<string, string> = {
   'telegram.passwordResetEnabled': 'core.fieldHelp.passwordResetEnabled',
   'telegram.paymentInvoiceNotifyEnabled': 'core.fieldHelp.paymentInvoiceNotify',
   'telegram.stockInquiryEnabled': 'core.fieldHelp.stockInquiry',
-  'stock.expiryAlert1Days': 'core.fieldHelp.expiryAlert1Days',
-  'stock.expiryAlert2Days': 'core.fieldHelp.expiryAlert2Days',
-  'stock.telegramExpiryAlertsEnabled': 'core.fieldHelp.expiryAlertsToggle',
+  'backup.serviceAccountJson': 'core.fieldHelp.backupServiceAccount',
 }
 
 /** Administration system settings — Localization, Stock, Telegram, Security only. */

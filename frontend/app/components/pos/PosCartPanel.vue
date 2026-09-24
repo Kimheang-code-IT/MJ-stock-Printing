@@ -1,30 +1,26 @@
 <script setup lang="ts">
 import { formatMoney } from '~/composables/module/useModule'
 import type { PosCartLine } from '~/utils/pos/cart'
-import { cartSubtotal, lineDiscountAmount, lineGross, lineNet } from '~/utils/pos/cart'
+import { cartSubtotal, lineAreaM2, lineNet } from '~/utils/pos/cart'
 
 const props = withDefaults(defineProps<{
   cart: PosCartLine[]
   disabled?: boolean
   /** ONE sale currency for the whole cart (USD | KHR) — header selector. */
   saleCurrency?: 'USD' | 'KHR'
-  /** Return mode: the original price/UOM/discount are preserved (read-only);
+  /** Return mode: the original price is preserved (read-only);
    *  only the return quantity is editable. */
   returnMode?: boolean
-  /** Line discounts require `pos.discount`; the backend re-checks on save. */
-  canDiscount?: boolean
 }>(), {
   disabled: false,
   saleCurrency: 'USD',
   returnMode: false,
-  canDiscount: true,
 })
 
 const emit = defineEmits<{
   changeQty: [productId: string, delta: number]
-  changeUom: [productId: string, uomId: string]
+  updateDimensions: [productId: string, height: number | undefined, width: number | undefined]
   updatePrice: [productId: string, unitPrice: number]
-  updateDiscount: [productId: string, discountPercent: number]
   updateSaleCurrency: [value: 'USD' | 'KHR']
   remove: [productId: string]
   clear: []
@@ -43,17 +39,22 @@ const currencyOptions = [
 const money = (value: unknown) => formatMoney(Number(value || 0), props.saleCurrency)
 const subtotal = computed(() => cartSubtotal(props.cart))
 
+/** Area in m² shown for a line, or null for a plain count line. */
+function lineArea(line: PosCartLine): number | null {
+  return line.areaM2 ?? lineAreaM2(line)
+}
+
+function onDimensionInput(line: PosCartLine, field: 'height' | 'width', value: unknown) {
+  const parsed = value == null || value === '' ? undefined : Number(value)
+  const amount = parsed != null && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+  const height = field === 'height' ? amount : line.height
+  const width = field === 'width' ? amount : line.width
+  emit('updateDimensions', line.productId, height, width)
+}
+
 function onPriceInput(line: PosCartLine, value: unknown) {
   const amount = Number(value ?? 0)
   emit('updatePrice', line.productId, Number.isFinite(amount) ? Math.max(0, amount) : 0)
-}
-
-/** The discount field edits an amount; convert it to the stored percent. */
-function onDiscountInput(line: PosCartLine, value: unknown) {
-  const amount = Math.max(0, Number(value) || 0)
-  const gross = lineGross(line)
-  const percent = gross > 0 ? Math.min(100, (amount / gross) * 100) : 0
-  emit('updateDiscount', line.productId, percent)
 }
 </script>
 
@@ -96,22 +97,19 @@ function onDiscountInput(line: PosCartLine, value: unknown) {
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">
-      <!-- Column headers: image · product · UOM · unit price · qty · discount · amount · remove. -->
+      <!-- Column headers: image · product · unit price · qty · amount · remove. -->
       <div class="flex items-center gap-x-2 border-b border-default bg-elevated/40 px-2 text-[10px] font-semibold uppercase tracking-wide text-muted">
         <span class="size-9 shrink-0" />
         <span class="min-w-0 flex-1">{{ t('app.pos.product') }}</span>
-        <span class="w-20 shrink-0 text-right">{{ t('app.pos.uom') }}</span>
+        <span class="w-40 shrink-0 text-center">{{ t('app.pos.height') }} / {{ t('app.pos.width') }}</span>
+        <span class="w-14 shrink-0 text-center">{{ t('app.pos.areaM2') }}</span>
         <span class="w-32 shrink-0 text-right">{{ t('app.pos.unitPrice') }}</span>
         <span class="w-28 shrink-0 text-center">{{ t('app.pos.qty') }}</span>
-        <span
-          v-if="canDiscount"
-          class="w-28 shrink-0 text-right"
-        >{{ t('app.pos.discount') }}</span>
         <span class="w-28 shrink-0 text-right">{{ t('app.pos.amount') }}</span>
         <span class="w-7 shrink-0" />
       </div>
 
-      <!-- One row per line: image · name · UOM · unit price · qty · discount · total · remove. -->
+      <!-- One row per line: image · name · unit price · qty · total · remove. -->
       <div
         v-for="line in cart"
         :key="line.productId"
@@ -139,18 +137,34 @@ function onDiscountInput(line: PosCartLine, value: unknown) {
           {{ line.name }}
         </p>
 
-        <!-- UOM: direct select when the product has more than one. -->
-        <USelect
-          v-if="line.uomOptions.length > 1"
-          :model-value="line.uomId"
-          :items="line.uomOptions"
-          size="xs"
-          class="w-20 shrink-0"
-          :disabled="disabled || returnMode"
-          :aria-label="t('app.pos.uom')"
-          @update:model-value="emit('changeUom', line.productId, String($event))"
-        />
-        <span v-else class="shrink-0 text-xs text-muted">{{ line.uom }}</span>
+        <!-- Sold-by-area: Height × Width (metres) → billed m². -->
+        <div class="flex w-40 shrink-0 items-center justify-center gap-1">
+          <UInput
+            :model-value="line.height"
+            type="number"
+            min="0"
+            step="0.01"
+            size="sm"
+            class="app-no-spinner w-16"
+            :placeholder="t('app.pos.heightShort')"
+            :disabled="disabled || returnMode"
+            @update:model-value="onDimensionInput(line, 'height', $event)"
+          />
+          <UInput
+            :model-value="line.width"
+            type="number"
+            min="0"
+            step="0.01"
+            size="sm"
+            class="app-no-spinner w-20"
+            :placeholder="t('app.pos.widthShort')"
+            :disabled="disabled || returnMode"
+            @update:model-value="onDimensionInput(line, 'width', $event)"
+          />
+        </div>
+        <span class="w-14 shrink-0 text-center text-sm tabular-nums">
+          {{ lineArea(line) == null ? '—' : lineArea(line) }}
+        </span>
 
         <!-- Unit price: inline direct edit. -->
         <CommonAppMoneyField
@@ -166,43 +180,33 @@ function onDiscountInput(line: PosCartLine, value: unknown) {
           @update:model-value="onPriceInput(line, $event)"
         />
 
-        <!-- Quantity stepper. -->
+        <!-- Quantity: area lines are derived from H × W; others use the stepper. -->
         <div class="flex w-28 shrink-0 items-center justify-center">
-          <UButton
-            size="sm"
-            color="primary"
-            variant="solid"
-            icon="i-lucide-minus"
-            square
-            :disabled="disabled || line.quantity <= 1"
-            @click="emit('changeQty', line.productId, -1)"
-          />
-          <span class="min-w-7 text-center text-sm font-medium tabular-nums">{{ line.quantity }}</span>
-          <UButton
-            size="sm"
-            color="primary"
-            variant="solid"
-            icon="i-lucide-plus"
-            square
-            :disabled="disabled || line.quantity >= line.availableStock"
-            @click="emit('changeQty', line.productId, 1)"
-          />
+          <template v-if="lineArea(line) != null">
+            <span class="text-sm font-medium tabular-nums">{{ line.quantity }}</span>
+          </template>
+          <template v-else>
+            <UButton
+              size="sm"
+              color="primary"
+              variant="solid"
+              icon="i-lucide-minus"
+              square
+              :disabled="disabled || line.quantity <= 1"
+              @click="emit('changeQty', line.productId, -1)"
+            />
+            <span class="min-w-7 text-center text-sm font-medium tabular-nums">{{ line.quantity }}</span>
+            <UButton
+              size="sm"
+              color="primary"
+              variant="solid"
+              icon="i-lucide-plus"
+              square
+              :disabled="disabled || line.quantity >= line.availableStock"
+              @click="emit('changeQty', line.productId, 1)"
+            />
+          </template>
         </div>
-
-        <!-- Discount: inline money amount (stored as a percent). -->
-        <CommonAppMoneyField
-          v-if="canDiscount"
-          inline
-          :model-value="lineDiscountAmount(line)"
-          :currency="saleCurrency"
-          :min="0"
-          :step="0.01"
-          size="md"
-          align="right"
-          class="w-28 shrink-0"
-          :disabled="disabled || returnMode"
-          @update:model-value="onDiscountInput(line, $event)"
-        />
 
         <span class="w-28 shrink-0 text-right text-sm font-semibold tabular-nums">
           {{ money(lineNet(line)) }}

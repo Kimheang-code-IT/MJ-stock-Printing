@@ -12,10 +12,9 @@ import {
 import type { AppRecord } from '~/config/admin-seed'
 import { useModuleRecordChrome } from '~/composables/module/useModuleRecordChrome'
 import { normalizePermissionRows, permissionRowsToFlatKeys } from '~/utils/role/permissions'
-import { normalizeUomConversions } from '~/utils/stock/uom-conversions'
-import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
+import type { AppRolePermissionRow } from '~/types/mj/entities'
 import { documentSequencePreview, documentSequenceTypeLabel, documentSequenceTypeOptions, normalizeDocumentSequenceType } from '~/utils/document-sequences'
-import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
+import { apiErrorMessage, apiFieldErrors, camelCaseFieldKey, isApiErrorHandled, registerInlineFieldErrorConsumer } from '~/utils/api/errors'
 import {
   canHardDeleteRecord,
   isRecordInactive,
@@ -33,7 +32,7 @@ const store = useAppDataStore()
 const auth = useAuthStore()
 const { t } = useI18n()
 const toast = useToast()
-const { moduleTitle, moduleSingular, fieldLabel } = useModuleLabel()
+const { moduleTitle, moduleSingular } = useModuleLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
 const { confirm } = useConfirm()
 
@@ -44,6 +43,26 @@ const model = ref<AppRecord>({ id: '' } as AppRecord)
 const originalModel = ref<AppRecord | null>(null)
 const notFound = ref(false)
 let loadGeneration = 0
+
+/** Inline per-field validation messages (shown on the field, never a toast). */
+const fieldErrors = reactive<Record<string, string>>({})
+function clearFieldErrors() {
+  for (const key of Object.keys(fieldErrors)) Reflect.deleteProperty(fieldErrors, key)
+}
+function clearFieldError(key: string) {
+  if (fieldErrors[key]) Reflect.deleteProperty(fieldErrors, key)
+}
+/** Merge backend field_errors, mapping snake_case keys onto the form's keys. */
+function applyFieldErrors(errors: Record<string, string>) {
+  for (const [key, message] of Object.entries(errors)) {
+    if (!fieldErrors[key]) fieldErrors[key] = message
+    const camel = camelCaseFieldKey(key)
+    if (camel !== key && !fieldErrors[camel]) fieldErrors[camel] = message
+  }
+}
+// While this form is mounted, useApi routes validation errors here (inline).
+const releaseInlineFieldErrors = registerInlineFieldErrorConsumer()
+onBeforeUnmount(releaseInlineFieldErrors)
 
 const {
   currentUser,
@@ -146,15 +165,14 @@ onBeforeUnmount(clear)
 usePageSeo({ title: () => title.value })
 
 /**
- * The product document renders store-backed reference lists (Pricing UOM
- * picker, base UOM label). The list page loads them; a direct detail URL must
- * too, otherwise those selects fall back to raw ids.
+ * The product document renders store-backed reference lists (category /
+ * brand selects). The list page loads them; a direct detail URL must too,
+ * otherwise those selects fall back to raw ids.
  */
 watch(
   () => module.value?.collection,
   (collection) => {
     if (!import.meta.client || collection !== 'products') return
-    void store.fetchList('uoms')
     void store.fetchList('brands')
     void store.fetchList('categories')
   },
@@ -265,12 +283,13 @@ function setField(key: string, value: unknown) {
   if (Object.is(current, value)) return
   if (key === 'roleId' && String(current ?? '') === String(value ?? '')) return
   model.value = { ...model.value, [key]: value } as AppRecord
+  clearFieldError(key)
   recalculate()
 }
 
 function fieldValue(key: string) {
   if (key === RELATED_FIELD_KEY) return related.value
-  // Batches tab: the panel needs the whole record (product id, UOM, barcode).
+  // Record panels (e.g. party history) need the whole record.
   if (key === '__record') return model.value
   if (module.value?.tables?.some(table => table.key === key)) {
     return Array.isArray(model.value[key]) ? model.value[key] : []
@@ -290,6 +309,7 @@ function setFieldValue(key: string, value: unknown) {
   }
   if (module.value?.tables?.some(table => table.key === key) && Array.isArray(value)) {
     model.value = { ...model.value, [key]: value }
+    clearFieldError(key)
     return
   }
   setField(key, value)
@@ -308,95 +328,55 @@ function recalculate() {
 
 async function save() {
   if (!module.value || readOnly.value) return
+  clearFieldErrors()
+  recalculate()
+  const payload = { ...model.value }
+  if (module.value.collection === 'documentSequences') {
+    payload.documentType = normalizeDocumentSequenceType(payload.documentType)
+    payload.prefix = String(payload.prefix || '').trim()
+    const sequenceYear = Number(payload.year)
+    const paddingLength = Number(payload.paddingLength)
+    payload.year = Number.isInteger(sequenceYear) && sequenceYear >= 1000 && sequenceYear <= 9999 ? sequenceYear : null
+    payload.paddingLength = paddingLength
+    payload.status = String(payload.status || 'ACTIVE').toUpperCase()
+    payload.nextNumberPreview = documentSequencePreview(payload)
+
+    if (!payload.documentType) fieldErrors.documentType = 'Document type is required.'
+    if (!payload.prefix) fieldErrors.prefix = 'Prefix is required.'
+    if (!Number.isInteger(paddingLength) || paddingLength <= 0) {
+      fieldErrors.paddingLength = 'Padding Length must be a whole number greater than 0.'
+    }
+    if (!['ACTIVE', 'INACTIVE'].includes(String(payload.status))) {
+      fieldErrors.status = 'Status must be ACTIVE or INACTIVE.'
+    }
+    const duplicate = store.list('documentSequences').find(row =>
+      String(row.id) !== String(payload.id || '')
+      && normalizeDocumentSequenceType(row.documentType) === payload.documentType,
+    )
+    if (duplicate && !fieldErrors.documentType) {
+      fieldErrors.documentType = 'A document sequence already exists for this document type.'
+    }
+  }
+  const missing = module.value.fields.filter((field) => {
+    if (isCreate.value && field.hideOnCreate) return false
+    if (!isCreate.value && field.createOnly) return false
+    return field.required && !field.computed && !String(payload[field.key] ?? '').trim()
+  })
+  for (const field of missing) {
+    if (!fieldErrors[field.key]) fieldErrors[field.key] = t('app.ui.fieldRequired')
+  }
+  if (module.value.collection === 'products') {
+    // Spec §5.9 Pricing: the product sale price is required > 0.
+    // (It lives on the product record, edited from the General tab.)
+    if (!(Number(payload.salePrice ?? 0) > 0)) {
+      fieldErrors.salePrice = t('app.stock.pricePositive')
+    }
+  }
+  // Validation errors render on the fields themselves — no toast.
+  if (Object.keys(fieldErrors).length) return
+
   saving.value = true
   try {
-    recalculate()
-    let payload = { ...model.value }
-    if (module.value.collection === 'documentSequences') {
-      payload.documentType = normalizeDocumentSequenceType(payload.documentType)
-      payload.prefix = String(payload.prefix || '').trim()
-      const sequenceYear = Number(payload.year)
-      const paddingLength = Number(payload.paddingLength)
-      payload.year = Number.isInteger(sequenceYear) && sequenceYear >= 1000 && sequenceYear <= 9999 ? sequenceYear : null
-      payload.paddingLength = paddingLength
-      payload.status = String(payload.status || 'ACTIVE').toUpperCase()
-      payload.nextNumberPreview = documentSequencePreview(payload)
-
-      if (!payload.documentType) {
-        toast.add({ title: 'Document type is required.', color: 'error' })
-        return
-      }
-      if (!payload.prefix) {
-        toast.add({ title: 'Prefix is required.', color: 'error' })
-        return
-      }
-      if (!Number.isInteger(paddingLength) || paddingLength <= 0) {
-        toast.add({ title: 'Padding Length must be a whole number greater than 0.', color: 'error' })
-        return
-      }
-      if (!['ACTIVE', 'INACTIVE'].includes(String(payload.status))) {
-        toast.add({ title: 'Status must be ACTIVE or INACTIVE.', color: 'error' })
-        return
-      }
-      const duplicate = store.list('documentSequences').find(row =>
-        String(row.id) !== String(payload.id || '')
-        && normalizeDocumentSequenceType(row.documentType) === payload.documentType,
-      )
-      if (duplicate) {
-        toast.add({
-          title: 'A document sequence already exists for this document type.',
-          description: documentSequenceTypeLabel(payload.documentType),
-          color: 'error',
-        })
-        return
-      }
-    }
-    const missing = module.value.fields.filter((field) => {
-      if (isCreate.value && field.hideOnCreate) return false
-      if (!isCreate.value && field.createOnly) return false
-      return field.required && !field.computed && !String(payload[field.key] ?? '').trim()
-    })
-    if (missing.length) {
-      toast.add({ title: t('app.ui.missingRequired'), description: missing.map(fieldLabel).join(', '), color: 'error' })
-      return
-    }
-    if (module.value.collection === 'products') {
-      // Batch tracking, expiry tracking and FIFO are always on system-wide
-      // (the Stock Costing toggles are not shown), so stamp them on save.
-      payload = { ...payload, trackBatch: true, trackExpiry: true, expiryTracking: true, fifo: true }
-      // Spec §5.9 Pricing: the base UOM row's sale price is required > 0.
-      // (It lives on the product record, edited from the Pricing tab.)
-      if (!(Number(payload.salePrice ?? 0) > 0)) {
-        toast.add({ title: t('app.stock.pricePositive'), color: 'error' })
-        return
-      }
-      // Spec §2.1.3: unique Original UOMs (base row allowed, factor locked
-      // at 1), factor > 0, sale price > 0, exactly one Default sale row; a
-      // missing base row materializes so the product always keeps one
-      // sellable UOM. Empty cost prices are derived (base cost × factor).
-      const baseUom = store.list('uoms').find(uom => String(uom.id) === String(payload.uomId || ''))
-      try {
-        payload.uomConversions = normalizeUomConversions(
-          payload.uomConversions,
-          String(payload.uomId || ''),
-          {
-            baseCostPrice: payload.costPrice as number | undefined,
-            baseSalePrice: payload.salePrice as number | undefined,
-            baseUomSymbol: String(baseUom?.symbol || baseUom?.name || ''),
-          },
-        )
-      }
-      catch (error: unknown) {
-        if (!isApiErrorHandled(error)) {
-          toast.add({
-            title: t('app.stock.convInvalid'),
-            description: apiErrorMessage(error, t('app.stock.convInvalid')),
-            color: 'error',
-          })
-        }
-        return
-      }
-    }
     if (isCreate.value || !payload.id) {
       payload.createdAt ||= new Date().toISOString()
       payload.createdBy ||= String(currentUser.value?.name || 'Current User')
@@ -409,8 +389,9 @@ async function save() {
     toast.add({ title: t('core.common.saved'), color: 'success' })
     await navigateTo(module.value.path)
   }
-  catch {
-    // useApi already surfaced the API error
+  catch (error: unknown) {
+    // Server-side field errors render inline; other errors were toasted by useApi.
+    applyFieldErrors(apiFieldErrors(error))
   }
   finally {
     saving.value = false
@@ -476,6 +457,7 @@ async function deleteRecord() {
       :set-field-value="setFieldValue"
       :pending="loadingRecord"
       :not-found="notFound"
+      :field-errors="fieldErrors"
       :saving="saving"
       :read-only="readOnly"
       :can-save="!readOnly && !notFound && !loadingRecord"

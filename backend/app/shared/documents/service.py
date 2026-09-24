@@ -18,7 +18,6 @@ DEFAULT_SEQUENCES: dict[str, str] = {
     "STOCK_IN": "STI",
     "STOCK_ADJUSTMENT": "STA",
     "STOCK_DAMAGE": "DMG",
-    "STOCK_EXPIRE": "EXP",
     "DELIVERY_NOTE": "DN",
     "CUSTOMER": "CUS",
     "SUPPLIER": "SUP",

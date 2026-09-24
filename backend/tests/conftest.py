@@ -24,9 +24,9 @@ def _env_file_value(path: Path, key: str) -> str | None:
 # `up -d db redis` + `pytest` works without hand-exporting DATABASE_URL.
 if not os.environ.get("DATABASE_URL"):
     _infra_env = Path(__file__).resolve().parents[2] / "infrastructure" / ".env"
-    _user = os.environ.get("POSTGRES_USER") or _env_file_value(_infra_env, "POSTGRES_USER") or "stock_pos"
-    _password = os.environ.get("POSTGRES_PASSWORD") or _env_file_value(_infra_env, "POSTGRES_PASSWORD") or "stock_pos"
-    _database = os.environ.get("POSTGRES_DB") or _env_file_value(_infra_env, "POSTGRES_DB") or "stock_pos"
+    _user = os.environ.get("POSTGRES_USER") or _env_file_value(_infra_env, "POSTGRES_USER") or "mj"
+    _password = os.environ.get("POSTGRES_PASSWORD") or _env_file_value(_infra_env, "POSTGRES_PASSWORD") or "mj"
+    _database = os.environ.get("POSTGRES_DB") or _env_file_value(_infra_env, "POSTGRES_DB") or "mj"
     _test_db = _database if _database.endswith("_test") else f"{_database}_test"
     os.environ["DATABASE_URL"] = (
         f"postgresql+asyncpg://{_user}:{_password}@localhost:55432/{_test_db}"
@@ -46,7 +46,7 @@ os.environ.setdefault("SCHEDULER_ENABLED", "false")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "")
 os.environ.setdefault(
     "LOCAL_STORAGE_DIR",
-    tempfile.mkdtemp(prefix="stock-pos-media-"),
+    tempfile.mkdtemp(prefix="mj-media-"),
 )
 
 import asyncio
@@ -61,12 +61,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]
 ADMIN_DB_URL = TEST_DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
 TEST_DB_NAME = TEST_DATABASE_URL.rsplit("/", 1)[1]
-
-# Fixed id for the default "Each" UOM seeded for tests (see tests.utils).
-import uuid as _uuid
-
-DEFAULT_UOM_ID = _uuid.UUID("00000000-0000-0000-0000-0000000000ea")
-
 
 @pytest.fixture(scope="session")
 def _prepare_database() -> None:
@@ -108,6 +102,7 @@ def _prepare_database() -> None:
 
         import app.modules.administration.models  # noqa: F401
         import app.modules.auth.models  # noqa: F401
+        import app.modules.backup.models  # noqa: F401
         import app.modules.brands.models  # noqa: F401
         import app.modules.categories.models  # noqa: F401
         import app.modules.customers.models  # noqa: F401
@@ -116,17 +111,15 @@ def _prepare_database() -> None:
         import app.modules.reports.models  # noqa: F401
         import app.modules.stock.models  # noqa: F401
         import app.modules.suppliers.models  # noqa: F401
-        import app.modules.telegram.models  # noqa: F401
-        import app.modules.uoms.models  # noqa: F401
         import app.shared.audit.models  # noqa: F401
         import app.shared.documents.models  # noqa: F401
 
         engine = create_async_engine(TEST_DATABASE_URL)
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            # drop_all misses tables outside the current metadata (e.g. tables
-            # left by a legacy schema in a reused test DB); drop those too so
-            # create_all never hits foreign keys into the fresh schema.
+            # Drop tables outside the current metadata FIRST (e.g. a table
+            # removed from the models in this revision): drop_all only knows
+            # the current metadata and would otherwise fail on their foreign
+            # keys into freshly-known tables.
             leftovers = await conn.execute(
                 text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
             )
@@ -134,6 +127,7 @@ def _prepare_database() -> None:
             stale = [row[0] for row in leftovers if row[0].lower() not in known]
             for table in stale:
                 await conn.execute(text(f'DROP TABLE IF EXISTS "{table}" CASCADE'))
+            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
 
         temp_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -143,25 +137,6 @@ def _prepare_database() -> None:
             from app.seed import seed
 
             await seed()
-
-            # Deterministic default UOM for tests (products require a UOM).
-            from sqlalchemy import select
-
-            from app.modules.uoms.models import UOM
-
-            async with temp_factory() as uom_session:
-                existing = await uom_session.execute(select(UOM).where(UOM.id == DEFAULT_UOM_ID))
-                if existing.scalar_one_or_none() is None:
-                    uom_session.add(
-                        UOM(
-                            id=DEFAULT_UOM_ID,
-                            code="EA",
-                            name="Each",
-                            symbol="ea",
-                            status="ACTIVE",
-                        )
-                    )
-                    await uom_session.commit()
         finally:
             db_module.SessionFactory = original_factory
         await engine.dispose()

@@ -5,6 +5,7 @@ import { h } from 'vue'
 import { TableAppTableCellImage, UBadge, ULink } from '#components'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useConfirm } from '~/composables/common/useConfirm'
+import { useSaleInvoicePrint } from '~/composables/common/useSaleInvoicePrint'
 import { usePageSeo } from '~/composables/usePageSeo'
 import {
   formatModuleCell,
@@ -19,8 +20,8 @@ import { isDateFieldKey, isDateTimeFieldKey, isMoneyKey, isNumericKey } from '~/
 import { limitFilterSelects, parseFilterQuery } from '~/utils/filter/values'
 import { documentDetailHrefFor, documentLinkTargetFor } from '~/utils/module/document-links'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
-import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
-import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
+import { listTableRowMetaColumn, listTableSelectColumn, type TableRowMetaAction } from '~/utils/table/list-columns'
+import { listTablePageSummary, listTableSelectedIds, type ListTableSortOption } from '~/utils/table/list-table'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/module/audit-logs'
 import {
@@ -34,7 +35,7 @@ import { apiErrorMessage, isApiErrorHandled } from '~/utils/api/errors'
 import { deliveryStatusOf } from '~/utils/delivery/notes'
 import { downloadTableExport } from '~/utils/export/table'
 import { fetchAllListRows } from '~/utils/export/fetch-all'
-import type { ExportFieldOption, ExportRequest } from '~/types/stock-pos/export'
+import type { ExportFieldOption, ExportRequest } from '~/types/mj/export'
 import { useDeliveryCommands, useEntityRepository, usePosCommands } from '~/repositories/index'
 import { productImageUrl } from '~/utils/pos/cart'
 import { STOCK_OPERATION_META, STOCK_OPERATION_PERMISSIONS, STOCK_OPERATION_TYPES, type StockHistoryKind, type StockOperationType } from '~/config/pos-options'
@@ -52,6 +53,13 @@ const posCommands = usePosCommands()
 const deliveryCommands = useDeliveryCommands()
 const entityRepository = useEntityRepository()
 const { localization } = useAppLocalization()
+const {
+  open: salePrintOpen,
+  busy: salePrintBusy,
+  request: requestSalePrint,
+  confirm: confirmSalePrint,
+  cancel: cancelSalePrint,
+} = useSaleInvoicePrint()
 
 const q = ref('')
 /** Debounced copy of the search box: the list filters instantly (in-memory)
@@ -179,8 +187,6 @@ const result = computed(() => {
       stockInQty: stockTotalsByProduct.value.get(String(row.id))?.stockIn ?? 0,
       stockOutQty: stockTotalsByProduct.value.get(String(row.id))?.stockOut ?? 0,
       damageQty: stockTotalsByProduct.value.get(String(row.id))?.damage ?? 0,
-      uom: String(row.uom || uomLookup.value.get(String(row.uomId))?.name || ''),
-      uomSymbol: String(row.uomSymbol || uomLookup.value.get(String(row.uomId))?.symbol || ''),
       brand: String(row.brand || brandLookup.value.get(String(row.brandId))?.name || ''),
     }))
     return { rows: all, total: queried.total, all }
@@ -192,13 +198,6 @@ const result = computed(() => {
     }))
     return { rows: all, total: queried.total, all }
   }
-  if (current.value.collection === 'uoms') {
-    const all = queried.all.map(row => ({
-      ...row,
-      productCount: uomProductCounts.value.get(String(row.id)) ?? 0,
-    }))
-    return { rows: all, total: queried.total, all }
-  }
   // Debt reports list outstanding balances only: once a debt is paid in full
   // it leaves the table instead of lingering as a settled row.
   if (current.value.collection === 'customerDebts' || current.value.collection === 'supplierDebts') {
@@ -207,10 +206,6 @@ const result = computed(() => {
   }
   return queried
 })
-
-/** UOM lookup for product display enrichment (O(1) — was O(n) per row). */
-const uomLookup = computed(() =>
-  new Map(store.list('uoms').map(uom => [String(uom.id), uom])))
 
 /** Brand lookup for product display enrichment (O(1) — was O(n) per row). */
 const brandLookup = computed(() =>
@@ -227,17 +222,6 @@ const brandProductCounts = computed(() => {
   return counts
 })
 
-/** Products linked to each UOM â€” used to keep the UOM list informative. */
-const uomProductCounts = computed(() => {
-  const counts = new Map<string, number>()
-  for (const row of store.list('products')) {
-    const uomId = String(row.uomId ?? '')
-    if (!uomId) continue
-    counts.set(uomId, (counts.get(uomId) || 0) + 1)
-  }
-  return counts
-})
-
 /** Per-product movement aggregates for the Stock list quantity columns. */
 const stockTotalsByProduct = computed(() => {
   const totals = new Map<string, { stockIn: number, stockOut: number, damage: number }>()
@@ -248,7 +232,7 @@ const stockTotalsByProduct = computed(() => {
     const qty = Number(row.quantity || 0)
     const type = String(row.type ?? '')
     if (type === 'Stock In' || type === 'Sale Return') entry.stockIn += qty
-    else if (type === 'Sale') entry.stockOut += Math.abs(qty)
+    else if (type === 'Sale' || type === 'Purchase Return') entry.stockOut += Math.abs(qty)
     else if (type === 'Damage') entry.damage += Math.abs(qty)
     totals.set(productId, entry)
   }
@@ -311,6 +295,23 @@ const visibleFilters = computed(() => limitFilterSelects(
   filter => filter.key === 'status' || filter.key === 'workflowStatus',
 ))
 
+/** Toolbar sort menu: the module's date field plus its document-number field. */
+const listSortOptions = computed<ListTableSortOption[]>(() => {
+  const module = current.value
+  if (!module) return []
+  const labelFor = (key: string) => {
+    const field = module.fields.find(item => item.key === key) || module.columns.find(item => item.key === key)
+    return field ? fieldLabel(field) : ''
+  }
+  const options: ListTableSortOption[] = []
+  const dateKey = dateField.value
+  if (dateKey) options.push({ key: dateKey, kind: 'date', label: labelFor(dateKey) || t('app.ui.date') })
+  const noKey = module.columns.map(column => column.key)
+    .find(key => key !== dateKey && /(?:no|number|code|reference|ref)$/i.test(key))
+  if (noKey) options.push({ key: noKey, kind: 'number', label: labelFor(noKey) || t('components.sortFieldNo') })
+  return options
+})
+
 watch(current, (value) => {
   if (!value) return
   setTitle(moduleTitle(value))
@@ -349,10 +350,8 @@ function reloadModuleData() {
   })
   if (current.value.collection === 'products') {
     void store.fetchList('stockMovements')
-    void store.fetchList('uoms')
     void store.fetchList('brands')
   }
-  if (current.value.collection === 'uoms') void store.fetchList('products')
   if (current.value.collection === 'brands') void store.fetchList('products')
   // Debt reports: the export dialog needs the party/user option lists. These
   // follow the module permission; a missing grant silently yields no options.
@@ -679,9 +678,8 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   }
   if (collection === 'products' && canOperate.value) {
     for (const type of STOCK_OPERATION_TYPES) {
-      // Adjustment is not offered as a row action on the Stock table; Expiry
-      // now runs per-lot from the product Batches tab.
-      if (type === 'adjustment' || type === 'expiry') continue
+      // Adjustment is not offered as a row action on the Stock table.
+      if (type === 'adjustment') continue
       if (!auth.canAccessPage(STOCK_OPERATION_PERMISSIONS[type])) continue
       const meta = STOCK_OPERATION_META[type]
       items.push({
@@ -719,6 +717,16 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     })
   }
   return items.length ? [items] : []
+}
+
+/** Direct Print-invoice button on sales rows (needs POS access for the receipt). */
+function rowPrintActions(row: Record<string, unknown>): TableRowMetaAction[] {
+  if (current.value?.collection !== 'sales' || !canEditSale.value || !String(row.id || '')) return []
+  return [{
+    icon: 'i-lucide-printer',
+    label: t('app.pos.printInvoice'),
+    onClick: () => requestSalePrint(row.id),
+  }]
 }
 
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
@@ -806,6 +814,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       ? [listTableRowMetaColumn<Record<string, unknown>>({
           summary: pageSummary.value,
           items: rowMenuItems,
+          actions: rowPrintActions,
           loadingId: busyId.value
             || (debtPayBusy.value ? String(debtPayRow.value?.id || '') : ''),
         })]
@@ -1194,6 +1203,7 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
       :columns="columns"
       :loading="pending"
       :show-date-range="Boolean(dateField)"
+      :sort-options="listSortOptions"
       :filters-active="hasActiveFilters"
       :empty-actions="canCreate ? [{ icon: 'i-lucide-plus', label: t('app.ui.newEntity', { entity: moduleSingular(current) }), onClick: openCreate }] : []"
       @select="onRowSelect"
@@ -1329,6 +1339,13 @@ function filterItems(filter: { options?: readonly ModuleSelectOption[] | ModuleS
       :debts="debtSelectedRows"
       :currency="String(debtSelectedRows[0]?.currency || preferences.currency)"
       @submit="submitSelectedDebtPayment"
+    />
+
+    <PosPrintSizeDialog
+      v-model:open="salePrintOpen"
+      :busy="salePrintBusy"
+      @confirm="confirmSalePrint"
+      @cancel="cancelSalePrint"
     />
 
   </div>

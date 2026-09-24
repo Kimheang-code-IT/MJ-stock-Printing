@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TimelineItem } from '@nuxt/ui'
-import type { PersonSummary } from '~/types/stock-pos/common'
+import type { PersonSummary } from '~/types/mj/common'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const props = defineProps<{

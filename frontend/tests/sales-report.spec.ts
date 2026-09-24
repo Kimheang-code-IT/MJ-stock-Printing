@@ -51,7 +51,6 @@ function saleLine(overrides: Record<string, unknown> = {}): Record<string, unkno
     returned_quantity: '0',
     returnable_quantity: '1',
     selling_price: '2.00',
-    discount_amount: '0.00',
     sales_amount: '2.00',
     return_amount: '0.00',
     net_quantity: '1',
@@ -64,7 +63,6 @@ function saleLine(overrides: Record<string, unknown> = {}): Record<string, unkno
     exchange_rate: '1',
     // Saved sale header (authoritative checkout values).
     subtotal: '2.00',
-    sale_discount: '0.00',
     delivery_price: '0.00',
     grand_total: '2.00',
     paid_amount: '2.00',
@@ -91,7 +89,6 @@ describe('sales report adapter (completed POS sale → report row)', () => {
     expect(row!.customer).toBe('Walk-in')
     expect(row!.lineCount).toBe(1)
     expect(row!.subtotal).toBe(2)
-    expect(row!.discount).toBe(0)
     expect(row!.total).toBe(2)
     expect(row!.paidAmount).toBe(2)
     expect(row!.remaining).toBe(0)
@@ -101,22 +98,18 @@ describe('sales report adapter (completed POS sale → report row)', () => {
     expect(row!.status).toBe('Paid')
   })
 
-  it('keeps the saved header discount instead of double-counting line discounts', async () => {
+  it('keeps the saved header total for a line-priced sale', async () => {
     const [row] = await loadSalesReport([saleLine({
       invoice_no: 'INV-000016',
       selling_price: '10.00',
-      discount_amount: '2.00',
-      sales_amount: '8.00',
+      sales_amount: '10.00',
       subtotal: '10.00',
-      sale_discount: '2.00',
-      grand_total: '8.00',
-      paid_amount: '8.00',
+      grand_total: '10.00',
+      paid_amount: '10.00',
     })])
     expect(row!.subtotal).toBe(10)
-    expect(row!.discount).toBe(2)
-    expect(row!.discountAmount).toBe(2)
-    expect(row!.total).toBe(8)
-    expect(row!.paidAmount).toBe(8)
+    expect(row!.total).toBe(10)
+    expect(row!.paidAmount).toBe(10)
     expect(row!.remaining).toBe(0)
     expect(row!.status).toBe('Paid')
   })
@@ -214,7 +207,6 @@ describe('sales report adapter (completed POS sale → report row)', () => {
   it('falls back to line sums when the saved header is absent (legacy rows)', async () => {
     const legacy = saleLine()
     delete legacy.subtotal
-    delete legacy.sale_discount
     delete legacy.delivery_price
     delete legacy.grand_total
     delete legacy.paid_amount
@@ -250,7 +242,6 @@ describe('purchase report adapter (double-adaptation regression)', () => {
         currency: 'USD',
         exchange_rate: '1',
         note: null,
-        discount_amount: '0.00',
         tax_amount: '0.00',
       }],
       meta: { page: 1, limit: 500, total: 1 },
@@ -276,11 +267,10 @@ describe('sale detail adapter (POS edit source)', () => {
         currency: 'USD',
         exchange_rate: '1',
         subtotal: '20.00',
-        discount_amount: '2.00',
         delivery_price: '1.50',
-        grand_total: '19.50',
+        grand_total: '21.50',
         paid_amount: '9.50',
-        debt_amount: '10.00',
+        debt_amount: '12.00',
         payment_status: 'PARTIAL',
         payment_method: 'CUSTOMER_DEBT',
         note: 'deliver after 5pm',
@@ -289,14 +279,10 @@ describe('sale detail adapter (POS edit source)', () => {
           id: 'item-1',
           product_id: 'prd-1',
           product_name: 'Product A',
-          uom_symbol: 'pcs',
-          factor_to_base: '1',
           quantity: '2',
           returned_quantity: '0',
           unit_price: '10.00',
-          discount_percent: '10',
-          discount_amount: '2.00',
-          line_total: '18.00',
+          line_total: '20.00',
         }],
       },
     }))
@@ -305,13 +291,11 @@ describe('sale detail adapter (POS edit source)', () => {
     expect(sale.paymentMethod).toBe('CUSTOMER_DEBT')
     expect(sale.paymentStatus).toBe('PARTIAL')
     expect(sale.subtotal).toBe(20)
-    expect(sale.discount).toBe(2)
     expect(sale.deliveryPrice).toBe(1.5)
     expect(sale.paidAmount).toBe(9.5)
-    expect(sale.debtAmount).toBe(10)
+    expect(sale.debtAmount).toBe(12)
     expect(sale.note).toBe('deliver after 5pm')
     expect(sale.dueDate).toBe('2026-10-01')
     expect(sale.items[0]?.unitPrice).toBe(10)
-    expect(sale.items[0]?.discountPercent).toBe(10)
   })
 })

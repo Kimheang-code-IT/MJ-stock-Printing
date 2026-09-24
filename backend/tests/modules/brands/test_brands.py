@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, deactivate_then_delete, login
+from tests.utils import admin_headers, create_user_with_role, deactivate_then_delete, login
 
 VIEWER_EMAIL = "brand-viewer@example.com"
 VIEWER_PASSWORD = "viewerpass1"
@@ -104,7 +104,6 @@ async def test_brand_delete_blocked_when_products_exist(client):
             "sku": "SNK-001",
             "name": "Chips",
             "category_id": await _category_id(client, headers),
-            "uom_id": str(DEFAULT_UOM_ID),
             "brand_id": brand["id"],
             "selling_price": "2.50",
         },
@@ -131,7 +130,6 @@ async def test_product_accepts_unknown_brand_error(client):
             "sku": "SNK-002",
             "name": "Chips No Brand",
             "category_id": await _category_id(client, headers),
-            "uom_id": str(DEFAULT_UOM_ID),
             "brand_id": "00000000-0000-0000-0000-000000000000",
             "selling_price": "2.50",
         },

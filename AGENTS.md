@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Stock & POS management system ("Yoeun Sokhon Pharmacy"). Monorepo, no root README —
+Stock & POS management system ("MJ Printing"). Monorepo, no root README —
 the primary setup/ops doc is `infrastructure/README.md`.
 
 - `backend/` — FastAPI (Python 3.12), async SQLAlchemy 2 + asyncpg, PostgreSQL, Redis.
@@ -47,7 +47,7 @@ Docker (run from `infrastructure/`, where `.env` lives): `docker compose up -d -
   `python -m app.seed` only creates one when `SEED_ADMIN_ENABLED=true`.
 - Backend module pattern: `app/modules/<domain>/{router,service,repository,models,schemas}.py`;
   register routers in `app/api/v1/router.py` (prefix `/api/v1`). Shared code lives in `app/shared/`.
-- `frontend` API base: `same-origin` in Docker/Vercel (nginx proxies `/api` to `api:8000`);
+- `frontend` API base: `same-origin` in Docker (nginx proxies `/api` to `api:8000`);
   local dev defaults to `auto` (page hostname :8000). Auth is bearer JWT only — no cookies/CSRF.
 - i18n `en` + `km` must keep exact key parity; a test (`tests/i18n-locales.spec.ts`) enforces it.
   Add every string to both `frontend/i18n/locales/*.json`.

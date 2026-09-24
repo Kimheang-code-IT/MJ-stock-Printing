@@ -4,10 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.modules.auth.models import Role, User
-from tests.conftest import DEFAULT_UOM_ID
 
 __all__ = [
-    "DEFAULT_UOM_ID",
     "login",
     "admin_headers",
     "create_user_with_role",
@@ -41,16 +39,6 @@ async def deactivate_then_delete(
     patched = await client.patch(path, json={"status": status}, headers=headers)
     assert patched.status_code == 200, patched.text
     return await client.delete(path, headers=headers)
-
-
-async def uom_option(client, headers, code: str = "PCS") -> dict:
-    """Fetch an active UOM option (seeded defaults, spec section 2.1.3)."""
-    response = await client.get("/api/v1/uoms/options", headers=headers)
-    assert response.status_code == 200, response.text
-    for row in response.json()["data"]:
-        if row["code"] == code:
-            return row
-    raise AssertionError(f"UOM {code} is not seeded")
 
 
 async def create_user_with_role(

@@ -76,7 +76,6 @@ describe('i18n locale files', () => {
       'app.debt.recordPayment',
       'core.settings.telegramNotificationsTitle',
       'core.settings.saleNotifications',
-      'core.settings.expiryNotifications',
       'core.settings.notificationLanguage',
     ]
     for (const key of keys) {
@@ -113,7 +112,7 @@ describe('invoice bilingual labels (A4 + A5 share one template)', () => {
     customerName: 'Walk-in',
     cashier: 'admin',
     currency: 'USD',
-    lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
+    lines: [{ name: 'Glove', quantity: 1, unitPrice: 3.15 }],
     deliveryPrice: 0,
     previousDebtAmount: 0,
     depositAmount: 0,
@@ -123,20 +122,24 @@ describe('invoice bilingual labels (A4 + A5 share one template)', () => {
   it('renders the same bilingual labels on A4 and A5', () => {
     for (const size of ['A4', 'A5'] as const) {
       const html = buildSaleInvoiceHtml(input, size)
-      expect(html).toContain('វិក្កយបត្រ / INVOICE')
-      expect(html).toContain('លេខ Invoice')
-      expect(html).toContain('កាលបរិច្ឆេទ Date')
-      expect(html).toContain('អតិថិជន Customer')
-      expect(html).toContain('បេឡា Cashier')
-      expect(html).toContain('មុខទំនិញ<span>Product</span>')
-      expect(html).toContain('ឯកតា<span>Unit</span>')
-      expect(html).toContain('ចំនួន<span>Qty</span>')
-      expect(html).toContain('តម្លៃ<span>Price</span>')
-      expect(html).toContain('បញ្ចុះតម្លៃ<span>Discount</span>')
-      expect(html).toContain('តម្លៃសរុប<span>Amount</span>')
-      expect(html).toContain('ទឹកប្រាក់សរុប / Total Amount')
-      expect(html).toContain('អ្នកទិញ / Buyer')
-      expect(html).toContain('អ្នកលក់ / Seller')
+      expect(html).toContain('<span>វិក្កយបត្រ</span><span>INVOICE</span>')
+      expect(html).toContain('លេខវិក្កយបត្រ / Invoice No')
+      expect(html).toContain('កាលបរិច្ឆេទ / Date')
+      expect(html).toContain('ឈ្មោះសហគ្រាស ឬអតិថិជន / Enterprise name/Customer')
+      expect(html).toContain('លុយ ជាអក្សរ / Amount in words')
+      expect(html).toContain('<tr class="head-km">')
+      expect(html).toContain('<tr class="head-en">')
+      expect(html).toContain('<th>បរិយាយមុខទំនិញ ឬសេវាកម្ម</th>')
+      expect(html).toContain('<th>Description of Goods or Services</th>')
+      expect(html).toContain('<th class="num center">Height</th>')
+      expect(html).toContain('<th class="num center">Width</th>')
+      expect(html).toContain('<th class="num center">m</th>')
+      expect(html).toContain('<th class="num center">Qty</th>')
+      expect(html).toContain('<th class="num center">Price/m²</th>')
+      expect(html).toContain('<th class="num">Amount</th>')
+      expect(html).toContain('សរុប / Total (USD)')
+      expect(html).toContain("Customer&#39;s Signature &amp; Name")
+      expect(html).toContain("Seller&#39;s Signature &amp; Name")
     }
   })
 })

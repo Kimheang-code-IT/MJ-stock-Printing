@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { documentFormItemKey, documentFormSectionItems } from '~/utils/module/form-layout'
-import type { DocumentFieldSchema } from '~/types/stock-pos/common'
+import type { DocumentFieldSchema } from '~/types/mj/common'
 
 function field(key: string, type: DocumentFieldSchema['type'] = 'text', extra: Partial<DocumentFieldSchema> = {}): DocumentFieldSchema {
   return { key, label: key, type, ...extra }

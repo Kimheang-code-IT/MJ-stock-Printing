@@ -34,16 +34,6 @@ async def search_products(
     return envelope(await service.search_products(q=q, category_id=category_id, limit=limit))
 
 
-@router.get("/products/barcode/{barcode}")
-async def product_by_barcode(
-    barcode: str,
-    db: AsyncSession = Depends(get_db_session),
-    actor: User = Depends(require_permission("pos.access")),
-) -> dict:
-    service = POSService(db)
-    return envelope(await service.product_by_barcode(barcode))
-
-
 @router.get("/sales")
 async def list_sales(
     params: ListParams = Depends(list_params),
@@ -143,8 +133,8 @@ async def sale_receipt(
     db: AsyncSession = Depends(get_db_session),
     actor: User = Depends(require_permission("pos.access")),
 ) -> dict:
-    """Print-ready bilingual invoice payload (shop, invoice, lines with UOM,
-    totals, payment). The frontend prints HTML — this JSON drives the paper."""
+    """Print-ready bilingual invoice payload (shop, invoice, lines, totals,
+    payment). The frontend prints HTML — this JSON drives the paper."""
     service = POSService(db)
     sale = await service.get_sale(sale_id)
     return envelope(await service.build_receipt(sale))

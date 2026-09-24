@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app.modules.reports.models import Expense
 from app.shared.audit.models import AuditLog
 from tests.modules.pos.helpers import make_stocked_product
-from tests.utils import DEFAULT_UOM_ID, admin_headers, create_user_with_role, login
+from tests.utils import admin_headers, create_user_with_role, login
 
 FINANCE_ONLY_EMAIL = "finance-viewer@example.com"
 FINANCE_ONLY_PASSWORD = "financepass1"
@@ -131,11 +131,10 @@ async def test_finance_summary_includes_operating_expenses_in_net_result(client,
     assert delta_expense == Decimal("100.00")
     # Total Expense = operating expenses + cash paid to suppliers.
     assert Decimal(data["operating_expenses"]) + Decimal(data["supplier_payments"]) == Decimal(data["total_expense"])
-    # Net Result = Gross Profit - Damage Loss - Expire Loss - Total Expense.
+    # Net Result = Gross Profit - Damage Loss - Total Expense.
     expected = (
         Decimal(data["gross_profit"])
         - Decimal(data["stock_damage_loss"])
-        - Decimal(data["stock_expire_loss"])
         - Decimal(data["total_expense"])
     )
     assert Decimal(data["net_result"]) == expected
@@ -186,7 +185,6 @@ async def test_finance_entries_income_derived_from_sales_and_filters(client):
                 "sku": f"FIN-SKU-{tag}",
                 "name": f"Fin Widget {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "25.00",
             },
             headers=headers,
@@ -362,7 +360,6 @@ async def test_finance_records_supplier_payments_as_expense(client, finance_base
                 "sku": f"FPAY-{tag}",
                 "name": f"Fin Pay {tag}",
                 "category_id": category["id"],
-                "uom_id": str(DEFAULT_UOM_ID),
                 "selling_price": "3.00",
             },
             headers=headers,

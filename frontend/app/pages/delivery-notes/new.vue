@@ -24,7 +24,7 @@ const { appInfo } = useSettingsRepositories()
 
 onBeforeUnmount(clear)
 
-const shopName = ref('Yoeun Sokhon Pharmacy')
+const shopName = ref('MJ Printing')
 
 setTitle(t('app.delivery.newTitle'))
 setBreadcrumbs([

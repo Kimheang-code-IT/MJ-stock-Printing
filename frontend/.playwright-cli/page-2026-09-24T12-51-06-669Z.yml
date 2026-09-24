@@ -1,0 +1,104 @@
+- article [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - generic [ref=f1e6]:
+      - paragraph [ref=f1e7]: MJ PRINTING
+      - paragraph [ref=f1e8]: "#168, Street 11, New World Borey, Phnom Penh"
+      - paragraph [ref=f1e9]: +855 81 99 25 15 / 096 20 21 233
+    - generic [ref=f1e10]:
+      - generic [ref=f1e11]:
+        - paragraph [ref=f1e12]:
+          - text: "ឈ្មោះសហគ្រាស ឬអតិថិជន / Enterprise name/Customer :"
+          - strong [ref=f1e13]: MOEURN SAMNANG
+        - paragraph [ref=f1e14]:
+          - text: "អាសយដ្ឋាន / Address :"
+          - strong [ref=f1e15]: Phnom Penh
+        - paragraph [ref=f1e16]:
+          - text: "ទូរស័ព្ទលេខ / Telephone No :"
+          - strong [ref=f1e17]: (+855) 96 732 2225
+      - generic [ref=f1e18]:
+        - paragraph [ref=f1e19]:
+          - generic [ref=f1e20]: វិក្កយបត្រ
+          - generic [ref=f1e21]: INVOICE
+        - paragraph [ref=f1e22]:
+          - text: "លេខវិក្កយបត្រ / Invoice No :"
+          - strong [ref=f1e23]: RBL-000003
+        - paragraph [ref=f1e24]:
+          - text: "កាលបរិច្ឆេទ / Date :"
+          - strong [ref=f1e25]: 24/09/2026
+        - paragraph [ref=f1e26]:
+          - text: "អ្នកលក់ / Seller :"
+          - strong [ref=f1e27]: Sok Dara
+        - paragraph [ref=f1e28]:
+          - text: "លុយ ជាអក្សរ / Amount in words :"
+          - strong
+    - table [ref=f1e29]:
+      - rowgroup [ref=f1e39]:
+        - row [ref=f1e40]:
+          - columnheader "ល.រ" [ref=f1e41]
+          - columnheader "បរិយាយមុខទំនិញ ឬសេវាកម្ម" [ref=f1e42]
+          - columnheader "កម្ពស់" [ref=f1e43]
+          - columnheader "ទទឹង" [ref=f1e44]
+          - columnheader "ម៉ែត្រ" [ref=f1e45]
+          - columnheader "ចំនួន" [ref=f1e46]
+          - columnheader "តម្លៃ/m²" [ref=f1e47]
+          - columnheader "ទឹកប្រាក់" [ref=f1e48]
+        - row [ref=f1e49]:
+          - columnheader "No" [ref=f1e50]
+          - columnheader "Description of Goods or Services" [ref=f1e51]
+          - columnheader "Height" [ref=f1e52]
+          - columnheader "Width" [ref=f1e53]
+          - columnheader "m" [ref=f1e54]
+          - columnheader "Qty" [ref=f1e55]
+          - columnheader "Price/m²" [ref=f1e56]
+          - columnheader "Amount" [ref=f1e57]
+      - rowgroup [ref=f1e58]:
+        - row [ref=f1e59]:
+          - cell "1" [ref=f1e60]
+          - cell "ផ្ទាំងផ្សព្វផ្សាយ" [ref=f1e61]
+          - cell "1" [ref=f1e62]
+          - cell "1" [ref=f1e63]
+          - cell "5" [ref=f1e64]
+          - cell "5" [ref=f1e65]
+          - cell "$4.00" [ref=f1e66]
+          - cell "$20.00" [ref=f1e67]
+        - row [ref=f1e68]:
+          - cell "2" [ref=f1e69]
+          - cell "សេវាកម្មរចនា" [ref=f1e70]
+          - cell [ref=f1e71]
+          - cell [ref=f1e72]
+          - cell [ref=f1e73]
+          - cell "1" [ref=f1e74]
+          - cell "$1.50" [ref=f1e75]
+          - cell "$1.50" [ref=f1e76]
+        - row [ref=f1e77]:
+          - cell [ref=f1e78]
+          - cell [ref=f1e79]
+          - cell [ref=f1e80]
+          - cell [ref=f1e81]
+          - cell [ref=f1e82]
+          - cell [ref=f1e83]
+          - cell [ref=f1e84]
+          - cell [ref=f1e85]
+    - generic [ref=f1e86]:
+      - generic [ref=f1e87]:
+        - generic [ref=f1e88]:
+          - paragraph [ref=f1e89]: សូមអរគុណចំពោះការគាំទ្រ!
+          - paragraph [ref=f1e90]: Thank you for your business!
+        - table [ref=f1e91]:
+          - rowgroup [ref=f1e92]:
+            - row [ref=f1e93]:
+              - cell "សរុប / Total (USD)" [ref=f1e94]
+              - cell "$21.50" [ref=f1e95]
+            - row [ref=f1e96]:
+              - cell "ប្រាក់កក់ / Deposit" [ref=f1e97]
+              - cell "$0.00" [ref=f1e98]
+            - row [ref=f1e99]:
+              - cell "សមតុល្យ / Balance" [ref=f1e100]
+              - cell "$21.50" [ref=f1e101]
+            - row [ref=f1e102]:
+              - cell [ref=f1e103]:
+                - text: សរុបជារៀល / Total in KHR
+                - strong [ref=f1e104]: 86,000៛
+      - generic [ref=f1e105]:
+        - paragraph [ref=f1e108]: ហត្ថលេខា និងឈ្មោះអ្នកទិញ / Customer's Signature & Name
+        - paragraph [ref=f1e111]: ហត្ថលេខា និងឈ្មោះអ្នកលក់ / Seller's Signature & Name

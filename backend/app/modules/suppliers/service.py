@@ -15,7 +15,7 @@ from app.shared.audit.service import record_audit
 from app.shared.documents import allocate_document_number
 from app.shared.lifecycle import assert_inactive_for_delete
 
-logger = logging.getLogger("stock_pos.suppliers")
+logger = logging.getLogger("mj.suppliers")
 
 
 class SupplierService:
@@ -73,11 +73,10 @@ class SupplierService:
             + await self.repo.count_purchase_returns(supplier.id)
             + await self.repo.count_debts(supplier.id)
             + await self.repo.count_payments(supplier.id)
-            + await self.repo.count_batches(supplier.id)
         )
         if referenced > 0:
             raise ConflictError(
-                "Cannot delete this supplier because purchase, debt, payment, or batch "
+                "Cannot delete this supplier because purchase, debt, or payment "
                 "history exists. Deactivate it instead."
             )
         await self.session.delete(supplier)

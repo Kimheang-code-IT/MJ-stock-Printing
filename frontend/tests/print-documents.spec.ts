@@ -35,12 +35,15 @@ describe('print documents', () => {
     expect(css).toContain('table.lines')
     expect(css).toContain('border: 0.5px solid #000')
     expect(css).toContain('text-decoration: underline')
-    expect(css).toContain('table.summary')
-    expect(css).toContain('.col-product { width: 28%; }')
+    expect(css).toContain('table.inv-summary')
+    expect(css).toContain('.col-product { width: 46.5%; }')
+    expect(css).toContain('.col-height { width: 6.5%; }')
+    expect(css).toContain('.col-width { width: 6.5%; }')
+    expect(css).toContain('.col-area { width: 6.5%; }')
     expect(css).toContain('th.num { text-align: center; }')
     expect(css).toContain('tr.empty.stretch td')
-    expect(css).toContain('border-top: none')
-    expect(css).toContain('table.summary td.spacer')
+    expect(css).toContain('table.inv-summary td.num')
+    expect(css).toContain('.inv-letterhead')
     expect(PRINT_IFRAME_SIZES.A4).toEqual({ width: '210mm', height: '297mm' })
   })
 
@@ -78,7 +81,6 @@ describe('print documents', () => {
       currency: 'USD',
       lines: [{
         name: 'Little Bio <Peach>',
-        uom: 'កំប៉ុង',
         quantity: 2,
         unitPrice: 3.15,
         discountPercent: 0,
@@ -88,31 +90,59 @@ describe('print documents', () => {
       depositAmount: 0,
       outstandingAmount: 6.3,
     })
-    expect(html).toContain('វិក្កយបត្រ / INVOICE')
-    expect(html).not.toContain('Demo Shop')
+    expect(html).toContain('<span>វិក្កយបត្រ</span><span>INVOICE</span>')
+    expect(html).toContain('Demo Shop')
     expect(html).not.toContain('Yoeun Sokhon Pharmacy')
     expect(html).toContain('INV-000001')
     expect(html).toContain('Ph Yoeun Sokhon')
-    expect(html).toContain('បេឡា Cashier')
-    expect(html).toContain('admin')
+    expect(html).toContain('ឈ្មោះសហគ្រាស ឬអតិថិជន / Enterprise name/Customer')
     expect(html).toContain('ល.រ')
-    expect(html).toContain('<span>N°</span>')
-    expect(html).toContain('មុខទំនិញ')
-    expect(html).toContain('<span>Product</span>')
+    expect(html).toContain('<th class="center">No</th>')
+    expect(html).toContain('បរិយាយមុខទំនិញ ឬសេវាកម្ម')
+    expect(html).toContain('<th>Description of Goods or Services</th>')
+    expect(html).toContain('<th class="num center">Height</th>')
+    expect(html).toContain('<th class="num center">Width</th>')
+    expect(html).toContain('<th class="num center">m</th>')
     expect(html).toContain('Little Bio &lt;Peach&gt;')
-    expect(html).toContain('កំប៉ុង')
-    expect(html).toContain('ទឹកប្រាក់សរុប / Total Amount')
-    expect(html).toContain('ខ្វះមុន')
-    expect(html).toContain('បានទូទាត់')
-    expect(html).toContain('ខ្វះសរុប')
+    expect(html).toContain('សរុប / Total (USD)')
+    expect(html).toContain('ប្រាក់កក់ / Deposit')
+    expect(html).toContain('សមតុល្យ / Balance')
     expect(html).toContain('table class="lines"')
-    expect(html).toContain('table class="summary"')
+    expect(html).toContain('table class="inv-summary"')
     expect(html).toContain('tr class="empty stretch"')
-    expect(html).toContain('class="spacer"')
-    expect(html).toContain('colspan="2"')
     expect(html).toContain('class="line"')
-    expect(html).toContain('អ្នកទិញ / Buyer')
-    expect(html).toContain('អ្នកលក់ / Seller')
+    expect(html).toContain("Customer&#39;s Signature &amp; Name")
+    expect(html).toContain("Seller&#39;s Signature &amp; Name")
+  })
+
+  it('prints sold-by-area dimensions and the derived m²', () => {
+    const html = buildSaleInvoiceHtml({
+      shopName: 'Demo Shop',
+      invoiceNo: 'INV-000009',
+      dateLabel: '07/09/26 22:10',
+      customerName: 'Walk-in',
+      cashier: 'admin',
+      currency: 'USD',
+      lines: [{
+        name: 'Glass panel',
+        quantity: 6,
+        height: 2,
+        width: 3,
+        areaM2: 6,
+        unitPrice: 4,
+        discountPercent: 0,
+      }],
+      deliveryPrice: 0,
+      previousDebtAmount: 0,
+      depositAmount: 0,
+      outstandingAmount: 24,
+    })
+    expect(html).toContain('Glass panel')
+    // Height 2, Width 3, m² 6 and the billed quantity 6 all render.
+    expect((html.match(/>2</g) || []).length).toBeGreaterThan(0)
+    expect((html.match(/>3</g) || []).length).toBeGreaterThan(0)
+    expect((html.match(/>6</g) || []).length).toBeGreaterThanOrEqual(2)
+    expect(html).toContain('$24.00')
   })
 
   it('prints in the record currency when no print-currency choice is made', () => {
@@ -123,7 +153,7 @@ describe('print documents', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 2, unitPrice: 3.15, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 2, unitPrice: 3.15, discountPercent: 0 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -141,7 +171,7 @@ describe('print documents', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 2, unitPrice: 3.15, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 2, unitPrice: 3.15, discountPercent: 0 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -154,8 +184,8 @@ describe('print documents', () => {
     expect(normalize(html)).toContain('25,830៛')
     // Outstanding: $6.30 → ៛25,830
     expect(normalize(html)).toContain('25,830៛')
-    // Rate stated in the meta block
-    expect(html).toContain('អត្រាប្តូរប្រាក់ Exchange rate')
+    // Rate stated in the info block
+    expect(html).toContain('អត្រាប្តូរប្រាក់ / Exchange rate')
     expect(normalize(html)).toContain('1 USD = 4,100 KHR')
   })
 
@@ -167,7 +197,7 @@ describe('print documents', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'KHR',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 12345, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 12345, discountPercent: 0 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,
@@ -191,7 +221,7 @@ describe('print documents', () => {
       deliveryPhone: '012',
       deliveryAddress: 'Phnom Penh',
       scheduledDate: '2026-09-08',
-      items: [{ product: 'Glove TG S', uomSymbol: 'ប្រអប់', qtyOrdered: 3, qtyToDeliver: 2 }],
+      items: [{ product: 'Glove TG S', qtyOrdered: 3, qtyToDeliver: 2 }],
     }, 'Demo Shop')
     const html = buildDeliveryNoteHtml(input)
     expect(html).toContain('ប័ណ្ណដឹកជញ្ជូន / DELIVERY NOTE')
@@ -209,7 +239,7 @@ describe('print documents', () => {
       customerName: 'Walk-in',
       cashier: 'admin',
       currency: 'USD',
-      lines: [{ name: 'Glove', uom: 'PCS', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
+      lines: [{ name: 'Glove', quantity: 1, unitPrice: 3.15, discountPercent: 0 }],
       deliveryPrice: 0,
       previousDebtAmount: 0,
       depositAmount: 0,

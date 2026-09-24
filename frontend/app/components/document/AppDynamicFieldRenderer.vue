@@ -3,9 +3,9 @@ import type {
   ConnectionStatusFieldValue,
   DocumentFieldSchema,
   FieldOption,
-} from '~/types/stock-pos/common'
-import type { ConnectionStatus, NotificationRule } from '~/types/stock-pos/settings'
-import type { AppRolePermissionRow } from '~/types/stock-pos/entities'
+} from '~/types/mj/common'
+import type { ConnectionStatus, NotificationRule } from '~/types/mj/settings'
+import type { AppRolePermissionRow } from '~/types/mj/entities'
 import { resolveFieldHelp } from '~/utils/field-help'
 import { normalizeDocumentSequenceType } from '~/utils/document-sequences'
 import { useReferenceOptions } from '~/composables/common/useReferenceOptions'
@@ -13,9 +13,11 @@ import type { ModuleRelated, ModuleTable } from '~/config/modules'
 import type { AppRecord } from '~/config/admin-seed'
 import { asNumber } from '~/composables/module/useModule'
 import { isMoneyKey } from '~/utils/module/field-keys'
+import { fieldControlClass } from '~/utils/fields'
 import { useCurrencyRateDialog } from '~/composables/common/useCurrencyRateDialog'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import {
+  moduleDocumentFieldErrorsKey,
   moduleDocumentLineActionKey,
   moduleDocumentRecordKey,
 } from '~/utils/module/document-tabs'
@@ -247,11 +249,6 @@ const isConnectionStatus = computed(() => props.field.type === 'connection-statu
 const isAlert = computed(() => props.field.type === 'alert')
 const isLineTable = computed(() => props.field.type === 'line-table')
 const isRelatedRecords = computed(() => props.field.type === 'related-records')
-const isUomConversions = computed(() => props.field.type === 'uom-conversions')
-const isBatches = computed(() => props.field.type === 'batches')
-const isProductBatches = computed(() => props.field.type === 'product-batches')
-const isProductMovements = computed(() => props.field.type === 'product-movements')
-const isProductBarcode = computed(() => props.field.type === 'product-barcode')
 const isPartyHistory = computed(() =>
   props.field.type === 'party-sales-history' || props.field.type === 'party-purchase-history',
 )
@@ -259,6 +256,10 @@ const isFile = computed(() => props.field.type === 'file')
 
 const lineAction = inject(moduleDocumentLineActionKey, undefined)
 const recordAccess = inject(moduleDocumentRecordKey, null)
+const fieldErrors = inject(moduleDocumentFieldErrorsKey, null)
+
+/** Inline validation message for this field (from the page's error map). */
+const errorText = computed(() => fieldErrors?.get(props.field.key) || undefined)
 
 /** System roles (Administrator) keep the locked `ALL_PAGES` full-access state. */
 const isSystemRole = computed(() =>
@@ -285,7 +286,7 @@ const showPricingTotals = computed(() => Boolean(props.field.meta?.showPricingTo
 const includeTaxTotal = computed(() => Boolean(props.field.meta?.includeTax))
 /** Show Paid now / Outstanding rows under the totals (purchase-style footers). */
 const showPaidRemaining = computed(() => Boolean(props.field.meta?.showPaidRemaining))
-/** Editable Discount / Tax / Paid-now inputs inline in the totals footer. */
+/** Editable Tax / Paid-now inputs inline in the totals footer. */
 const editableTotals = computed(() =>
   Boolean(props.field.meta?.editableTotals) && !props.disabled && !props.field.readOnly)
 
@@ -396,6 +397,7 @@ watch(() => props.field.key, () => {
       :view-only-actions="lineViewOnly"
       :hide-add="Boolean(field.meta?.hideAdd)"
       :hide-row-actions="Boolean(field.meta?.hideRowActions)"
+      :error="errorText"
       :currency="field.meta?.currencyToggle ? docCurrency : undefined"
       @update:model-value="lineRows = $event"
       @update:currency="setDocCurrency"
@@ -413,26 +415,6 @@ watch(() => props.field.key, () => {
       <div class="flex items-center justify-between gap-6">
         <span class="text-muted">{{ $t('app.fields.subtotal') }}</span>
         <span class="font-medium text-highlighted tabular-nums">{{ moneyLabel(moneyAmount('subtotal')) }}</span>
-      </div>
-      <div class="flex items-center justify-between gap-6">
-        <span class="text-muted">{{ $t('app.fields.discount') }}</span>
-        <CommonAppMoneyField
-          v-if="editableTotals"
-          inline
-          :model-value="moneyAmount('discount')"
-          :currency="docCurrency"
-          :min="0"
-          :step="0.01"
-          size="sm"
-          align="right"
-          class="w-32"
-          :aria-label="$t('app.fields.discount')"
-          @update:model-value="setMoney('discount', $event)"
-        />
-        <span
-          v-else
-          class="font-medium text-highlighted tabular-nums"
-        >− {{ moneyLabel(moneyAmount('discount')) }}</span>
       </div>
       <div
         v-if="includeTaxTotal"
@@ -495,44 +477,6 @@ watch(() => props.field.key, () => {
     v-else-if="isRelatedRecords"
     class="md:col-span-2"
     :groups="relatedGroups"
-  />
-
-  <StockPricingField
-    v-else-if="isUomConversions"
-    class="md:col-span-2 flex min-h-112 flex-1 flex-col"
-    :model-value="modelValue"
-    :disabled="disabled || field.readOnly"
-    @update:model-value="emit('update:modelValue', $event)"
-  />
-
-  <!-- Product Batches tab: lots + Pricing active toggle. -->
-  <StockBatchManagePanel
-    v-else-if="isProductBatches"
-    class="md:col-span-2 flex min-h-112 flex-1 flex-col"
-    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
-    :disabled="disabled || field.readOnly"
-  />
-
-  <!-- Read-only batch lots of this product (legacy dialog panel). -->
-  <StockBatchListPanel
-    v-else-if="isBatches"
-    class="md:col-span-2"
-    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
-  />
-
-  <!-- Read-only batch-traceable movements of this product (Movements tab). -->
-  <StockProductMovementsPanel
-    v-else-if="isProductMovements"
-    class="md:col-span-2"
-    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
-  />
-
-  <!-- Barcode sticker preview + print sheet (Barcode tab). -->
-  <StockProductBarcodePanel
-    v-else-if="isProductBarcode"
-    class="md:col-span-2"
-    :product="(recordAccess?.get('__record') as AppRecord | null) ?? null"
-    :disabled="disabled || field.readOnly"
   />
 
   <!-- Customer / Supplier detail History tab. -->
@@ -619,6 +563,7 @@ watch(() => props.field.key, () => {
   <UFormField
     v-else-if="isBoolean"
     :help="helpText"
+    :error="errorText"
   >
     <div class="flex min-h-11 flex-wrap items-center gap-2 pt-1">
       <UCheckbox
@@ -670,6 +615,7 @@ watch(() => props.field.key, () => {
     :label="labelText"
     :required="field.required"
     :help="helpText"
+    :error="errorText"
   >
     <div class="flex items-start gap-1.5">
       <div class="min-w-0 flex-1">
@@ -682,7 +628,7 @@ watch(() => props.field.key, () => {
           :maxrows="TEXTAREA_MAX_ROWS"
           autoresize
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
         />
         <CommonAppMoneyField
           v-else-if="isMoneyField"
@@ -690,6 +636,7 @@ watch(() => props.field.key, () => {
           inline
           :currency="documentCurrency"
           :disabled="disabled || field.readOnly"
+          :error="Boolean(errorText)"
           align="right"
           size="md"
           class="w-full"
@@ -701,13 +648,14 @@ watch(() => props.field.key, () => {
           :increment="false"
           :decrement="false"
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
         />
         <CommonAppInputDate
           v-else-if="field.type === 'date'"
           v-model="stringValue"
           :disabled="disabled || field.readOnly"
           :required="field.required"
+          :error="Boolean(errorText)"
           size="md"
           class="w-full"
         />
@@ -717,6 +665,7 @@ watch(() => props.field.key, () => {
           granularity="minute"
           :disabled="disabled || field.readOnly"
           :required="field.required"
+          :error="Boolean(errorText)"
           size="md"
           class="w-full"
         />
@@ -729,7 +678,7 @@ watch(() => props.field.key, () => {
           :placeholder="placeholderText"
           :disabled="disabled || field.readOnly"
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
           @create="onCreateSelectItem"
         />
         <USelectMenu
@@ -743,7 +692,7 @@ watch(() => props.field.key, () => {
           :search-input="{ placeholder: placeholderText }"
           ignore-filter
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
           @update:search-term="searchRemoteOptions"
         />
         <USelect
@@ -755,7 +704,7 @@ watch(() => props.field.key, () => {
           :disabled="disabled || field.readOnly"
           :loading="optionsPending"
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
         />
         <CommonAppMentionMultiInput
           v-else-if="field.type === 'multiselect'"
@@ -764,6 +713,7 @@ watch(() => props.field.key, () => {
           :placeholder="placeholderText"
           :disabled="disabled || field.readOnly"
           :loading="optionsPending"
+          :error="Boolean(errorText)"
           @search="searchRemoteOptions"
         />
         <UInput
@@ -772,7 +722,7 @@ watch(() => props.field.key, () => {
           :placeholder="placeholderText"
           :disabled="disabled || field.readOnly"
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
         />
         <UInput
           v-else-if="isFile"
@@ -789,7 +739,7 @@ watch(() => props.field.key, () => {
           :placeholder="placeholderText"
           :disabled="disabled || field.readOnly"
           size="md"
-          class="w-full"
+          :class="fieldControlClass(Boolean(errorText))"
         />
       </div>
 

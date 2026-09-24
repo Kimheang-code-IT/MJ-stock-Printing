@@ -25,20 +25,17 @@ from app.modules.stock.repository import ProductRepository, product_to_out
 from app.modules.stock.schemas import (
     AdjustmentItem,
     DamageItem,
-    ExpireItem,
     MovementOut,
     OperationItemOut,
     PurchaseReturnItemOut,
     PurchaseReturnOut,
     StockAdjustmentRequest,
     StockDamageRequest,
-    StockExpireRequest,
     StockInItem,
     StockInRequest,
     StockOperationOut,
 )
 from app.modules.suppliers.models import SupplierDebt
-from app.modules.uoms.repository import UOMRepository
 from app.shared.audit.service import record_audit
 from app.shared.documents import allocate_document_number
 
@@ -50,21 +47,6 @@ class ProductService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = ProductRepository(session)
-
-    async def _next_barcode(self) -> str:
-        """Auto-issue a unique numeric barcode for products created without one.
-
-        Digits only so it scans at POS and prints as a plain number; derived
-        from a UUID and collision-checked against existing rows."""
-        candidate = self._numeric_barcode()
-        while await self.repo.get_by_barcode(candidate):
-            candidate = self._numeric_barcode()
-        return candidate
-
-    @staticmethod
-    def _numeric_barcode() -> str:
-        """13-digit numeric code (UUID entropy, zero-padded)."""
-        return f"{uuid.uuid4().int % 10**13:013d}"
 
     async def list(
         self, *, q, category_id, brand_id=None, status, page, limit, sort=None
@@ -85,42 +67,18 @@ class ProductService:
     async def create(self, payload) -> dict:
         if payload.sku and await self.repo.get_by_sku(payload.sku):
             raise ConflictError("A product with this SKU already exists")
-        # Barcode is the operational identifier: unique, auto-issued when the
-        # caller omits it (uuid-derived, collision-checked).
-        barcode = payload.barcode or None
-        if barcode and await self.repo.get_by_barcode(barcode):
-            raise ConflictError("A product with this barcode already exists")
         await self._validate_category(payload.category_id)
-        await self._validate_uom(payload.uom_id)
         await self._validate_brand(payload.brand_id)
         await self._validate_supplier(payload.supplier_id)
 
         data = payload.model_dump()
-        conversions = data.pop("uom_conversions", None)
-        if conversions:
-            from app.modules.stock import sale_prices as sale_price_service
-
-            conversions = sale_price_service.normalize_uom_conversions(
-                conversions,
-                base_uom_id=payload.uom_id,
-                base_sale_price=payload.selling_price,
-            )
-            await sale_price_service.validate_conversion_uoms(self.session, conversions)
-            data["uom_conversions"] = conversions
 
         product = Product(**data)
-        product.barcode = barcode or await self._next_barcode()
         self.session.add(product)
         await self.session.flush()
         await self.repo.ensure_balance(product.id)
-        # Seed sale-price version 1 (POS-active) so POS always has a versioned price.
-        from app.modules.stock import sale_prices as sale_price_service
-
-        await sale_price_service.seed_initial_sale_price(
-            self.session, product, actor_id=None
-        )
         await self.session.commit()
-        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "uom_ref", "supplier_ref", "balance"])
+        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "supplier_ref", "balance"])
         return product_to_out(product)
 
     async def update(self, product_id: uuid.UUID, payload, *, actor: User) -> dict:
@@ -135,56 +93,29 @@ class ProductService:
         # supplier_id=None explicitly clears the product's default supplier.
         if "supplier_id" in payload.model_fields_set and payload.supplier_id is None:
             changes["supplier_id"] = None
-        if "uom_conversions" in payload.model_fields_set:
-            from app.modules.stock import sale_prices as sale_price_service
-
-            conversions = sale_price_service.normalize_uom_conversions(
-                payload.uom_conversions or [],
-                base_uom_id=changes.get("uom_id", product.uom_id),
-                # The base row's sale price follows the POS-active price.
-                base_sale_price=changes.get("selling_price", product.selling_price),
-            )
-            await sale_price_service.validate_conversion_uoms(self.session, conversions)
-            changes["uom_conversions"] = conversions
         if "sku" in changes and changes["sku"] and changes["sku"] != product.sku:
             if await self.repo.get_by_sku(changes["sku"]):
                 raise ConflictError("A product with this SKU already exists")
-        if "barcode" in changes and changes["barcode"] and changes["barcode"] != product.barcode:
-            if await self.repo.get_by_barcode(changes["barcode"]):
-                raise ConflictError("A product with this barcode already exists")
         if "category_id" in changes:
             await self._validate_category(changes["category_id"])
-        if "uom_id" in changes:
-            await self._validate_uom(changes["uom_id"])
         if "brand_id" in changes:
             await self._validate_brand(changes["brand_id"])
         if changes.get("supplier_id") is not None:
             await self._validate_supplier(changes["supplier_id"])
 
-        # A selling-price change becomes "add + activate a new sale-price
-        # version" so POS (which reads the active version) never diverges.
-        # Same price as the active version is a no-op (the UI re-syncs it).
-        new_selling_price = changes.pop("selling_price", None)
-
-        price_changed = {"cost_price"} & set(changes)
+        # Products keep a single cost/selling price; POS charges selling_price.
+        price_changed = {"cost_price", "selling_price"} & set(changes)
         old_prices = (
-            {"cost_price": str(product.cost_price)}
+            {
+                "cost_price": str(product.cost_price),
+                "selling_price": str(product.selling_price),
+            }
             if price_changed
             else None
         )
 
         for key, value in changes.items():
             setattr(product, key, value)
-        if new_selling_price is not None and Decimal(str(new_selling_price)) != Decimal(str(product.selling_price)):
-            from app.modules.stock import sale_prices as sale_price_service
-
-            await sale_price_service.add_sale_price(
-                self.session,
-                product_id=product.id,
-                sale_price=new_selling_price,
-                effective_date=None,
-                actor=actor,
-            )
         await self.session.flush()
 
         if price_changed:
@@ -198,10 +129,11 @@ class ProductService:
                 old_values=old_prices,
                 new_values={
                     "cost_price": str(product.cost_price),
+                    "selling_price": str(product.selling_price),
                 },
             )
         await self.session.commit()
-        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "uom_ref", "supplier_ref", "balance"])
+        await self.session.refresh(product, attribute_names=["category_ref", "brand_ref", "supplier_ref", "balance"])
         return product_to_out(product)
 
     async def delete(self, product_id: uuid.UUID) -> None:
@@ -215,7 +147,6 @@ class ProductService:
             + await self.repo.count_transaction_items(product.id)
             + await self.repo.count_purchase_return_items(product.id)
             + await self.repo.count_delivery_items(product.id)
-            + await self.repo.count_batches(product.id)
         )
         if referenced > 0:
             raise ConflictError(
@@ -235,22 +166,6 @@ class ProductService:
             return
         if await CategoryRepository(self.session).get(category_id) is None:
             raise NotFoundError("Category not found")
-
-    async def _validate_uom(self, uom_id) -> None:
-        """Products require an existing, ACTIVE UOM (spec sections 2.1.3/2.1.5)."""
-        if uom_id is None:
-            raise ValidationError(
-                "A UOM is required for every product",
-                field_errors={"uom_id": "UOM is required"},
-            )
-        uom = await UOMRepository(self.session).get(uom_id)
-        if uom is None:
-            raise NotFoundError("UOM not found")
-        if uom.status != "ACTIVE":
-            raise ValidationError(
-                "Inactive UOMs cannot be assigned to products",
-                field_errors={"uom_id": "UOM is inactive"},
-            )
 
     async def _validate_brand(self, brand_id) -> None:
         """Brand is optional, but when set it must exist and be ACTIVE."""
@@ -277,8 +192,8 @@ class ProductService:
 # ============================================================================
 # Canonical stock mutation service
 # ============================================================================
-# Every stock change (stock in, adjustment, damage, expiry, POS sale, sale
-# return) goes through apply_stock_movement. It locks the balance row, enforces
+# Every stock change (stock in, adjustment, damage, POS sale, sale return)
+# goes through apply_stock_movement. It locks the balance row, enforces
 # availability unless negative stock is allowed, appends an immutable movement,
 # and updates the materialized balance in the SAME transaction.
 
@@ -290,7 +205,6 @@ MOVEMENT_TYPES = {
     "ADJUSTMENT_IN",
     "ADJUSTMENT_OUT",
     "DAMAGE",
-    "EXPIRE",
 }
 
 FOUR = Decimal("0.0001")
@@ -308,8 +222,8 @@ def _q2(value) -> Decimal:
 def _usd_unit_cost(amount, currency, exchange_rate) -> Decimal:
     """Convert a document-currency unit cost to the canonical cost currency
     (USD) using the document exchange rate (KHR per 1 USD). Cost ledgers
-    (movements, balances, batches, sale-item snapshots) are ALWAYS USD so a
-    KHR purchase and a USD sale never contaminate each other (F2)."""
+    (movements, balances, sale-item snapshots) are ALWAYS USD so a KHR
+    purchase and a USD sale never contaminate each other (F2)."""
     value = Decimal(amount)
     rate = Decimal(exchange_rate or 1)
     if str(currency or "USD").upper() == "KHR" and rate > 0:
@@ -340,84 +254,6 @@ async def allow_negative_stock(session: AsyncSession) -> bool:
     return bool(await get_setting_value(session, "pos", "allow_negative_stock", False))
 
 
-async def fifo_outbound_unit_cost(
-    session: AsyncSession, product_id, quantity, *, fallback: Decimal
-) -> Decimal:
-    """Blended FIFO cost for `quantity` units of a product (product.fifo=True).
-
-    Remaining lots are rebuilt from the immutable stock_movements ledger:
-    inbound movements open lots, outbound movements consume them first-in-
-    first-out. The returned cost is the quantity-weighted average of the lots
-    this outbound consumes. Any shortfall (only possible when negative stock
-    is allowed) is priced at the last consumed lot's cost, or `fallback` when
-    no lot has ever been recorded. Must run inside the caller's transaction;
-    pending movements of the session are flushed by the ledger query so FIFO
-    chains correctly across repeated outbounds of the same document.
-    """
-    quantity = _q4(quantity)
-    if quantity <= 0:
-        return Decimal(fallback).quantize(TWO, rounding=ROUND_HALF_UP)
-
-    rows = await session.execute(
-        select(
-            StockMovement.quantity_delta,
-            StockMovement.unit_cost,
-        )
-        .where(StockMovement.product_id == product_id)
-        .order_by(StockMovement.created_at.asc(), StockMovement.id.asc())
-    )
-    lots: list[list[Decimal]] = []  # mutable [remaining_qty, unit_cost] heads
-    for delta, cost in rows:
-        delta = Decimal(delta)
-        if delta > 0:
-            lots.append([delta, Decimal(cost)])
-            continue
-        remaining = -delta
-        while remaining > 0 and lots:
-            head = lots[0]
-            if head[0] <= remaining:
-                remaining -= head[0]
-                lots.pop(0)
-            else:
-                head[0] -= remaining
-                remaining = Decimal("0")
-
-    needed = quantity
-    weighted = Decimal("0")
-    taken = Decimal("0")
-    last_cost = Decimal(fallback)
-    for lot in lots:
-        if needed <= 0:
-            break
-        take = min(lot[0], needed)
-        weighted += take * lot[1]
-        taken += take
-        needed -= take
-        last_cost = lot[1]
-    if needed > 0:
-        # Negative-stock shortfall: price the remainder at the last consumed
-        # lot's cost (or the fallback when nothing was consumed).
-        weighted += needed * last_cost
-        taken += needed
-    if taken == 0:
-        return Decimal(fallback).quantize(TWO, rounding=ROUND_HALF_UP)
-    return (weighted / taken).quantize(TWO, rounding=ROUND_HALF_UP)
-
-
-async def resolve_outbound_unit_cost(
-    session: AsyncSession,
-    product: Product,
-    quantity,
-    *,
-    fallback: Decimal,
-) -> Decimal:
-    """Unit cost for an outbound movement: FIFO lots when the product has the
-    FIFO option enabled, otherwise the weighted average cost (fallback)."""
-    if product.fifo:
-        return await fifo_outbound_unit_cost(session, product.id, quantity, fallback=fallback)
-    return Decimal(fallback).quantize(TWO, rounding=ROUND_HALF_UP)
-
-
 async def apply_stock_movement(
     session: AsyncSession,
     *,
@@ -429,12 +265,8 @@ async def apply_stock_movement(
     reference_id,
     created_by,
     document_no: str | None = None,
-    batch_no: str | None = None,
-    batch_id=None,
-    expiry_date=None,
     note: str | None = None,
     allow_negative: bool | None = None,
-    uom_symbol: str | None = None,
 ) -> StockBalance:
     """Canonical stock mutation. Must run inside the caller's transaction."""
     if movement_type not in MOVEMENT_TYPES:
@@ -467,10 +299,6 @@ async def apply_stock_movement(
         reference_type=reference_type,
         reference_id=reference_id,
         document_no=document_no,
-        batch_no=batch_no,
-        batch_id=batch_id,
-        expiry_date=expiry_date,
-        uom_symbol=uom_symbol,
         note=note,
         created_by=created_by,
     )
@@ -481,7 +309,7 @@ async def apply_stock_movement(
 
 
 class StockOperationService:
-    """Transactional stock operations: stock in, adjustment, damage, expiry."""
+    """Transactional stock operations: stock in, adjustment, damage."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -515,10 +343,9 @@ class StockOperationService:
         if hasattr(payload, "currency"):
             transaction.currency = payload.currency
             transaction.exchange_rate = payload.exchange_rate
-        # Document-level purchase adjustments (Stock In only; other operation
-        # payloads do not carry these fields).
-        if hasattr(payload, "discount_amount"):
-            transaction.discount_amount = _q2(payload.discount_amount or 0)
+        # Document-level purchase adjustment (Stock In only; other operation
+        # payloads do not carry this field).
+        if hasattr(payload, "tax_amount"):
             transaction.tax_amount = _q2(payload.tax_amount or 0)
         self.session.add(transaction)
         await self.session.flush()
@@ -549,130 +376,66 @@ class StockOperationService:
         for item in payload.items:
             product = products[item.product_id]
 
-            # Batch-tracked products (spec: batch/lot management): incoming
-            # stock MUST be assigned a batch_no, and an expiry date when the
-            # product tracks expiry. Unbatched products keep the legacy path.
-            if product.track_batch:
-                if not (item.batch_no or "").strip():
-                    raise ValidationError(
-                        "Batch number is required for batch-tracked products",
-                        field_errors={"items": "Batch number is required"},
-                    )
-                if product.expiry_tracking and item.expiry_date is None:
-                    raise ValidationError(
-                        "Expiry date is required for expiry-tracked products",
-                        field_errors={"items": "Expiry date is required"},
-                    )
-
-            # ---- line UOM resolution (stock is always mutated in base UOM) ----
-            # qty/unit_cost are per the SELECTED Pricing UOM; factor_to_base
-            # says how many Convert (base) UOM = 1 Original UOM.
-            factor = item.factor_to_base
-            if item.uom_id is not None:
-                if str(item.uom_id) == str(product.uom_id):
-                    factor = Decimal("1")
-                else:
-                    conversion = next(
-                        (
-                            row
-                            for row in (product.uom_conversions or [])
-                            if str(row.get("uom_id")) == str(item.uom_id)
-                        ),
-                        None,
-                    )
-                    if conversion is None:
-                        raise ValidationError(
-                            "The selected UOM is not a Pricing UOM of this product",
-                            field_errors={"items": "Invalid UOM"},
-                        )
-                    row_factor = Decimal(str(conversion.get("factor_to_base", 1)))
-                    if factor is not None and Decimal(str(factor)) != row_factor:
-                        raise ValidationError(
-                            "factor_to_base does not match the product's Pricing row",
-                            field_errors={"items": "Invalid factor"},
-                        )
-                    factor = row_factor
-            if factor is None:
-                factor = Decimal("1")
-            if factor <= 0:
+            # Sold-by-area line: Height x Width (metres) becomes the received
+            # quantity (m²), mirroring the POS sale line.
+            height = item.height
+            width = item.width
+            area_m2 = None
+            if (height is None) != (width is None):
                 raise ValidationError(
-                    "factor_to_base must be greater than zero",
-                    field_errors={"items": "Invalid factor"},
+                    "Height and width must be provided together",
+                    field_errors={"items": "Height and width required"},
                 )
-            base_quantity = _q4(Decimal(item.quantity) * factor)
-            if base_quantity <= 0:
-                raise ValidationError(
-                    "Line quantity must be greater than zero",
-                    field_errors={"items": "Invalid quantity"},
-                )
-            # unit_cost is per selected UOM; the transaction line keeps the
-            # document-currency cost, while the cost ledger keeps the base-unit
+            if height is not None and width is not None:
+                area_m2 = _q4(Decimal(height) * Decimal(width))
+                quantity = area_m2
+                if quantity <= 0:
+                    raise ValidationError(
+                        "Line area must be greater than zero",
+                        field_errors={"items": "Invalid area"},
+                    )
+            else:
+                quantity = _q4(Decimal(item.quantity))
+                if quantity <= 0:
+                    raise ValidationError(
+                        "Line quantity must be greater than zero",
+                        field_errors={"items": "Invalid quantity"},
+                    )
+            # unit_cost is per unit; the transaction line keeps the
+            # document-currency cost, while the cost ledger keeps the unit
             # cost converted to the canonical USD currency.
-            base_unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
-            ledger_unit_cost = _usd_unit_cost(base_unit_cost, transaction.currency, transaction.exchange_rate)
-            line_total = (Decimal(item.quantity) * Decimal(item.unit_cost)).quantize(TWO, rounding=ROUND_HALF_UP)
-            # Line UOM symbol snapshot: the caller's value or the product's
-            # base UOM symbol (display only — quantities stay in base UOM).
-            line_uom_symbol = (
-                item.uom_symbol
-                or (product.uom_ref.symbol if item.uom_id is None and product.uom_ref else None)
-            )
+            unit_cost = Decimal(item.unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
+            ledger_unit_cost = _usd_unit_cost(unit_cost, transaction.currency, transaction.exchange_rate)
+            line_total = (quantity * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             row = StockTransactionItem(
                 stock_transaction_id=transaction.id,
                 product_id=item.product_id,
                 product_ref=product,
-                quantity=base_quantity,
-                unit_cost=base_unit_cost,
-                batch_no=item.batch_no,
-                expiry_date=item.expiry_date,
-                uom_symbol=line_uom_symbol,
+                quantity=quantity,
+                unit_cost=unit_cost,
+                height=height,
+                width=width,
+                area_m2=area_m2,
                 line_total=line_total,
             )
             item_rows.append(row)
             self.session.add(row)
-            # Batch ledger: the lot carries the traceable purchase (cost per
-            # base unit, supplier, purchase document). Unbatched stock still
-            # lands in a synthetic lot keyed on "".
-            from app.modules.stock import batch_service
-
-            batch_lot = await batch_service.batch_in(
-                self.session,
-                product_id=item.product_id,
-                batch_no=item.batch_no,
-                expiry_date=item.expiry_date,
-                quantity_base=base_quantity,
-                unit_cost_per_base=ledger_unit_cost,
-                supplier_id=transaction.supplier_id,
-                document_no=document_no,
-            )
             await apply_stock_movement(
                 self.session,
                 product_id=item.product_id,
                 movement_type="STOCK_IN",
-                quantity_delta=base_quantity,
+                quantity_delta=quantity,
                 unit_cost=ledger_unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,
                 document_no=document_no,
-                batch_no=item.batch_no,
-                # Movement references the lot it stocked into (new or
-                # restocked — identity = product + batch_no).
-                batch_id=batch_lot.id if (item.batch_no or "").strip() else None,
-                expiry_date=item.expiry_date,
                 allow_negative=negative_ok,
-                uom_symbol=line_uom_symbol,
             )
             total += line_total
         subtotal = total.quantize(TWO, rounding=ROUND_HALF_UP)
-        discount = _q2(payload.discount_amount or 0)
         tax = _q2(payload.tax_amount or 0)
-        if discount > subtotal:
-            raise ValidationError(
-                "Discount cannot exceed the line subtotal",
-                field_errors={"discount_amount": "Discount exceeds subtotal"},
-            )
-        total = (subtotal - discount + tax).quantize(TWO, rounding=ROUND_HALF_UP)
+        total = (subtotal + tax).quantize(TWO, rounding=ROUND_HALF_UP)
 
         paid = min(Decimal(payload.paid_amount), total)
         if paid < Decimal("0"):
@@ -728,7 +491,6 @@ class StockOperationService:
             new_values={
                 "document_no": document_no,
                 "subtotal": str(subtotal),
-                "discount": str(discount),
                 "tax": str(tax),
                 "total": str(total),
                 "paid": str(paid),
@@ -754,20 +516,18 @@ class StockOperationService:
             currency=transaction.currency,
             exchange_rate=transaction.exchange_rate,
             subtotal=subtotal,
-            discount=discount,
             tax=tax,
             total=total,
             paid=paid,
             debt=(total - paid) if total > paid else Decimal("0.00"),
             user=actor.full_name,
             item_count=len(item_rows),
-            # `quantity`/`unit_cost` are stored per BASE UOM, so the row omits
-            # the entered UOM symbol (base quantity × base cost = line total).
+            # `quantity`/`unit_cost` are stored per unit, so the row omits
+            # the entered unit symbol (quantity × cost = line total).
             items=[
                 {
                     "name": products[item.product_id].name,
                     "quantity": str(item.quantity),
-                    "uom": "",
                     "unit_cost": str(item.unit_cost),
                     "line_total": str(item.line_total),
                 }
@@ -778,9 +538,9 @@ class StockOperationService:
 
     async def update_purchase(self, stock_transaction_id, payload, *, actor: User) -> StockOperationOut:
         """Edit a confirmed Stock In: reverse the original received quantities
-        (batch + compensating PURCHASE_RETURN movements) then receive the new
-        lines. The supplier and immutable payments stay; the outstanding
-        supplier debt is recalculated from the new total."""
+        (compensating PURCHASE_RETURN movements) then receive the new lines.
+        The supplier and immutable payments stay; the outstanding supplier
+        debt is recalculated from the new total."""
         result = await self.session.execute(
             select(StockTransaction)
             .where(StockTransaction.id == stock_transaction_id)
@@ -796,9 +556,7 @@ class StockOperationService:
             raise ConflictError("Stock In documents with purchase returns cannot be edited")
 
         old_subtotal = sum((Decimal(item.line_total) for item in existing_items), Decimal("0.00"))
-        old_total = (
-            old_subtotal - _q2(transaction.discount_amount) + _q2(transaction.tax_amount)
-        ).quantize(TWO, rounding=ROUND_HALF_UP)
+        old_total = (old_subtotal + _q2(transaction.tax_amount)).quantize(TWO, rounding=ROUND_HALF_UP)
 
         products: dict = {}
         for item in payload.items:
@@ -808,33 +566,11 @@ class StockOperationService:
 
         negative_ok = await allow_negative_stock(self.session)
 
-        from app.modules.stock import batch_service
-
         # 1) Reverse the original received quantities.
         for row in existing_items:
             quantity = _q4(row.quantity)
             if quantity <= 0:
                 continue
-            movement_batch_id = None
-            movement_expiry = None
-            if row.batch_no:
-                batch = await batch_service.deduct_from_batch(
-                    self.session,
-                    product_id=row.product_id,
-                    batch_no=row.batch_no,
-                    quantity_base=quantity,
-                )
-                movement_batch_id = batch.id
-                movement_expiry = batch.expiry_date
-            else:
-                allocations = await batch_service.allocate_fefo(
-                    self.session,
-                    product=row.product_ref,
-                    quantity_base=quantity,
-                    allow_negative=negative_ok,
-                    include_expired=True,
-                )
-                await batch_service.deduct_allocations(self.session, allocations)
             # Reverse cost in canonical USD (the original document currency is
             # still on the header at this point).
             reverse_unit_cost = _usd_unit_cost(
@@ -850,11 +586,7 @@ class StockOperationService:
                 reference_id=transaction.id,
                 created_by=actor.id,
                 document_no=transaction.document_no,
-                batch_no=row.batch_no,
-                batch_id=movement_batch_id,
-                expiry_date=movement_expiry,
                 allow_negative=negative_ok,
-                uom_symbol=row.uom_symbol,
             )
             await self.session.delete(row)
         await self.session.flush()
@@ -864,107 +596,62 @@ class StockOperationService:
         item_rows: list[StockTransactionItem] = []
         for item in payload.items:
             product = products[item.product_id]
-            if product.track_batch:
-                if not (item.batch_no or "").strip():
-                    raise ValidationError(
-                        "Batch number is required for batch-tracked products",
-                        field_errors={"items": "Batch number is required"},
-                    )
-                if product.expiry_tracking and item.expiry_date is None:
-                    raise ValidationError(
-                        "Expiry date is required for expiry-tracked products",
-                        field_errors={"items": "Expiry date is required"},
-                    )
-            factor = item.factor_to_base
-            if item.uom_id is not None:
-                if str(item.uom_id) == str(product.uom_id):
-                    factor = Decimal("1")
-                else:
-                    conversion = next(
-                        (row for row in (product.uom_conversions or []) if str(row.get("uom_id")) == str(item.uom_id)),
-                        None,
-                    )
-                    if conversion is None:
-                        raise ValidationError(
-                            "The selected UOM is not a Pricing UOM of this product",
-                            field_errors={"items": "Invalid UOM"},
-                        )
-                    row_factor = Decimal(str(conversion.get("factor_to_base", 1)))
-                    if factor is not None and Decimal(str(factor)) != row_factor:
-                        raise ValidationError(
-                            "factor_to_base does not match the product's Pricing row",
-                            field_errors={"items": "Invalid factor"},
-                        )
-                    factor = row_factor
-            if factor is None:
-                factor = Decimal("1")
-            if factor <= 0:
-                raise ValidationError("factor_to_base must be greater than zero", field_errors={"items": "Invalid factor"})
-            base_quantity = _q4(Decimal(item.quantity) * factor)
-            if base_quantity <= 0:
-                raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
-            base_unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
-            ledger_unit_cost = _usd_unit_cost(base_unit_cost, payload.currency, payload.exchange_rate)
-            line_total = (Decimal(item.quantity) * Decimal(item.unit_cost)).quantize(TWO, rounding=ROUND_HALF_UP)
-            line_uom_symbol = (
-                item.uom_symbol
-                or (product.uom_ref.symbol if item.uom_id is None and product.uom_ref else None)
-            )
+            # Sold-by-area line: Height x Width (metres) becomes the received
+            # quantity (m²), mirroring the POS sale line.
+            height = item.height
+            width = item.width
+            area_m2 = None
+            if (height is None) != (width is None):
+                raise ValidationError(
+                    "Height and width must be provided together",
+                    field_errors={"items": "Height and width required"},
+                )
+            if height is not None and width is not None:
+                area_m2 = _q4(Decimal(height) * Decimal(width))
+                quantity = area_m2
+                if quantity <= 0:
+                    raise ValidationError("Line area must be greater than zero", field_errors={"items": "Invalid area"})
+            else:
+                quantity = _q4(Decimal(item.quantity))
+                if quantity <= 0:
+                    raise ValidationError("Line quantity must be greater than zero", field_errors={"items": "Invalid quantity"})
+            unit_cost = Decimal(item.unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
+            ledger_unit_cost = _usd_unit_cost(unit_cost, payload.currency, payload.exchange_rate)
+            line_total = (quantity * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             row = StockTransactionItem(
                 stock_transaction_id=transaction.id,
                 product_id=item.product_id,
                 product_ref=product,
-                quantity=base_quantity,
-                unit_cost=base_unit_cost,
-                batch_no=item.batch_no,
-                expiry_date=item.expiry_date,
-                uom_symbol=line_uom_symbol,
+                quantity=quantity,
+                unit_cost=unit_cost,
+                height=height,
+                width=width,
+                area_m2=area_m2,
                 line_total=line_total,
             )
             item_rows.append(row)
             self.session.add(row)
-            batch_lot = await batch_service.batch_in(
-                self.session,
-                product_id=item.product_id,
-                batch_no=item.batch_no,
-                expiry_date=item.expiry_date,
-                quantity_base=base_quantity,
-                unit_cost_per_base=ledger_unit_cost,
-                supplier_id=transaction.supplier_id,
-                document_no=transaction.document_no,
-            )
             await apply_stock_movement(
                 self.session,
                 product_id=item.product_id,
                 movement_type="STOCK_IN",
-                quantity_delta=base_quantity,
+                quantity_delta=quantity,
                 unit_cost=ledger_unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,
                 document_no=transaction.document_no,
-                batch_no=item.batch_no,
-                batch_id=batch_lot.id if (item.batch_no or "").strip() else None,
-                expiry_date=item.expiry_date,
                 allow_negative=negative_ok,
-                uom_symbol=line_uom_symbol,
             )
             total += line_total
 
         subtotal = total.quantize(TWO, rounding=ROUND_HALF_UP)
-        discount = _q2(payload.discount_amount or 0)
         tax = _q2(payload.tax_amount or 0)
-        if discount > subtotal:
-            raise ValidationError(
-                "Discount cannot exceed the line subtotal",
-                field_errors={"discount_amount": "Discount exceeds subtotal"},
-            )
-        new_total = (subtotal - discount + tax).quantize(TWO, rounding=ROUND_HALF_UP)
+        new_total = (subtotal + tax).quantize(TWO, rounding=ROUND_HALF_UP)
 
         transaction.transaction_date = self._resolve_date(payload.transaction_date)
         transaction.reference_no = payload.reference_no
         transaction.note = payload.note
-        transaction.discount_amount = discount
         transaction.tax_amount = tax
         transaction.currency = payload.currency
         transaction.exchange_rate = payload.exchange_rate
@@ -1015,7 +702,6 @@ class StockOperationService:
             new_values={
                 "document_no": transaction.document_no,
                 "subtotal": str(subtotal),
-                "discount": str(discount),
                 "tax": str(tax),
                 "total": str(new_total),
                 "paid": str(paid),
@@ -1098,32 +784,6 @@ class StockOperationService:
             out_rows.append(row)
             self.session.add(row)
             item.returned_quantity = _q4(Decimal(item.returned_quantity) + Decimal(line.quantity))
-            # Purchase return deducts the ORIGINAL batch lot the line was
-            # received into (batch identity = product + batch_no); it never
-            # invents an arbitrary batch. Unbatched lines drain FEFO (writing
-            # down expired lots is allowed for disposals).
-            from app.modules.stock import batch_service
-
-            movement_batch_id = None
-            movement_expiry = None
-            if item.batch_no:
-                batch = await batch_service.deduct_from_batch(
-                    self.session,
-                    product_id=item.product_id,
-                    batch_no=item.batch_no,
-                    quantity_base=Decimal(line.quantity),
-                )
-                movement_batch_id = batch.id
-                movement_expiry = batch.expiry_date
-            else:
-                allocations = await batch_service.allocate_fefo(
-                    self.session,
-                    product=item.product_ref,
-                    quantity_base=Decimal(line.quantity),
-                    allow_negative=negative_ok,
-                    include_expired=True,
-                )
-                await batch_service.deduct_allocations(self.session, allocations)
             await apply_stock_movement(
                 self.session,
                 product_id=item.product_id,
@@ -1134,12 +794,8 @@ class StockOperationService:
                 reference_id=purchase_return.id,
                 created_by=actor.id,
                 document_no=return_no,
-                batch_no=item.batch_no,
-                batch_id=movement_batch_id,
-                expiry_date=movement_expiry,
                 note=payload.reason,
                 allow_negative=negative_ok,
-                uom_symbol=item.uom_symbol,
             )
             refund_total += refund
         purchase_return.refund_amount = _q2(refund_total)
@@ -1227,10 +883,7 @@ class StockOperationService:
         return await self._apply_counted_operation(payload, actor=actor, kind="ADJUSTMENT")
 
     async def damage(self, payload, *, actor: User) -> StockOperationOut:
-        return await self._apply_outbound_operation(payload, actor=actor, kind="DAMAGE")
-
-    async def expire(self, payload, *, actor: User) -> StockOperationOut:
-        return await self._apply_outbound_operation(payload, actor=actor, kind="EXPIRE")
+        return await self._apply_outbound_operation(payload, actor=actor)
 
     async def _apply_counted_operation(self, payload, *, actor: User, kind: str) -> StockOperationOut:
         products: dict = {}
@@ -1256,10 +909,6 @@ class StockOperationService:
             difference = item.actual_quantity - system_quantity
             product = products[item.product_id]
             unit_cost = balance.average_cost
-            if difference < 0:
-                unit_cost = await resolve_outbound_unit_cost(
-                    self.session, product, -difference, fallback=balance.average_cost
-                )
 
             line_total = (abs(difference) * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             row = StockTransactionItem(
@@ -1276,30 +925,6 @@ class StockOperationService:
             item_rows.append(row)
             self.session.add(row)
             if difference != 0:
-                from app.modules.stock import batch_service
-
-                # Keep the per-batch ledger in step with the total balance:
-                # a count surplus lands in the synthetic unbatched lot, a
-                # shortfall drains FEFO (expired lots may be written down).
-                if difference > 0:
-                    await batch_service.batch_in(
-                        self.session,
-                        product_id=item.product_id,
-                        batch_no=None,
-                        expiry_date=None,
-                        quantity_base=difference,
-                        unit_cost_per_base=unit_cost,
-                        document_no=document_no,
-                    )
-                else:
-                    allocations = await batch_service.allocate_fefo(
-                        self.session,
-                        product=product,
-                        quantity_base=-difference,
-                        allow_negative=negative_ok,
-                        include_expired=True,
-                    )
-                    await batch_service.deduct_allocations(self.session, allocations)
                 await apply_stock_movement(
                     self.session,
                     product_id=item.product_id,
@@ -1329,106 +954,43 @@ class StockOperationService:
             transaction, items=item_rows, total_amount=total.quantize(TWO), paid_amount=total.quantize(TWO)
         )
 
-    async def _apply_outbound_operation(self, payload, *, actor: User, kind: str) -> StockOperationOut:
+    async def _apply_outbound_operation(self, payload, *, actor: User) -> StockOperationOut:
         products: dict = {}
         for item in payload.items:
             if item.product_id in products:
                 raise ValidationError("Duplicate product in request", field_errors={"items": "Duplicate product"})
-            product = await self._get_product(item.product_id)
-            if kind == "EXPIRE" and not product.expiry_tracking:
-                raise ValidationError(
-                    "Expiry tracking is not enabled for this product",
-                    field_errors={"items": "Product does not track expiry"},
-                )
-            products[item.product_id] = product
+            products[item.product_id] = await self._get_product(item.product_id)
 
         negative_ok = await allow_negative_stock(self.session)
-        document_type = {"DAMAGE": "STOCK_DAMAGE", "EXPIRE": "STOCK_EXPIRE"}[kind]
-        document_no = await allocate_document_number(self.session, document_type)
+        document_no = await allocate_document_number(self.session, "STOCK_DAMAGE")
         transaction = await self._create_transaction(
-            transaction_type=kind, document_no=document_no, payload=payload, actor=actor
+            transaction_type="DAMAGE", document_no=document_no, payload=payload, actor=actor
         )
 
         total = Decimal("0.00")
         item_rows: list[StockTransactionItem] = []
         for item in payload.items:
             product = products[item.product_id]
-            # ---- entered UOM → base quantity (server-resolved factor) ----
-            from app.modules.stock import batch_service
 
-            factor = batch_service.factor_for_uom(product, item.uom_id)
-            if (
-                item.factor_to_base is not None
-                and Decimal(str(item.factor_to_base)) != factor
-            ):
-                raise ValidationError(
-                    "factor_to_base does not match the product's Pricing row",
-                    field_errors={"factor_to_base": "Invalid factor"},
-                )
-            base_quantity = _q4(Decimal(item.quantity) * factor)
-            if base_quantity <= 0:
+            quantity = _q4(Decimal(item.quantity))
+            if quantity <= 0:
                 raise ValidationError(
                     "Line quantity must be greater than zero",
                     field_errors={"quantity": "Invalid quantity"},
                 )
-            entered_uom_id = item.uom_id if item.uom_id is not None else product.uom_id
-            entered_uom_symbol = item.uom_symbol or (
-                product.uom_ref.symbol if product.uom_ref else None
-            )
-            entered_qty = _q4(item.quantity)
             balance = await _lock_balance(self.session, item.product_id)
             if item.unit_cost is not None:
-                # Entered cost is per the selected UOM → convert to per-base.
-                unit_cost = (Decimal(item.unit_cost) / factor).quantize(TWO, rounding=ROUND_HALF_UP)
+                unit_cost = Decimal(item.unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             else:
-                unit_cost = await resolve_outbound_unit_cost(
-                    self.session,
-                    product,
-                    base_quantity,
-                    fallback=balance.average_cost,
-                )
-            line_total = (base_quantity * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
+                unit_cost = balance.average_cost
+            line_total = (quantity * unit_cost).quantize(TWO, rounding=ROUND_HALF_UP)
             reason = getattr(item, "reason", None)
-            # Batch-tracked products (spec): Damage/Expiry must operate on a
-            # specific batch — never an arbitrary drain of the product total.
-            if product.track_batch and not (item.batch_no or "").strip():
-                raise ValidationError(
-                    "Batch number is required for batch-tracked products",
-                    field_errors={"items": "Batch number is required"},
-                )
-            # Validate + deduct the named batch lot (when the caller names
-            # one). Unbatched damage/expiry drains FEFO (disposals may write
-            # down expired lots; sales never can).
-            movement_batch_id = None
-            if item.batch_no:
-                batch = await batch_service.deduct_from_batch(
-                    self.session,
-                    product_id=item.product_id,
-                    batch_no=item.batch_no,
-                    quantity_base=base_quantity,
-                )
-                movement_batch_id = batch.id
-            else:
-                allocations = await batch_service.allocate_fefo(
-                    self.session,
-                    product=product,
-                    quantity_base=base_quantity,
-                    allow_negative=negative_ok,
-                    include_expired=True,
-                )
-                await batch_service.deduct_allocations(self.session, allocations)
             row = StockTransactionItem(
-                    stock_transaction_id=transaction.id,
-                    product_id=item.product_id,
+                stock_transaction_id=transaction.id,
+                product_id=item.product_id,
                 product_ref=product,
-                quantity=base_quantity,
+                quantity=quantity,
                 unit_cost=unit_cost,
-                batch_no=item.batch_no,
-                expiry_date=getattr(item, "expiry_date", None),
-                entered_uom_id=entered_uom_id,
-                entered_uom_symbol=entered_uom_symbol,
-                entered_factor_to_base=factor,
-                entered_quantity=entered_qty,
                 reason=reason,
                 line_total=line_total,
             )
@@ -1437,25 +999,21 @@ class StockOperationService:
             await apply_stock_movement(
                 self.session,
                 product_id=item.product_id,
-                movement_type=kind,
-                quantity_delta=-base_quantity,
+                movement_type="DAMAGE",
+                quantity_delta=-quantity,
                 unit_cost=unit_cost,
                 reference_type="stock_transaction",
                 reference_id=transaction.id,
                 created_by=actor.id,
                 document_no=document_no,
-                batch_no=item.batch_no,
-                batch_id=movement_batch_id,
-                expiry_date=getattr(item, "expiry_date", None),
                 note=reason,
                 allow_negative=negative_ok,
-                uom_symbol=entered_uom_symbol,
             )
             total += line_total
 
         await record_audit(
             self.session,
-            action="stock_damage" if kind == "DAMAGE" else "stock_expire",
+            action="stock_damage",
             module="stock",
             user_id=actor.id,
             entity_type="stock_transaction",
@@ -1469,39 +1027,24 @@ class StockOperationService:
 
     async def quick_operation(self, *, payload, actor: User) -> dict:
         """Single-product quick operation from the Stock list
-        (POST /stock/operations): stock_in | adjustment | damage | expiry.
+        (POST /stock/operations): stock_in | adjustment | damage.
         Reuses the canonical transactional operations; never writes balances."""
         operation_type = (payload.type or "stock_in").strip().lower()
         product = await self._get_product(payload.product_id)
-        # Server-side factor resolution (spec: never trust a frontend
-        # factor). A line without a UOM is the base UOM; an explicit factor
-        # must match the product's Pricing row.
-        from app.modules.stock import batch_service
-
-        factor = batch_service.factor_for_uom(product, payload.uom_id)
-        if (
-            payload.factor_to_base is not None
-            and Decimal(str(payload.factor_to_base)) != factor
-        ):
-            raise ValidationError(
-                "factor_to_base does not match the product's Pricing row",
-                field_errors={"factor_to_base": "Invalid factor"},
-            )
-        base_quantity = (Decimal(payload.quantity) * factor).quantize(Decimal("0.0001"))
+        quantity = (Decimal(payload.quantity)).quantize(Decimal("0.0001"))
 
         if operation_type == "stock_in":
-            if base_quantity <= 0:
+            if quantity <= 0:
                 raise ValidationError("Quantity must be greater than zero")
             balance = await self.repo.ensure_balance(product.id)
             if payload.unit_cost is not None:
-                # unitCost is per selected UOM; the ledger keeps the base-unit cost.
-                unit_cost = (Decimal(str(payload.unit_cost)) / factor).quantize(
+                unit_cost = Decimal(str(payload.unit_cost)).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP
                 )
             else:
                 unit_cost = balance.average_cost or Decimal("0.00")
-            base_quantity_abs = abs(base_quantity)
-            line_total = (base_quantity_abs * unit_cost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            quantity_abs = abs(quantity)
+            line_total = (quantity_abs * unit_cost).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             request = StockInRequest(
                 transaction_date=payload.transaction_date,
                 note=payload.note,
@@ -1509,11 +1052,8 @@ class StockOperationService:
                 items=[
                     StockInItem(
                         product_id=product.id,
-                        quantity=base_quantity_abs,
+                        quantity=quantity_abs,
                         unit_cost=unit_cost,
-                        batch_no=None,
-                        expiry_date=None,
-                        uom_symbol=payload.uom_symbol,
                     )
                 ],
             )
@@ -1535,38 +1075,22 @@ class StockOperationService:
                 ],
             )
             result = await self.adjust(request, actor=actor)
-        elif operation_type in ("damage", "expiry"):
-            if base_quantity <= 0:
+        elif operation_type == "damage":
+            if quantity <= 0:
                 raise ValidationError("Quantity must be greater than zero")
-            if operation_type == "expiry":
-                request = StockExpireRequest(
-                    transaction_date=payload.transaction_date,
-                    note=payload.note,
-                    items=[
-                        ExpireItem(
-                            product_id=product.id,
-                            quantity=base_quantity,
-                            unit_cost=None,
-                            reason=payload.note or "Expired",
-                            note=payload.note,
-                        )
-                    ],
-                )
-                result = await self.expire(request, actor=actor)
-            else:
-                request = StockDamageRequest(
-                    transaction_date=payload.transaction_date,
-                    note=payload.note,
-                    items=[
-                        DamageItem(
-                            product_id=product.id,
-                            quantity=base_quantity,
-                            unit_cost=None,
-                            reason=payload.note or "Damaged",
-                        )
-                    ],
-                )
-                result = await self.damage(request, actor=actor)
+            request = StockDamageRequest(
+                transaction_date=payload.transaction_date,
+                note=payload.note,
+                items=[
+                    DamageItem(
+                        product_id=product.id,
+                        quantity=quantity,
+                        unit_cost=None,
+                        reason=payload.note or "Damaged",
+                    )
+                ],
+            )
+            result = await self.damage(request, actor=actor)
         else:
             raise ValidationError(f"Unknown stock operation type '{operation_type}'")
 
@@ -1643,9 +1167,6 @@ class StockOperationService:
                     "price": item.unit_cost,
                     "unit_cost": item.unit_cost,
                     "quantity": item.quantity,
-                    "uom_symbol": item.uom_symbol,
-                    "batch_no": item.batch_no,
-                    "expiry_date": item.expiry_date,
                     "line_total": item.line_total,
                 }
                 for item in transaction.items
@@ -1666,7 +1187,6 @@ class StockOperationService:
             status=transaction.status,
             total_amount=total_amount,
             paid_amount=paid_amount,
-            discount_amount=transaction.discount_amount,
             tax_amount=transaction.tax_amount,
             currency=transaction.currency,
             exchange_rate=transaction.exchange_rate,
@@ -1678,18 +1198,15 @@ class StockOperationService:
                     product_id=item.product_id,
                     product_name=item.product_ref.name if item.product_ref else None,
                     sku=item.product_ref.sku if item.product_ref else None,
-                    uom_symbol=item.uom_symbol,
                     quantity=item.quantity,
                     unit_cost=item.unit_cost,
+                    height=item.height,
+                    width=item.width,
+                    area_m2=item.area_m2,
                     system_quantity=item.system_quantity,
                     actual_quantity=item.actual_quantity,
-                    batch_no=item.batch_no,
-                    expiry_date=item.expiry_date,
                     reason=item.reason,
                     line_total=item.line_total,
-                    entered_quantity=item.entered_quantity,
-                    entered_uom_symbol=item.entered_uom_symbol,
-                    entered_factor_to_base=item.entered_factor_to_base,
                 )
                 for item in items
             ],
@@ -1814,7 +1331,7 @@ def movement_to_out(
         id=movement.id,
         product_id=movement.product_id,
         product_name=product.name if product else None,
-        barcode=product.barcode if product else None,
+        sku=product.sku if product else None,
         movement_type=movement.movement_type,
         quantity_delta=delta,
         qty_in=delta if delta > 0 else Decimal("0.0000"),
@@ -1826,11 +1343,6 @@ def movement_to_out(
         reference_id=movement.reference_id,
         document_no=movement.document_no,
         source_reference=movement.document_no,
-        batch_no=movement.batch_no,
-        batch_id=movement.batch_id,
-        expiry_date=movement.expiry_date,
-        uom_symbol=movement.uom_symbol
-        or (product.uom_ref.symbol if product and product.uom_ref else None),
         note=movement.note,
         user=user_name,
         created_by=movement.created_by,

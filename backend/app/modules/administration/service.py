@@ -20,24 +20,19 @@ from app.shared.audit.service import record_audit
 from app.shared.documents.models import DocumentSequence
 from app.shared.lifecycle import assert_inactive_for_delete
 
-logger = logging.getLogger("stock_pos.administration")
+logger = logging.getLogger("mj.administration")
 
 # Settings catalog: group -> {key: default}. Secrets are masked on read.
 SETTING_GROUPS: dict[str, dict[str, object]] = {
-    "shop": {"shop_name": "Yoeun Sokhon Pharmacy", "logo": "", "phone": "", "email": "", "address": ""},
+    "shop": {"shop_name": "MJ Printing", "logo": "", "phone": "", "email": "", "address": ""},
     "currency": {"code": "USD", "symbol": "$", "decimal_places": 2},
     "pos": {
         "default_customer": "",
-        "allow_discount": True,
-        "maximum_discount": 0,
         "allow_negative_stock": False,
         "receipt_footer": "Thank you for your purchase!",
     },
     "stock": {
         "low_stock_level": 5,
-        "expiry_alert_1_days": 90,
-        "expiry_alert_2_days": 7,
-        "track_expiry": False,
     },
     "telegram": {
         "bot_token": "",
@@ -48,7 +43,6 @@ SETTING_GROUPS: dict[str, dict[str, object]] = {
         "verification_code_expiry": 300,
         "max_verification_attempts": 5,
         "stock_inquiry_enabled": True,
-        "expiry_alerts_enabled": True,
         "sale_enabled": False,
         "purchase_enabled": False,
         "daily_summary_enabled": False,
@@ -82,9 +76,15 @@ SETTING_GROUPS: dict[str, dict[str, object]] = {
         "jwt_refresh_token_days": 14,
         "allowed_upload_extensions": ["jpg", "jpeg", "png", "webp", "gif"],
     },
+    "backup": {
+        "enabled": False,
+        "interval_hours": 24,
+        "spreadsheet_id": "",
+        "service_account_json": "",
+    },
 }
 
-SECRET_SETTING_KEYS = frozenset({"telegram.bot_token"})
+SECRET_SETTING_KEYS = frozenset({"telegram.bot_token", "backup.service_account_json"})
 _MASK = "********"
 
 
@@ -546,6 +546,47 @@ class AdministrationService:
                         raise ValidationError(
                             "The Telegram Chat ID is too long",
                             field_errors={"telegram.chat_id": "Maximum length is 128 characters"},
+                        )
+                elif full_key == "backup.interval_hours":
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        raise ValidationError(
+                            "The backup interval must be a number",
+                            field_errors={"backup.interval_hours": "Invalid interval"},
+                        )
+                    if value not in (1, 3, 6, 12, 24):
+                        raise ValidationError(
+                            "The backup interval must be 1, 3, 6, 12 or 24 hours",
+                            field_errors={"backup.interval_hours": "Choose a supported interval"},
+                        )
+                elif full_key == "backup.service_account_json":
+                    value = str(value or "").strip()
+                    if value:
+                        import json
+
+                        try:
+                            info = json.loads(value)
+                        except json.JSONDecodeError:
+                            raise ValidationError(
+                                "The Google service-account key is not valid JSON",
+                                field_errors={
+                                    "backup.service_account_json": "Paste the full JSON key file"
+                                },
+                            )
+                        if not isinstance(info, dict) or not info.get("client_email") or not info.get("private_key"):
+                            raise ValidationError(
+                                "The Google service-account key is missing client_email or private_key",
+                                field_errors={
+                                    "backup.service_account_json": "Paste the full JSON key file"
+                                },
+                            )
+                elif full_key == "backup.spreadsheet_id":
+                    value = str(value or "").strip()
+                    if len(value) > 200:
+                        raise ValidationError(
+                            "The spreadsheet ID is too long",
+                            field_errors={"backup.spreadsheet_id": "Maximum length is 200 characters"},
                         )
                 await self.settings.upsert(
                     group,

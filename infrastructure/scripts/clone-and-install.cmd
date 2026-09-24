@@ -3,7 +3,7 @@ setlocal EnableExtensions
 REM Clone the repository and build it. Run from any folder in Command Prompt.
 
 set "REPO_URL=https://github.com/Kimheang-code-IT/stock_pos.git"
-set "ROOT=%USERPROFILE%\stock_pos"
+set "ROOT=%USERPROFILE%\mj"
 
 where git >nul 2>&1
 if errorlevel 1 (

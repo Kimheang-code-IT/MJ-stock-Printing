@@ -12,7 +12,6 @@
 /** Collections whose backend exposes a dependency-checked DELETE endpoint. */
 export const HARD_DELETE_COLLECTIONS = new Set<string>([
   'categories',
-  'uoms',
   'brands',
   'products',
   'suppliers',
@@ -24,7 +23,6 @@ export const HARD_DELETE_COLLECTIONS = new Set<string>([
 /** Collections whose records carry an ACTIVE/INACTIVE-style status toggle. */
 export const STATUS_TOGGLE_COLLECTIONS = new Set<string>([
   'categories',
-  'uoms',
   'brands',
   'products',
   'suppliers',

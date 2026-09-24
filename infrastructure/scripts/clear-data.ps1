@@ -45,7 +45,7 @@ if ($Yes) { $scriptArgs += "--yes" }
 if ($NoRedis) { $scriptArgs += "--no-redis" }
 
 Write-Host "Clearing all Stock & POS data..." -ForegroundColor Cyan
-docker compose -f docker-compose.yml run --rm api @scriptArgs
+docker compose -f docker-compose.yml run --rm mj-stock-management-api @scriptArgs
 $code = $LASTEXITCODE
 if ($code -ne 0) {
   Write-Host "Clear failed (exit $code)." -ForegroundColor Red

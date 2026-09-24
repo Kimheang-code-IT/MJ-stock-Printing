@@ -1,16 +1,17 @@
 """Dashboard aggregation service — spec section 2.1.1.
 
-Definitions (aligned with the Finance Report, spec 2.1.10):
-- Income        = sum of confirmed sale grand totals in the period.
-- Expense       = sum of operating expenses (Add Expense on the Finance
-                  Report) in the period — NOT Stock In purchase cost, so the
-                  Dashboard and Finance Report always agree.
-- Gross Profit  = (Income - sale refunds) - COGS, where COGS is the sold
-                  unit cost net of restocked sale returns.
-- Damage/Expiry = sum of |quantity_delta| x unit_cost over the matching
-                  immutable stock movements in the period.
-- Net Income    = Gross Profit - Damage Loss - Expiry Loss - Operating
-                  Expenses (finance "net_result"), only when visible.
+Definitions (aligned with the Finance Report ledger, spec 2.1.10):
+- Income        = customer cash actually received in the period (checkout
+                  tenders + customer-debt collections) — the same cash-basis
+                  ledger the Finance Report table sums.
+- Expense       = operating expenses (Add Expense) + cash paid to suppliers
+                  in the period.
+- Gross Profit  = (confirmed sale grand totals net of refunds) - COGS, where
+                  COGS is the sold unit cost net of restocked sale returns.
+- Damage Loss   = sum of |quantity_delta| x unit_cost over DAMAGE movements
+                  in the period.
+- Net Income    = Gross Profit - Damage Loss - Expense (finance "net_result"),
+                  only when visible.
 - Debts         = open remaining balances (all time).
 - Sales This Month / Today counts are calendar-based (UTC), independent of
                   the selected reporting period.
@@ -31,7 +32,7 @@ from app.modules.auth.models import User
 from app.modules.customers.models import Customer, CustomerDebt
 from app.modules.delivery.models import DeliveryNote
 from app.modules.pos.models import Sale, SaleItem, SaleReturn, SaleReturnItem
-from app.modules.reports.models import Expense
+from app.modules.reports.service import ReportsService
 from app.modules.stock.models import (
     Product,
     StockBalance,
@@ -115,17 +116,25 @@ class DashboardService:
         )
         return int(result.scalar_one())
 
-    async def _operating_expenses(self, start_at: datetime, end_at: datetime) -> Decimal:
-        """Operating expenses recorded via Add Expense (Finance Report).
-        The Expense KPI/chart intentionally EXCLUDES Stock In purchase cost so
-        Dashboard and Finance Report agree (spec 2.1.10)."""
+    async def _ledger_totals(self, start_at: datetime, end_at: datetime) -> tuple[Decimal, Decimal]:
+        """(income, expense) over the Finance Report ledger in the period.
+
+        Cash basis, matching the Finance Report exactly: income is customer
+        cash actually received (checkout tenders + debt collections); expense is
+        operating expenses plus cash paid to suppliers. Both aggregates run over
+        the same statement the Finance Report table uses, so the Dashboard chart
+        and KPI cards always reconcile with it (spec 2.1.10)."""
+        ledger = ReportsService(self.session).finance_ledger_stmt().subquery()
         result = await self.session.execute(
-            select(func.coalesce(func.sum(_usd(Expense.amount, Expense.currency, Expense.exchange_rate)), 0)).where(
-                Expense.expense_date >= start_at.date(),
-                Expense.expense_date < end_at.date(),
+            select(
+                ledger.c.entry_type,
+                func.coalesce(func.sum(_usd(ledger.c.amount, ledger.c.currency, ledger.c.exchange_rate)), 0),
             )
+            .where(ledger.c.entry_date >= start_at, ledger.c.entry_date < end_at)
+            .group_by(ledger.c.entry_type)
         )
-        return Decimal(result.scalar_one())
+        totals = {row[0]: Decimal(row[1]) for row in result.all()}
+        return totals.get("income", Decimal("0")), totals.get("expense", Decimal("0"))
 
     async def _debt_totals(self) -> tuple[Decimal, Decimal]:
         customer = await self.session.execute(
@@ -165,13 +174,13 @@ class DashboardService:
     async def _cogs(self, start_at: datetime, end_at: datetime) -> Decimal:
         """Sold cost for sales in the period, minus cost of restocked returns."""
         sold = await self.session.execute(
-            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity * SaleItem.factor_to_base), 0))
+            select(func.coalesce(func.sum(SaleItem.unit_cost * SaleItem.quantity), 0))
             .select_from(SaleItem)
             .join(Sale, Sale.id == SaleItem.sale_id)
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
         )
         restocked = await self.session.execute(
-            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost * SaleItem.factor_to_base), 0))
+            select(func.coalesce(func.sum(SaleReturnItem.quantity * SaleItem.unit_cost), 0))
             .select_from(SaleReturnItem)
             .join(SaleItem, SaleItem.id == SaleReturnItem.sale_item_id)
             .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
@@ -187,49 +196,41 @@ class DashboardService:
     # ---------------------------------------------------------------- chart
 
     async def _chart_series(self, start: date, end: date) -> list[dict]:
+        """Per-day income/expense for the chart, on the Finance Report ledger
+        (cash basis) so each point reconciles with the period totals."""
         start_at, end_at = _day_start(start), _day_start(end + timedelta(days=1))
-        income_rows = await self.session.execute(
+        ledger = ReportsService(self.session).finance_ledger_stmt().subquery()
+        ledger_rows = await self.session.execute(
+            select(
+                func.date(ledger.c.entry_date).label("day"),
+                ledger.c.entry_type,
+                func.coalesce(func.sum(_usd(ledger.c.amount, ledger.c.currency, ledger.c.exchange_rate)), 0),
+            )
+            .where(ledger.c.entry_date >= start_at, ledger.c.entry_date < end_at)
+            .group_by(func.date(ledger.c.entry_date), ledger.c.entry_type)
+        )
+        income: dict = {}
+        expense: dict = {}
+        for row in ledger_rows.all():
+            target = income if row.entry_type == "income" else expense
+            target[row.day] = Decimal(row[2])
+        count_rows = await self.session.execute(
             select(
                 func.date(Sale.sale_date).label("day"),
-                func.coalesce(func.sum(_usd(Sale.grand_total, Sale.currency, Sale.exchange_rate)), 0),
                 func.count(Sale.id),
             )
             .where(Sale.sale_date >= start_at, Sale.sale_date < end_at)
             .group_by(func.date(Sale.sale_date))
         )
-        refund_rows = await self.session.execute(
-            select(
-                func.date(SaleReturn.return_date).label("day"),
-                func.coalesce(func.sum(_usd(SaleReturn.refund_amount, Sale.currency, Sale.exchange_rate)), 0),
-            )
-            .select_from(SaleReturn)
-            .join(Sale, Sale.id == SaleReturn.sale_id)
-            .where(SaleReturn.return_date >= start_at, SaleReturn.return_date < end_at)
-            .group_by(func.date(SaleReturn.return_date))
-        )
-        expense_rows = await self.session.execute(
-            select(
-                Expense.expense_date.label("day"),
-                func.coalesce(func.sum(_usd(Expense.amount, Expense.currency, Expense.exchange_rate)), 0),
-            )
-            .where(
-                Expense.expense_date >= start_at.date(),
-                Expense.expense_date < end_at.date(),
-            )
-            .group_by(Expense.expense_date)
-        )
-        income = {row.day: (Decimal(row[1]), int(row[2])) for row in income_rows.all()}
-        refunds = {row.day: Decimal(row[1]) for row in refund_rows.all()}
-        expense = {row.day: Decimal(row[1]) for row in expense_rows.all()}
+        counts = {row.day: int(row[1]) for row in count_rows.all()}
         series = []
         day = start
         while day <= end:
-            day_income, day_count = income.get(day, (Decimal("0.00"), 0))
             series.append(
                 {
                     "date": day,
-                    "sales_count": day_count,
-                    "income": day_income - refunds.get(day, Decimal("0.00")),
+                    "sales_count": counts.get(day, 0),
+                    "income": income.get(day, Decimal("0.00")),
                     "expense": expense.get(day, Decimal("0.00")),
                 }
             )
@@ -346,22 +347,25 @@ class DashboardService:
         today_start = _day_start(_today())
         today_end = _day_start(_today() + timedelta(days=1))
         today_sales, today_sales_count = await self._sales_stats(today_start, today_end)
-        total_income, _period_sales_count = await self._sales_stats(start_at, end_at)
-        total_expense = await self._operating_expenses(start_at, end_at)
+        # Income/Expense are the Finance Report ledger totals (cash basis):
+        # cash received vs. operating expenses + supplier payments. The chart
+        # uses the same ledger so every point reconciles with these KPIs.
+        total_income, total_expense = await self._ledger_totals(start_at, end_at)
+        # Accrual sales (grand totals net of refunds) drive gross profit, which
+        # the Finance Report computes independently of the cash ledger.
+        period_sales_total, _period_sales_count = await self._sales_stats(start_at, end_at)
         customer_debt, supplier_debt = await self._debt_totals()
         damage_loss = await self._loss_totals("DAMAGE", start_at, end_at)
-        expiry_loss = await self._loss_totals("EXPIRE", start_at, end_at)
         month_sales_count, month_sales_amount = await self._sales_this_month()
 
         gross_profit: Decimal | None = None
         net_income: Decimal | None = None
         if profit_visible:
-            # total_income is already net of refunds.
             cogs = await self._cogs(start_at, end_at)
-            gross_profit = total_income - cogs
-            # Net income = gross profit - losses - operating expenses
+            gross_profit = period_sales_total - cogs
+            # Net income = gross profit - losses - total expenses
             # (finance net_result, spec 2.1.10).
-            net_income = gross_profit - damage_loss - expiry_loss - total_expense
+            net_income = gross_profit - damage_loss - total_expense
 
         product_count = await self.session.execute(
             select(func.count()).select_from(Product).where(Product.status == "ACTIVE")
@@ -391,7 +395,6 @@ class DashboardService:
                 "customer_debt": customer_debt,
                 "supplier_debt": supplier_debt,
                 "damage_loss": damage_loss,
-                "expiry_loss": expiry_loss,
                 "pending_delivery_notes_count": await self._pending_delivery_notes(),
             },
             "extras": {

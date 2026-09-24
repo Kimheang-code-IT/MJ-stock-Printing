@@ -11,35 +11,35 @@ import {
 
 describe('POS checkout totals', () => {
   it('keeps grand total separate from existing debt payment (USD)', () => {
-    // Subtotal 10, discount 1 → Grand Total 9; deposit 2 must not inflate due.
-    const grandTotal = checkoutSaleNet(10, 1, 0)
+    // Subtotal 10 → Grand Total 10; deposit 2 must not inflate due.
+    const grandTotal = checkoutSaleNet(10, 0)
     const deposit = checkoutDepositTotal([2])
     const due = checkoutDue(grandTotal, deposit)
-    expect(grandTotal).toBe(9)
+    expect(grandTotal).toBe(10)
     expect(deposit).toBe(2)
-    expect(due).toBe(9)
-    expect(checkoutPaidNow(undefined, due, false)).toBe(9)
-    expect(checkoutOutstanding(due, 9)).toBe(0)
-    expect(checkoutChange(11, due)).toBe(2)
+    expect(due).toBe(10)
+    expect(checkoutPaidNow(undefined, due, false)).toBe(10)
+    expect(checkoutOutstanding(due, 10)).toBe(0)
+    expect(checkoutChange(11, due)).toBe(1)
     expect(checkoutOutstanding(due, 11)).toBe(0)
   })
 
   it('builds sale net with delivery; deposit stays off the sale due', () => {
-    const saleNet = checkoutSaleNet(100, 10, 5)
+    const saleNet = checkoutSaleNet(100, 5)
     const deposit = checkoutDepositTotal([25, 15])
     const due = checkoutDue(saleNet, deposit)
-    expect(saleNet).toBe(95)
+    expect(saleNet).toBe(105)
     expect(deposit).toBe(40)
-    expect(due).toBe(95)
-    expect(checkoutOutstanding(due, 80)).toBe(15)
-    expect(checkoutOutstanding(due, 95)).toBe(0)
-    expect(checkoutChange(200, due)).toBe(105)
+    expect(due).toBe(105)
+    expect(checkoutOutstanding(due, 80)).toBe(25)
+    expect(checkoutOutstanding(due, 105)).toBe(0)
+    expect(checkoutChange(200, due)).toBe(95)
   })
 
   it('ignores delivery price when Delivery is not checked', () => {
     expect(checkoutDeliveryFee(false, 12)).toBe(0)
     expect(checkoutDeliveryFee(true, 12)).toBe(12)
-    expect(checkoutSaleNet(100, 10, checkoutDeliveryFee(false, 12))).toBe(90)
+    expect(checkoutSaleNet(100, checkoutDeliveryFee(false, 12))).toBe(100)
   })
 
   it('pays the grand total in full when Paid now is untouched (walk-in cash sale)', () => {
@@ -58,13 +58,13 @@ describe('POS checkout totals', () => {
   })
 
   it('keeps the same grand-total rules in KHR', () => {
-    const grandTotal = checkoutSaleNet(41000, 4100, 0)
+    const grandTotal = checkoutSaleNet(41000, 0)
     const deposit = checkoutDepositTotal([8200])
     const due = checkoutDue(grandTotal, deposit)
-    expect(grandTotal).toBe(36900)
-    expect(due).toBe(36900)
-    expect(checkoutPaidNow(undefined, due, false)).toBe(36900)
-    expect(checkoutChange(41000, due)).toBe(4100)
-    expect(checkoutOutstanding(due, 30000)).toBe(6900)
+    expect(grandTotal).toBe(41000)
+    expect(due).toBe(41000)
+    expect(checkoutPaidNow(undefined, due, false)).toBe(41000)
+    expect(checkoutChange(41000, due)).toBe(0)
+    expect(checkoutOutstanding(due, 30000)).toBe(11000)
   })
 })

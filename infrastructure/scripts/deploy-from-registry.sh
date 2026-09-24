@@ -10,7 +10,7 @@ if [[ ! -f .env ]]; then
 fi
 
 export IMAGE_TAG="${IMAGE_TAG:-latest}"
-export IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/kimheang-code-it/stock_pos}"
+export IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/kimheang-code-it/mj}"
 export PULL_POLICY="${PULL_POLICY:-always}"
 
 compose=(docker compose -f docker-compose.yml)

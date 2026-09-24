@@ -3,9 +3,10 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type {
   DocumentTabSchema,
   PersonSummary,
-} from '~/types/stock-pos/common'
+} from '~/types/mj/common'
 import { useConfirm } from '~/composables/common/useConfirm'
-import type { ExportRequest } from '~/types/stock-pos/export'
+import type { ExportRequest } from '~/types/mj/export'
+import { moduleDocumentFieldErrorsKey } from '~/utils/module/document-tabs'
 
 const props = withDefaults(defineProps<{
   tabs: DocumentTabSchema[]
@@ -15,6 +16,8 @@ const props = withDefaults(defineProps<{
   pending?: boolean
   saving?: boolean
   error?: string | null
+  /** Per-field validation messages (key → message) shown inline on fields. */
+  fieldErrors?: Record<string, string>
   notFound?: boolean
   readOnly?: boolean
   canSave?: boolean
@@ -47,6 +50,7 @@ const props = withDefaults(defineProps<{
   pending: false,
   saving: false,
   error: null,
+  fieldErrors: () => ({}),
   notFound: false,
   readOnly: false,
   canSave: true,
@@ -75,6 +79,12 @@ const emit = defineEmits<{
   export: [request: ExportRequest]
 }>()
 
+// Fields read their own inline validation message through this injection, so
+// the error map does not have to be prop-drilled through the form renderer.
+provide(moduleDocumentFieldErrorsKey, {
+  get: (key: string) => props.fieldErrors?.[key],
+})
+
 const { t } = useI18n()
 
 const exportFields = computed(() => {
@@ -86,13 +96,8 @@ const exportFields = computed(() => {
               field.type !== 'secret'
               && field.type !== 'alert'
               && field.type !== 'line-table'
-              && field.type !== 'uom-conversions'
               && field.type !== 'related-records'
               && field.type !== 'permission-matrix'
-              && field.type !== 'batches'
-              && field.type !== 'product-batches'
-              && field.type !== 'product-movements'
-              && field.type !== 'product-barcode'
               && field.type !== 'party-sales-history'
               && field.type !== 'party-purchase-history',
             )

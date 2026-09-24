@@ -5,7 +5,7 @@ export function isMoneyKey(key: string) {
 }
 
 export function isNumericKey(key: string) {
-  return /^(quantity|qty|stockInQty|stockOutQty|damageQty|daysOutstanding|margin|exchangeRate|userCount|permissionCount)$/i.test(key)
+  return /^(quantity|qty|areaM2|stockInQty|stockOutQty|damageQty|daysOutstanding|margin|exchangeRate|userCount|permissionCount)$/i.test(key)
 }
 
 /** Keys that store calendar dates (no time component preferred). */

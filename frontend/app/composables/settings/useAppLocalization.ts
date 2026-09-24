@@ -1,4 +1,4 @@
-import type { AppConfigLocalization } from '~/types/stock-pos/settings'
+import type { AppConfigLocalization } from '~/types/mj/settings'
 import { useSettingsRepositories } from '~/repositories'
 import {
   configureFormats,

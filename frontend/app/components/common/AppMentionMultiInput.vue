@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FieldOption } from '~/types/stock-pos/common'
+import type { FieldOption } from '~/types/mj/common'
 
 const model = defineModel<string[]>({ default: () => [] })
 
@@ -9,6 +9,8 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   loading?: boolean
   allowCustom?: boolean
+  /** Inline validation error; also drives the red ring on the control. */
+  error?: string | boolean
 }>(), {
   items: () => [],
   allowCustom: false,
@@ -82,7 +84,10 @@ function moveActive(offset: number) {
   <div ref="root" class="relative">
     <div
       class="flex min-h-11 w-full flex-wrap items-center gap-1.5 rounded-sm border border-default bg-default px-3 py-2 shadow-xs transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
-      :class="disabled ? 'cursor-not-allowed opacity-60' : ''"
+      :class="[
+        disabled ? 'cursor-not-allowed opacity-60' : '',
+        error ? 'ring-2 ring-inset ring-error bg-error/5' : '',
+      ]"
       @click="!disabled && (open = true)"
     >
       <span
