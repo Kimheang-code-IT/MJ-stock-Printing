@@ -20,8 +20,10 @@ $shortcut.TargetPath = "$env:SystemRoot\System32\cmd.exe"
 $shortcut.Arguments = "/c `"$PSScriptRoot\open-system.bat`""
 $shortcut.WorkingDirectory = $PSScriptRoot
 $shortcut.Description = "Open the MJ Printing stock & POS system"
-$shortcut.IconLocation = Join-Path $PSScriptRoot "mj.ico,0"
-if (-not (Test-Path (Join-Path $PSScriptRoot "mj.ico"))) {
+$iconPath = Get-AppIconPath
+if ($iconPath) {
+  $shortcut.IconLocation = "$iconPath,0"
+} else {
   $shortcut.IconLocation = "%SystemRoot%\System32\SHELL32.dll,13"
 }
 $shortcut.Save()

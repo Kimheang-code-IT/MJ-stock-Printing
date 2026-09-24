@@ -11,7 +11,7 @@ $root = Get-DeployRoot
 $url = "http://localhost:$(Get-FrontendPort $root)"
 
 if (-not (Assert-Docker -Quiet)) {
-  # Docker not ready — still open a friendly local page so the click is not a dead end.
+  # Docker not ready - still open a friendly local page so the click is not a dead end.
   Write-Host "The app is not running yet (Docker is not ready)."
   Write-Host "Double-click start-system.bat, or wait-and-open-system.bat to start and open automatically."
   exit 1

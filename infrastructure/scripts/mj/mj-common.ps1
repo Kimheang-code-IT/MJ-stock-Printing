@@ -48,7 +48,7 @@ function Assert-Docker([switch]$Quiet) {
     if ($Quiet) { return $false }
     Write-Host ""
     Write-Host "Docker Desktop is still starting up. Please try again in a minute." -ForegroundColor Yellow
-    Write-Host "(Or double-click wait-and-open-system.bat — it waits for you.)" -ForegroundColor Yellow
+    Write-Host "(Or double-click wait-and-open-system.bat - it waits for you.)" -ForegroundColor Yellow
     Write-Host ""
     return $false
   }
@@ -87,6 +87,92 @@ function Test-AppHealthy($Root) {
     if ($ok) { return $true }
   } catch { }
   return $false
+}
+
+# Location of the shipped app logo (frontend assets). Returns $null when the
+# repository layout is not present (e.g. a packaged install without the source).
+function Get-AppLogoPng {
+  $candidates = @(
+    (Join-Path $PSScriptRoot "..\..\..\frontend\app\assets\images\logo.png"),
+    (Join-Path (Get-DeployRoot) "..\frontend\app\assets\images\logo.png")
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
+  }
+  return $null
+}
+
+# Build a multi-resolution .ico from a PNG using System.Drawing (Windows only).
+function New-IcoFromPng {
+  param(
+    [Parameter(Mandatory = $true)][string]$PngPath,
+    [Parameter(Mandatory = $true)][string]$IcoPath
+  )
+  Add-Type -AssemblyName System.Drawing
+  $sizes = @(16, 32, 48, 64, 128, 256)
+  $source = [System.Drawing.Image]::FromFile($PngPath)
+  try {
+    $images = New-Object System.Collections.Generic.List[byte[]]
+    foreach ($size in $sizes) {
+      $bitmap = New-Object System.Drawing.Bitmap($size, $size)
+      try {
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+          $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+          $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+          $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+          $graphics.DrawImage($source, 0, 0, $size, $size)
+        } finally { $graphics.Dispose() }
+        $pngStream = New-Object System.IO.MemoryStream
+        try {
+          $bitmap.Save($pngStream, [System.Drawing.Imaging.ImageFormat]::Png)
+          $images.Add($pngStream.ToArray())
+        } finally { $pngStream.Dispose() }
+      } finally { $bitmap.Dispose() }
+    }
+
+    $file = [System.IO.File]::Create($IcoPath)
+    try {
+      $writer = New-Object System.IO.BinaryWriter($file)
+      try {
+        # ICONDIR header: reserved, type (1 = icon), image count.
+        $writer.Write([UInt16]0)
+        $writer.Write([UInt16]1)
+        $writer.Write([UInt16]$sizes.Count)
+        # ICONDIRENTRY per image, followed by the PNG payloads.
+        $offset = 6 + (16 * $sizes.Count)
+        for ($i = 0; $i -lt $sizes.Count; $i++) {
+          $dimension = if ($sizes[$i] -ge 256) { 0 } else { $sizes[$i] }
+          $writer.Write([Byte]$dimension)   # width (0 = 256)
+          $writer.Write([Byte]$dimension)   # height (0 = 256)
+          $writer.Write([Byte]0)            # palette color count
+          $writer.Write([Byte]0)            # reserved
+          $writer.Write([UInt16]1)          # color planes
+          $writer.Write([UInt16]32)         # bits per pixel
+          $writer.Write([UInt32]$images[$i].Length)
+          $writer.Write([UInt32]$offset)
+          $offset += $images[$i].Length
+        }
+        foreach ($bytes in $images) { $writer.Write($bytes) }
+      } finally { $writer.Dispose() }
+    } finally { $file.Dispose() }
+  } finally { $source.Dispose() }
+}
+
+# Path to the shortcut icon: the shipped/ generated mj.ico, generated once from
+# the app logo when missing. Returns $null when no icon can be produced.
+function Get-AppIconPath {
+  $icoPath = Join-Path $PSScriptRoot "mj.ico"
+  if (Test-Path $icoPath) { return $icoPath }
+  $pngPath = Get-AppLogoPng
+  if (-not $pngPath) { return $null }
+  try {
+    New-IcoFromPng -PngPath $pngPath -IcoPath $icoPath
+  } catch {
+    return $null
+  }
+  if (Test-Path $icoPath) { return $icoPath }
+  return $null
 }
 
 function Start-Stack {

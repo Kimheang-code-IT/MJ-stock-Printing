@@ -25,9 +25,11 @@ $shortcut.Arguments = "/c `"$PSScriptRoot\wait-and-open-system.bat`" >> `"$env:T
 $shortcut.WorkingDirectory = $PSScriptRoot
 $shortcut.WindowStyle = 7
 $shortcut.Description = "Stock & POS: start containers, wait for health, open the app"
-$shortcut.IconLocation = Join-Path $PSScriptRoot "mj.ico,0"
-if (-not (Test-Path (Join-Path $PSScriptRoot "mj.ico"))) {
-  # No .ico shipped — fall back to a stock icon; never invent binary assets.
+$iconPath = Get-AppIconPath
+if ($iconPath) {
+  $shortcut.IconLocation = "$iconPath,0"
+} else {
+  # No logo available - fall back to a stock Windows icon.
   $shortcut.IconLocation = "%SystemRoot%\System32\SHELL32.dll,13"
 }
 $shortcut.Save()

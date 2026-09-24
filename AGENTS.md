@@ -53,10 +53,8 @@ Docker (run from `infrastructure/`, where `.env` lives): `docker compose up -d -
   Add every string to both `frontend/i18n/locales/*.json`.
 - Frontend repositories (`app/repositories/`) are HTTP-only; the mock repositories live only under
   `tests/support/` for unit tests.
-- E2E is not in CI. It needs the running Docker stack and a real API: `pnpm e2e:install` then
+- E2E needs the running Docker stack and a real API: `pnpm e2e:install` then
   `E2E_BASE_URL=http://localhost:80 pnpm e2e`. Credentials default to `admin@gmail.com` / `123456`.
-- CI (`.github/workflows/ci.yml`): compose config validation; frontend install → `prepare:nuxt` →
-  test → typecheck; backend pytest against Postgres+Redis service containers. No lint/e2e in CI.
 
 ## Repo conventions
 

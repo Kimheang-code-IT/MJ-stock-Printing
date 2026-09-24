@@ -6,7 +6,7 @@
 .DESCRIPTION
   docker compose restart-equivalent: up -d re-creates only containers whose
   config/image changed, keeps volumes, and re-runs migrations on the API
-  (alembic upgrade head — append-only, never resets data).
+  (alembic upgrade head - append-only, never resets data).
 #>
 
 $ErrorActionPreference = "Stop"

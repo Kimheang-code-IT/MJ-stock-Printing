@@ -12,6 +12,6 @@ if (Test-Path $linkPath) {
   Remove-Item $linkPath -Force
   Write-Host "Auto-start removed (shortcut deleted)." -ForegroundColor Green
 } else {
-  Write-Host "No auto-start shortcut found — nothing to remove."
+  Write-Host "No auto-start shortcut found - nothing to remove."
 }
 exit 0

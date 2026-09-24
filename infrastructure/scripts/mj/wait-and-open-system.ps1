@@ -9,7 +9,7 @@
     2. start the stack if it is not running (no rebuild)
     3. poll GET http://localhost:<port>/health/ready every 3 seconds
        until it reports ok (default 10 minutes)
-    4. open http://localhost in the default browser — exactly once
+    4. open http://localhost in the default browser - exactly once
   Health-based, not a fixed sleep. Skips the browser when an instance is
   already open (single-instance guard via a named mutex).
 #>
@@ -33,7 +33,7 @@ try {
   try { $ownsMutex = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
   if (-not $ownsMutex) { exit 0 }
 } catch {
-  # Mutex creation failed (e.g. restricted session) — proceed without the guard.
+  # Mutex creation failed (e.g. restricted session) - proceed without the guard.
 }
 
 try {
